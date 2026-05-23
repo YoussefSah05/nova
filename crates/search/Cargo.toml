@@ -1,0 +1,12 @@
+[package]
+name = "nova-search"
+version = "0.1.0"
+edition = "2021"
+description = "FTS5 query builder over transcript_fts (source + translations)"
+
+[dependencies]
+nova-core = { path = "../core" }
+nova-storage = { path = "../storage" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }

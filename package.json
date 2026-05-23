@@ -1,0 +1,15 @@
+{
+  "name": "nova",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "pnpm -C apps/desktop exec tauri dev",
+    "build": "pnpm -C apps/desktop exec tauri build",
+    "test": "pnpm -C apps/desktop run test",
+    "lint": "pnpm -C apps/desktop run lint",
+    "format": "pnpm -C apps/desktop run format",
+    "typecheck": "pnpm -C apps/desktop run typecheck",
+    "clean": "pnpm -C apps/desktop run clean"
+  }
+}

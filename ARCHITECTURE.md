@@ -1,0 +1,1018 @@
+# IPTV Streaming Platform — Architecture & Initialization Brief
+
+> Master document for project scaffolding.
+> Project codename: **Stream** (placeholder — rename as desired).
+> Version 2 — translation pipeline integrated.
+
+---
+
+## 1. Project overview
+
+A local-first desktop IPTV streaming platform with on-device AI transcription **and translation**. Each profile imports its own M3U playlist; the app provides a Netflix-class UX over live channels, VOD, and series, with automatic transcription of VOD content, live captions for channels, and cross-language translation of either — all rendered in a designed "middle-box" overlay when in translation mode.
+
+**Primary target**: macOS 14+ on Apple Silicon (M-series). Build pipeline must produce a signed, notarized `.dmg`.
+**Secondary target**: Windows 11 (x64 + arm64). Build pipeline must produce a signed `.msi`. Not day-one; architecture must not preclude.
+
+**Priority languages**: English, French, Arabic. The system must work for all 200+ NLLB-supported languages but defaults, fonts, and QA effort focus on these three.
+
+### Non-goals (explicitly out of scope for v1)
+- Multi-device sync, server mode, casting to other devices.
+- DRM (Widevine/FairPlay/PlayReady).
+- User accounts, payments, social features.
+- Mobile.
+- Speech-to-speech translation (we display text, not synthesized audio).
+
+### Key constraints
+- **Local-first**: every core feature runs on the user's machine. No cloud dependency for transcription or translation by default. Cloud translation backends (DeepL/Google) are opt-in only.
+- **Multi-profile**: each profile has its own M3U source, EPG, watch history, transcription cache, translation cache, settings. Profile switch is instant.
+- **Premium feel**: video must not stutter; UI must respond in <100ms; idle resource footprint <100MB RAM, <1% CPU when not playing.
+- **Hardware-aware**: app probes the machine on first run and tunes defaults (Whisper model, NLLB model, concurrency limits, cache sizes).
+- **Translation must feel free**: caching is aggressive. Translating the same VOD twice should be instant the second time.
+
+---
+
+## 2. Locked technology decisions
+
+| Layer | Choice | Version target |
+|---|---|---|
+| Desktop shell | Tauri | 2.x latest stable |
+| Daemon language | Rust | 1.80+, edition 2024 |
+| Frontend framework | React | 19.x |
+| Frontend language | TypeScript | 5.6+ (strict mode) |
+| Build tool | Vite | 6.x |
+| UI styling | Tailwind CSS | 4.x |
+| Component primitives | shadcn/ui | latest |
+| Video player core | Vidstack (with hls.js backend) | latest stable |
+| HLS engine | hls.js | latest stable |
+| Database | SQLite via `sqlx` | 0.8+, `sqlite` feature |
+| Search index | SQLite FTS5 (built-in) | — |
+| Async runtime | Tokio | 1.x latest |
+| HTTP server (proxy) | Axum | 0.8+ |
+| HTTP client | reqwest | latest, `rustls-tls` |
+| XML parser (EPG) | quick-xml | latest |
+| **Transcription** | whisper.cpp with Core ML backend | latest, `WHISPER_COREML=1` |
+| **Translation (local)** | NLLB-200 distilled via CTranslate2 | latest, Metal backend |
+| **Translation (cloud, optional)** | DeepL API, Google Translate API | — |
+| Audio/video processing | FFmpeg | bundled binary, 7.x |
+| Package manager (JS) | pnpm | 9+ |
+| Toolchain manager | mise | latest |
+| Task runner | just | latest |
+| Linters | clippy (Rust), ESLint (TS) | — |
+| Formatters | rustfmt, Prettier | — |
+| Testing (Rust) | built-in + `insta` for snapshots | — |
+| Testing (TS) | Vitest + Playwright for E2E | — |
+
+### Deliberately rejected
+- **Electron** — too heavy for this workload, baseline RAM unacceptable for premium positioning.
+- **Python in the runtime path** — GIL issues, packaging headaches, slow startup. Used only for offline scripts (model conversion, etc.).
+- **Node backend** — GC pauses during playback, weaker FFI to whisper.cpp / ctranslate2.
+- **Video.js / Plyr** — Video.js is dated; Plyr is too opinionated. Vidstack is purpose-built for modern custom players.
+- **PostgreSQL / external DB** — overkill for local-first; extra process to manage.
+- **Meilisearch / Elastic** — SQLite FTS5 is plenty for a single-user corpus.
+- **SeamlessM4T** — excellent quality but less mature on-device tooling. Revisit later.
+- **Per-pair MarianMT models** — N×(N-1) models is bad UX. NLLB's one-model-many-pairs wins.
+
+---
+
+## 3. Repository layout
+
+```
+stream/
+├── .editorconfig
+├── .gitignore
+├── .gitattributes
+├── mise.toml
+├── Justfile
+├── README.md
+├── ARCHITECTURE.md
+├── package.json                 # pnpm workspace root
+├── pnpm-workspace.yaml
+├── Cargo.toml                   # Rust workspace root
+├── rust-toolchain.toml
+├── apps/
+│   └── desktop/                 # Tauri app — the only deliverable
+│       ├── package.json
+│       ├── tsconfig.json
+│       ├── vite.config.ts
+│       ├── tailwind.config.ts
+│       ├── index.html
+│       ├── src/                 # React frontend
+│       │   ├── main.tsx
+│       │   ├── App.tsx
+│       │   ├── routes/
+│       │   ├── features/
+│       │   │   ├── player/      # Includes caption renderer (standard + middle-box)
+│       │   │   ├── browse/
+│       │   │   ├── search/
+│       │   │   ├── profile/
+│       │   │   ├── transcript/  # Companion panel
+│       │   │   └── settings/
+│       │   ├── components/
+│       │   ├── lib/
+│       │   ├── styles/
+│       │   └── types/           # Generated from Rust via ts-rs
+│       └── src-tauri/
+│           ├── Cargo.toml
+│           ├── tauri.conf.json
+│           ├── build.rs
+│           ├── icons/
+│           └── src/
+│               ├── main.rs
+│               ├── commands/
+│               ├── state.rs
+│               └── ipc.rs
+├── crates/
+│   ├── core/                    # Domain types, traits, errors
+│   ├── m3u/                     # M3U parser
+│   ├── xtream/                  # Xtream Codes JSON API client
+│   ├── epg/                     # XMLTV parser + normalizer
+│   ├── hls-proxy/               # Local HLS server (Axum)
+│   ├── transcribe/              # whisper.cpp FFI + streaming
+│   ├── translate/               # NLLB / DeepL / Google backends
+│   ├── media/                   # FFmpeg wrapper
+│   ├── storage/                 # SQLite + migrations + repositories
+│   ├── jobs/                    # Background job scheduler
+│   ├── search/                  # FTS5 query builder
+│   └── mcp/                     # Dev-only MCP server
+├── packages/
+│   ├── ui/                      # Shared React components, design system
+│   └── types/                   # Generated TS bindings (output of ts-rs)
+│   ├── ffmpeg-recipes/
+│   ├── hls-manifest/
+│   ├── whisper-config/
+│   ├── translate-config/
+│   ├── caption-renderer/
+│   ├── frontend-design/
+│   ├── xmltv-epg/
+│   ├── api-conventions/
+│   ├── rust-patterns/
+│   ├── sqlite-patterns/
+│   └── video-player-ux/
+├── scripts/
+│   ├── convert-whisper-models.sh    # Whisper → Core ML conversion
+│   ├── convert-nllb-models.sh       # NLLB → CTranslate2 conversion
+│   ├── bundle-ffmpeg.sh             # Download + verify FFmpeg binary
+│   └── seed-dev-data.ts
+├── docs/
+│   ├── design-tokens.md
+│   ├── ipc-contract.md
+│   ├── translation-pipeline.md      # Detailed pipeline doc
+│   └── decisions/                   # ADRs
+└── .github/
+    └── workflows/
+        ├── ci.yml
+        └── release.yml
+```
+
+---
+
+## 4. Toolchain pinning
+
+### `mise.toml`
+```toml
+[tools]
+rust = "1.84"
+node = "22"
+pnpm = "9"
+just = "latest"
+```
+
+### `rust-toolchain.toml`
+```toml
+[toolchain]
+channel = "1.84"
+components = ["rustfmt", "clippy", "rust-analyzer"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+```
+
+### `package.json` (root)
+- `"packageManager": "pnpm@9.x.y"` to enforce.
+- Top-level scripts: `dev`, `build`, `test`, `lint`, `format`, `typecheck`.
+
+### `Cargo.toml` (workspace)
+- Members: all of `crates/*` plus `apps/desktop/src-tauri`.
+- `resolver = "2"`.
+- `[workspace.dependencies]` centralizes all crate versions.
+- `[profile.release]`: `lto = "fat"`, `codegen-units = 1`, `strip = true`, `panic = "abort"`.
+
+### `Justfile` (selected)
+```just
+default:
+    @just --list
+
+setup:
+    mise install
+    pnpm install
+    cargo fetch
+    ./scripts/bundle-ffmpeg.sh
+    ./scripts/convert-whisper-models.sh
+    ./scripts/convert-nllb-models.sh
+
+dev:
+    pnpm tauri dev
+
+build:
+    pnpm tauri build
+
+test:
+    cargo test --workspace
+    pnpm test
+
+lint:
+    cargo clippy --workspace --all-targets -- -D warnings
+    pnpm lint
+
+format:
+    cargo fmt --all
+    pnpm format
+
+typecheck:
+    pnpm typecheck
+
+clean:
+    cargo clean
+    pnpm clean
+```
+
+---
+
+## 5. High-level architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    Tauri Process (single binary)                       │
+│                                                                        │
+│  ┌──────────────────────────┐    ┌─────────────────────────────────┐   │
+│  │  WKWebView (React)       │◄──►│  Rust Core (in-process)         │   │
+│  │                          │    │                                 │   │
+│  │  • Browse / Search       │    │  • Tauri commands               │   │
+│  │  • Player chrome         │    │  • State store                  │   │
+│  │  • Caption renderer      │    │  • Job scheduler                │   │
+│  │    (standard / mid-box)  │    │  • IPC events → UI              │   │
+│  │  • Profile picker        │    └──────────┬──────────────────────┘   │
+│  │  • Transcript panel      │               │                          │
+│  └──────────────────────────┘               │                          │
+│           │ Vidstack/hls.js                 ▼                          │
+│           ▼                       ┌─────────────────────────┐          │
+│  ┌────────────────────┐           │  hls-proxy crate (Axum) │          │
+│  │  localhost HLS     │◄──────────┤  • Manifest rewriting   │          │
+│  │  127.0.0.1:<port>  │           │  • Subtitle injection   │          │
+│  └────────────────────┘           │    (source + targets)   │          │
+│                                   │  • Segment caching      │          │
+│                                   └────┬────────────────────┘          │
+│                                        │                               │
+│                                        ▼                               │
+│                                ┌──────────────────┐                    │
+│                                │  Upstream IPTV   │                    │
+│                                │  provider (HLS)  │                    │
+│                                └──────────────────┘                    │
+│                                                                        │
+│  ┌──────────────────────────┐    ┌─────────────────────────────────┐   │
+│  │  transcribe crate        │───►│  translate crate                │   │
+│  │  • whisper.cpp FFI       │    │  • NLLB-200 via CTranslate2     │   │
+│  │  • Core ML / ANE         │    │  • DeepL backend (opt-in)       │   │
+│  │  • Streaming ASR         │    │  • Google backend (opt-in)      │   │
+│  │  • Source-lang VTT       │    │  • Per-segment caching          │   │
+│  └─────────┬────────────────┘    │  • Target-lang VTT output       │   │
+│            │                     └────────┬────────────────────────┘   │
+│            │                              │                            │
+│  ┌─────────▼──────────────────────────────▼──────────────────────┐     │
+│  │  storage crate (SQLite + FTS5)                                │     │
+│  │  Per-profile DB: ~/Library/Application Support/Stream/...     │     │
+│  └───────────────────────────────────────────────────────────────┘     │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Process model
+- **Single process**. Rust core runs in-process inside the Tauri binary.
+- **Tokio multi-thread runtime**. UI on main thread (macOS requirement).
+- **HLS proxy** binds to `127.0.0.1` on OS-assigned port at startup.
+
+### IPC contract
+- **Tauri commands** for request/response: `list_channels`, `play_vod(id, caption_mode)`, `enqueue_transcription`, `enqueue_translation`, `get_transcript`, `search`, `update_settings`, etc.
+- **Tauri events** for streaming updates: `epg:refresh:progress`, `transcription:progress`, `transcription:complete`, `translation:progress`, `translation:complete`, `live:caption`, `live:caption:translated`, `playlist:import:progress`, `jobs:queue:changed`. Tauri event names must use alphanumeric characters plus `-`, `/`, `:`, or `_`; do not use dots.
+- **Generated TypeScript bindings** via `ts-rs`.
+- Contract in `docs/ipc-contract.md`, CI-enforced.
+
+---
+
+## 6. Data model (SQLite)
+
+One DB per profile at `~/Library/Application Support/Stream/profiles/<profile_id>.db` plus top-level `app.db`.
+
+### `app.db` schema
+```sql
+CREATE TABLE profiles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    avatar_color TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+
+CREATE TABLE app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+```
+
+### Per-profile schema
+```sql
+-- Source playlists
+CREATE TABLE sources (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,            -- 'm3u' | 'xtream'
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    username TEXT,                 -- encrypted at rest
+    password TEXT,
+    last_refreshed_at INTEGER,
+    auto_refresh_hours INTEGER DEFAULT 24
+);
+
+-- Channels (live)
+CREATE TABLE channels (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    stream_id TEXT,
+    tvg_id TEXT,
+    name TEXT NOT NULL,
+    logo_url TEXT,
+    logo_cached_path TEXT,
+    region TEXT,
+    country TEXT,
+    category TEXT,
+    raw_group TEXT,
+    url TEXT NOT NULL,
+    tvg_shift INTEGER DEFAULT 0,
+    catchup_kind TEXT,
+    catchup_days INTEGER,
+    expected_language TEXT,        -- inferred from country/name, used as Whisper hint
+    is_favorite INTEGER DEFAULT 0,
+    is_hidden INTEGER DEFAULT 0,
+    last_played_at INTEGER,
+    position_in_category INTEGER
+);
+CREATE INDEX idx_channels_category ON channels(country, category);
+CREATE INDEX idx_channels_tvg ON channels(tvg_id);
+
+-- VOD
+CREATE TABLE vod_items (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    stream_id TEXT,
+    name TEXT NOT NULL,
+    year INTEGER,
+    poster_url TEXT,
+    backdrop_url TEXT,
+    plot TEXT,
+    rating REAL,
+    duration_sec INTEGER,
+    container TEXT,
+    url TEXT NOT NULL,
+    category TEXT,
+    cast TEXT,
+    director TEXT,
+    genre TEXT,
+    detected_language TEXT,        -- filled after transcription
+    added_at INTEGER
+);
+
+-- Series
+CREATE TABLE series (...);
+CREATE TABLE series_seasons (...);
+CREATE TABLE series_episodes (...);
+
+-- EPG
+CREATE TABLE programs (
+    id INTEGER PRIMARY KEY,
+    channel_tvg_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    sub_title TEXT,
+    description TEXT,
+    start_utc INTEGER NOT NULL,
+    stop_utc INTEGER NOT NULL,
+    category TEXT,
+    icon_url TEXT
+);
+CREATE INDEX idx_programs_channel_time ON programs(channel_tvg_id, start_utc);
+
+-- Transcripts (one per media item per source language)
+CREATE TABLE transcripts (
+    id INTEGER PRIMARY KEY,
+    media_kind TEXT NOT NULL,       -- 'vod' | 'episode' | 'live_recording'
+    media_id INTEGER NOT NULL,
+    language TEXT NOT NULL,         -- BCP-47, source language
+    model TEXT NOT NULL,            -- 'large-v3-turbo' etc.
+    vtt_path TEXT NOT NULL,
+    json_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    duration_processed_sec INTEGER,
+    UNIQUE(media_kind, media_id, language, model)
+);
+
+-- Transcript segments (word-level timestamps included when Whisper provides)
+CREATE TABLE transcript_segments (
+    id INTEGER PRIMARY KEY,
+    transcript_id INTEGER NOT NULL REFERENCES transcripts(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,          -- segment ordinal within transcript
+    start_sec REAL NOT NULL,
+    end_sec REAL NOT NULL,
+    text TEXT NOT NULL,
+    words_json TEXT,               -- optional: [{start, end, word}]
+    speaker_id INTEGER             -- future: diarization
+);
+CREATE INDEX idx_segments_transcript_seq ON transcript_segments(transcript_id, seq);
+
+-- TRANSLATIONS: cached per (segment, target_lang, backend)
+CREATE TABLE transcript_translations (
+    id INTEGER PRIMARY KEY,
+    segment_id INTEGER NOT NULL REFERENCES transcript_segments(id) ON DELETE CASCADE,
+    target_lang TEXT NOT NULL,       -- BCP-47
+    text TEXT NOT NULL,
+    backend TEXT NOT NULL,           -- 'nllb-200-distilled-600M' | 'nllb-200-distilled-1.3B' | 'deepl' | 'google'
+    created_at INTEGER NOT NULL,
+    UNIQUE(segment_id, target_lang, backend)
+);
+CREATE INDEX idx_translations_segment ON transcript_translations(segment_id, target_lang);
+
+-- Generated translated-VTT files cached on disk; this table tracks them for invalidation
+CREATE TABLE translated_vtt_files (
+    id INTEGER PRIMARY KEY,
+    transcript_id INTEGER NOT NULL REFERENCES transcripts(id) ON DELETE CASCADE,
+    target_lang TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    vtt_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(transcript_id, target_lang, backend)
+);
+
+-- FTS5 over segments AND translations (single virtual table, content union)
+CREATE VIRTUAL TABLE transcript_fts USING fts5(
+    text,
+    lang UNINDEXED,
+    segment_id UNINDEXED,
+    kind UNINDEXED,             -- 'source' | 'translation'
+    tokenize='unicode61 remove_diacritics 2'
+);
+-- Triggers populate from transcript_segments AND transcript_translations.
+
+-- Watch history
+CREATE TABLE watch_history (
+    id INTEGER PRIMARY KEY,
+    media_kind TEXT NOT NULL,
+    media_id INTEGER NOT NULL,
+    position_sec REAL NOT NULL,
+    duration_sec REAL,
+    watched_at INTEGER NOT NULL,
+    completed INTEGER DEFAULT 0,
+    caption_mode TEXT,             -- 'off' | 'source' | 'translation:fr' | 'dual:ar:fr'
+    PRIMARY KEY -- last-watched per (media_kind, media_id) via dedup query
+);
+
+-- Per-content caption preferences (sticky)
+CREATE TABLE caption_preferences (
+    id INTEGER PRIMARY KEY,
+    scope TEXT NOT NULL,           -- 'channel' | 'vod' | 'source_lang'
+    scope_key TEXT NOT NULL,       -- channel id, vod id, or BCP-47 source lang
+    caption_mode TEXT NOT NULL,    -- as above
+    updated_at INTEGER NOT NULL,
+    UNIQUE(scope, scope_key)
+);
+
+-- Jobs queue
+CREATE TABLE jobs (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,             -- 'transcribe_vod' | 'translate_transcript' | 'refresh_epg' | 'refresh_playlist' | 'cache_logo'
+    payload TEXT NOT NULL,          -- JSON
+    state TEXT NOT NULL,            -- 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+    priority INTEGER DEFAULT 0,
+    attempts INTEGER DEFAULT 0,
+    last_error TEXT,
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER
+);
+CREATE INDEX idx_jobs_state_priority ON jobs(state, priority DESC, created_at);
+
+-- Per-profile settings
+CREATE TABLE settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL              -- JSON
+);
+```
+
+All writes go through repository functions in `crates/storage`. WAL mode, `PRAGMA synchronous=NORMAL`.
+
+---
+
+## 7. Streaming pipeline
+
+### Playlist import flow
+1. User pastes M3U URL or Xtream credentials.
+2. Xtream-style `get.php` URLs route to `xtream`, which fetches live, VOD, and series JSON endpoints in parallel. Plain playlists use the streaming `m3u` parser.
+3. Parsed entries are persisted in batches inside one SQLite transaction. Current batch size is 1,000 entries per media table flush.
+4. Progress streams via `playlist:import:progress` with stage, parsed/inserted counts, live/movie/series counts, failed/skipped counts, elapsed milliseconds, and terminal `done=true`.
+5. Fetch and stalled-read timeouts prevent indefinite loading. Optional endpoint failures are reported as warnings when at least some entries import successfully.
+6. Initial import completion is fetch → parse → persist. Slow enrichment such as logo caching, EPG refresh, stream probing, and expected-language inference must run as background work and must not block the terminal import event.
+7. After completion, browse commands expose persisted content by source with counts, search, filters, and paginated Live/Movie loading. The UI must not treat the first returned page as the complete import.
+
+### Playlist import validation
+The current large provider test playlist has been validated through the headless probe. It routes as Xtream JSON API and imports `42,212` entries: `9,099` live, `27,998` movies, and `5,115` series. Repeated probe runs completed cleanly in about `2.1-2.4s`.
+
+```bash
+NOVA_PROBE_URL='<playlist url>' cargo run -p nova-xtream --example probe
+```
+
+### Imported content browse flow
+1. Home loads all sources for the active profile and keeps an explicit selected source.
+2. Counts are fetched with `count_channels`, `count_vod`, and `count_series` so tabs reflect the full import.
+3. Filter options come from persisted country/category values per source.
+4. Live and Movie rows load in 200-item pages using `limit` and `offset`; `Load more` appends the next page.
+5. Series rows are grouped summaries by title; selecting a series loads its episodes.
+6. Browse errors must surface in the UI and must not leave loading states active indefinitely.
+
+### Live playback flow
+1. User clicks a channel. Frontend calls `play_channel(channel_id, caption_mode)`.
+2. Rust returns a localhost proxy URL: `http://127.0.0.1:<port>/live/<channel_id>/index.m3u8`.
+3. `hls-proxy` fetches upstream manifest, rewrites segment URLs through the proxy.
+4. If `caption_mode != off`, manifest is augmented with `#EXT-X-MEDIA:TYPE=SUBTITLES` tracks:
+   - Source language → `/live/<channel_id>/captions.<src>.vtt`
+   - Each requested target language → `/live/<channel_id>/captions.<src>-to-<tgt>.vtt`
+5. hls.js consumes the manifest. Hardware decode via VideoToolbox is automatic.
+6. If live captions are on, `transcribe` crate spawns a streaming ASR task; if translation is on, output flows through `translate` crate before hitting the VTT endpoint.
+
+### VOD playback flow
+1. User clicks a VOD item. Frontend calls `play_vod(vod_id, caption_mode)`.
+2. Rust resolves what's available:
+   - **Transcript exists in source language**: serve it.
+   - **Transcript missing**: enqueue `transcribe_vod` job; offer playback without captions while job runs; emit `transcription:progress` events.
+   - **Translation requested and cached**: serve cached translated VTT.
+   - **Translation requested, not cached**: enqueue `translate_transcript` job (runs after transcription if both pending); when complete, the proxy starts serving the new VTT, and the player picks it up via subtitle track refresh.
+3. Proxy returns manifest with all available + requested caption tracks.
+4. Player UI's caption picker reflects job state ("French translation — generating, 34%…").
+
+### Catch-up / timeshift (Xtream)
+Xtream pattern: `.../streaming/timeshift.php?username=X&password=Y&stream=<id>&start=<YYYY-MM-DD:HH-MM>&duration=<minutes>`. Surfaced in UI on EPG entries within the channel's `catchup_days` window. Transcription/translation works on these recordings the same as VOD.
+
+---
+
+## 8. Transcription pipeline
+
+### Model strategy
+- Ship with **no models bundled** (keeps installer small).
+- On first run, recommended model: **`large-v3-turbo` quantized to `q5_0`** (~500 MB). Show why, allow skip.
+- Convert to Core ML on first run via `whisper.cpp/models/generate-coreml-model.sh`. Takes 30–120s, one-time. UI: "Optimizing transcription for your M3…"
+- Cache compiled `.mlmodelc` at `~/Library/Application Support/Stream/models/whisper/`.
+- Advanced users can also download `large-v3` (full, ~1.5 GB) for archival-quality.
+
+### Whisper invocation rules
+- `--task transcribe` always (we use the dedicated translation pipeline for cross-language, not Whisper's translate task — see §9 rationale).
+- `--language <bcp47>` when channel/VOD has known expected language; otherwise auto-detect on first 30s.
+- `--word-timestamps true` always (enables word-level alignment for the dual-mode UI and transcript-deep-link search).
+- `--no-context true` for Arabic specifically (reduces hallucinations across silence).
+- VAD enabled to skip silent regions.
+
+### VOD transcription flow
+1. Job enqueued: `{vod_id, language: "auto"|<bcp47>}`.
+2. Worker pulls job. FFmpeg extracts audio: `ffmpeg -i <url> -ac 1 -ar 16000 -f s16le -`.
+3. whisper.cpp consumes PCM, emits segments with word-level timestamps.
+4. Output: WebVTT + segments JSON. Both written to disk; rows inserted into `transcripts` + `transcript_segments` + FTS5 index.
+5. Progress event every 5% of duration processed.
+6. On completion: if user's preferences ask for translation into a target language for this source, automatically enqueue a `translate_transcript` job.
+7. Concurrency: max 2 transcription jobs on 16GB+ M3, 1 on 8GB M3 (auto-detected at startup).
+
+### Live transcription flow
+1. User toggles captions on a channel.
+2. `transcribe::live::Session` started: FFmpeg subprocess pulls channel audio → stdout PCM.
+3. Whisper streaming with 5s window, 1s hop, **LocalAgreement-2** stabilization (only emit text agreed across 2 consecutive windows).
+4. New stable segments pushed to in-memory ring buffer in proxy; `captions.<src>.vtt` endpoint serves rolling 30s of cues.
+5. End-to-end latency target: 2–4s.
+6. Session torn down on channel switch or caption disable.
+
+### Skill: `whisper-config`
+Captures model selection logic, VAD settings, language-specific tuning, VTT post-processing.
+
+---
+
+## 9. Translation pipeline
+
+### Why a dedicated pipeline (not Whisper's `--task translate`)
+Whisper's built-in translate mode only targets **English**. For Arabic → French, English → Arabic, etc., we need a true translation model. We use Whisper only for transcription (any language → same language text) and a separate translator for the cross-language step. This costs us slightly more compute but gives us all language pairs.
+
+**Special-case optimization:** when target language is English, the system *can* skip NLLB and use Whisper's translate task in one pass. This is implemented as an opt-in setting ("Fast English mode") because the quality vs. the two-stage pipeline is comparable and the latency win is meaningful. **Default is off** to keep behavior consistent.
+
+### Backends
+
+| Backend | Default | Languages | Latency on M3 | Quality | Cost | Privacy |
+|---|---|---|---|---|---|---|
+| **NLLB-200 distilled 600M** (local) | ✅ default | 200 | ~100–300ms / line | Very good | Free | Local |
+| **NLLB-200 distilled 1.3B** (local) | opt-in upgrade | 200 | ~250–500ms / line | Excellent | Free | Local |
+| **DeepL API** | opt-in | 30 | ~150ms / line | Best-in-class | $$ | Cloud |
+| **Google Translate API** | opt-in | 130+ | ~100ms / line | Excellent | $ | Cloud |
+
+Default install ships **NLLB-200 distilled 600M** via CTranslate2 with Metal backend. Cloud backends require user-provided API key (encrypted at rest in settings).
+
+### Model conversion (one-time, at install via `scripts/convert-nllb-models.sh`)
+- Download NLLB-200 distilled from Hugging Face.
+- Convert to CTranslate2 format with int8 quantization for Apple Silicon.
+- Cache at `~/Library/Application Support/Stream/models/nllb/`.
+- Verify with a test translation in each priority language.
+
+### VOD translation flow
+1. `translate_transcript` job: `{transcript_id, target_lang, backend}`.
+2. Worker loads source segments from `transcript_segments`.
+3. For each segment **not already cached** in `transcript_translations` for `(target_lang, backend)`:
+   - **Batch** segments (~32 per batch) to amortize NLLB inference overhead.
+   - Translate via chosen backend.
+   - Insert into `transcript_translations`.
+4. Generate translated VTT from cached translations, write to disk, insert into `translated_vtt_files`.
+5. Emit `translation.complete` event. Proxy now serves the new VTT.
+6. Cache hit on second request → instant.
+
+### Live translation flow
+1. User selects translation target alongside live captions.
+2. Whisper streaming emits stable source segment.
+3. Segment immediately handed to NLLB (or chosen backend) — single-segment translation, ~150ms.
+4. Translated cue pushed to a separate ring buffer; `captions.<src>-to-<tgt>.vtt` endpoint serves it.
+5. End-to-end latency: 3–5s (whisper 2-4s + translation 100-400ms + buffering). Acceptable; comparable to professional simultaneous interpretation.
+
+### Caching strategy
+- Translations cached per `(segment_id, target_lang, backend)`. Switching back to a previously-used translation is instant.
+- Source transcripts cached per `(media_id, source_lang, whisper_model)`.
+- Cache invalidation: only when the underlying transcript is regenerated (e.g. model upgrade). Cached translations follow their parent transcript.
+
+### Dual mode (source + translation displayed together)
+Both VTTs are loaded simultaneously by the renderer. UI design in §10.
+
+### Language defaults (implemented; user-overridable)
+- **Source-language preference**: defaults to none (auto-detect per content).
+- **Reading-language preference**: from app locale, falls back to English.
+- **Sticky rule (default-on)**: "When source language is X, translate to Y." Set automatically when user first chooses a translation for a given source language; persisted in `caption_preferences` with `scope='source_lang'`. Editable in settings.
+- **Per-content override**: `scope='channel'` or `scope='vod'` rows override the source-lang default.
+
+### Skill: `translate-config`
+Captures backend selection logic, batching rules, language-pair-specific notes (e.g. NLLB-200 codes are not BCP-47; mapping table required), caching strategy.
+
+---
+
+## 10. Video player — premium-quality UI
+
+### Foundation: Vidstack + hls.js
+- Vidstack: headless primitives (media state, gestures, fullscreen, PiP, AirPlay, keyboard).
+- hls.js: manifest parsing, ABR, segment fetching.
+- Native `<video>`: decode via VideoToolbox.
+
+### Performance budget (mandatory)
+- Time-to-first-frame on channel switch: <800ms target, <1200ms ceiling.
+- VOD scrubbing: instant thumbnail preview while dragging, frame-accurate on release.
+- No layout shift when controls appear/disappear.
+- 120fps overlay animations on ProMotion (M3 MacBook Pros).
+
+### Controls UX
+- Auto-hide after 2.5s idle; reappear on mouse move with 200ms fade-in.
+- Tap to toggle play/pause (safe-zone around controls).
+- Double-tap left/right edge to skip 10s (ripple feedback).
+- Volume scrubber on hover of speaker icon.
+- Quality selector shows actual resolutions from manifest.
+- **Captions picker** is its own section — see below.
+- Settings popover uses spring animation, not linear ease.
+
+### Keyboard shortcuts
+| Key | Action |
+|---|---|
+| Space / K | Play/pause |
+| ← / → | Seek 5s |
+| Shift+← / Shift+→ | Seek 10s |
+| J / L | Seek 10s back/forward |
+| ↑ / ↓ | Volume ±5% |
+| M | Mute toggle |
+| F | Fullscreen |
+| Esc | Exit fullscreen |
+| C | Cycle caption mode (off → source → translation → dual → off) |
+| T | Toggle translation target picker |
+| , / . | Frame step (paused) |
+| 0–9 | Seek to N×10% (VOD only) |
+
+### Gestures (fullscreen, trackpad)
+- Two-finger horizontal swipe: seek scrub (VOD).
+- Two-finger vertical on left half: brightness.
+- Two-finger vertical on right half: volume.
+
+### Caption rendering — TWO MODES
+
+The player has a custom caption renderer (not native `<track>`) so we can implement both styles cleanly.
+
+#### Mode A — Standard subtitles (source language only, when no translation requested)
+- Position: bottom 10% of frame
+- Up to 70% frame width, 2 lines max
+- 18–22px text, thin outline, no background
+- Native-track-like behavior, premium typography
+
+#### Mode B — Middle-box (translation mode, dual mode)
+Used whenever a translation is being displayed. This is the signature "translation card" look.
+
+| Property | Specification |
+|---|---|
+| Position | Center horizontally, vertical center ~55% from top |
+| Width | Auto-fit content, max 60% of frame width, min 30% |
+| Background | `rgba(10, 10, 12, 0.78)` with `backdrop-filter: blur(20px) saturate(160%)` |
+| Border | `1px solid rgba(255, 255, 255, 0.08)` |
+| Border radius | 12px |
+| Padding | 24px horizontal, 16px vertical |
+| Shadow | `0 8px 32px rgba(0, 0, 0, 0.4)` |
+| Typography (Latin) | Inter Variable, 22px, weight 400, line-height 1.5, tracking -0.01em |
+| Typography (Arabic) | IBM Plex Sans Arabic, 24px, weight 400, line-height 1.6, RTL |
+| Typography (CJK) | Noto Sans CJK, 22px, line-height 1.6 |
+| Max lines | 3 |
+| Entry animation | Fade-in (200ms) + scale from 0.98 to 1.0 (cubic-bezier(0.16, 1, 0.3, 1)) |
+| Exit animation | Fade-out (150ms) |
+| User repositionable | Yes, drag to reposition; remembered per-content |
+
+#### Mode C — Dual mode (source + translation)
+A single middle-box card containing both:
+- **Source line** (top): 16px, weight 400, color `rgba(255, 255, 255, 0.55)`, language-appropriate font.
+- **Divider**: 1px line, `rgba(255, 255, 255, 0.06)`, 8px vertical margin.
+- **Translated line** (bottom): 22px, weight 400, color `rgba(255, 255, 255, 0.96)`, language-appropriate font.
+- Same card chrome as Mode B.
+- Word-level highlighting: hovering a word in the source highlights the aligned word in the translation (uses Whisper's word timestamps + NLLB's attention alignment — best-effort; gracefully degrades if unavailable).
+
+### Captions picker UI
+A dedicated subtitle button in the player chrome. Click opens a popover with three sections:
+
+1. **Display mode**
+   - Off
+   - Source language: [detected as Arabic]
+   - Translate to: [picker]
+   - Dual (source + translation)
+
+2. **Translate to** (visible when translation or dual selected)
+   - Quick picks: English, French, Arabic (or user's top 3, learned over time)
+   - Search field for other languages
+
+3. **Advanced**
+   - Style: Standard / Middle-box (when source-only, otherwise locked to middle-box)
+   - Backend (if multiple installed): NLLB / DeepL / Google
+   - Auto-translate when source is...: [language pair editor]
+
+When a translation is generating, the row shows inline progress: "French — generating, 34%…"
+
+### Captions sticky preference
+Per content (channel, VOD, episode), the chosen mode is persisted to `caption_preferences` and restored next time. There's also a per-source-language default ("When source is Arabic, translate to French") that applies to new content.
+
+### Picture-in-picture
+- Native macOS PiP via WebKit's `requestPictureInPicture()`.
+- Captions in PiP: Mode A or Mode B available; Mode B is auto-tightened (smaller padding, smaller text) because PiP is small.
+
+### AirPlay
+- Vidstack surfaces button when devices are detected.
+- AirPlay'd captions burn-in the source-language VTT only (AirPlay subtitle track support is inconsistent across receivers). When in translation mode and user AirPlays, show a one-time toast: "Captions will display in source language on AirPlay devices."
+
+### Transcript companion panel
+- Optional side panel synced to playback time.
+- Shows source by default; if translation is active, shows source + translation in parallel columns.
+- Click a line to seek there.
+- Search within transcript with highlighted matches.
+- This is genuinely novel for IPTV apps.
+
+### Skill: `caption-renderer`
+Captures the rendering rules, font choices per script, layout math, dual-mode alignment behavior.
+
+### Skill: `video-player-ux`
+Captures all of the above as a checklist verified during player work.
+
+---
+
+## 11. Engineering reference notes
+
+Domain rules for each area are kept as short reference notes.
+
+| Skill | Purpose |
+|---|---|
+| `ffmpeg-recipes` | Canonical FFmpeg commands: HLS repackaging, audio extraction (16kHz mono PCM), thumbnail sprite gen, probe-for-codec. |
+| `hls-manifest` | Manifest rewriting rules: subtitle track injection (source + translations), segment URL rewriting, master playlist structure. |
+| `whisper-config` | Model selection, VAD, language tuning (esp. Arabic), VTT post-processing, word-timestamp handling. |
+| `translate-config` | NLLB/DeepL/Google backend selection, language-code mapping (BCP-47 ↔ NLLB-200 codes), batching, caching, error handling. |
+| `caption-renderer` | Rendering rules for both modes, fonts per script, RTL handling, dual-mode alignment, repositioning behavior. |
+| `xmltv-epg` | EPG parsing rules, timezone normalization, channel ID matching. |
+| `frontend-design` | Design tokens, motion timing, typography scale, spacing rhythm, component patterns. |
+| `video-player-ux` | The mandatory player UX checklist from §10. |
+| `api-conventions` | Tauri command naming, error shapes, event payload conventions. |
+| `rust-patterns` | Async patterns, error handling with `thiserror`, repository pattern, FFI safety wrappers. |
+| `sqlite-patterns` | Migration conventions, query patterns, FTS5 best practices, WAL tuning. |
+
+Each note covers scope, rules, examples and pitfalls, and is updated as the project develops.
+
+---
+
+## 12. MCP integration plan
+
+Build a thin MCP server inside the app (gated to localhost, dev mode only) exposing daemon APIs as MCP tools:
+
+| Tool | Purpose |
+|---|---|
+| `list_profiles` | Read profile registry |
+| `list_channels(filter)` | Browse channels during dev |
+| `get_transcript(media_id)` | Fetch a transcript |
+| `get_translation(media_id, target_lang)` | Fetch a translation |
+| `enqueue_transcription(media_id, lang)` | Trigger transcription |
+| `enqueue_translation(transcript_id, target_lang, backend)` | Trigger translation |
+| `list_jobs(state)` | Inspect queue |
+| `search_transcripts(query, lang_filter)` | Test FTS5 across source + translations |
+| `tail_logs(level, n)` | Recent log lines |
+| `db_query(sql)` | Read-only query (dev mode only) |
+
+Server at `crates/mcp`, mounted at `127.0.0.1:<mcp_port>` only when `STREAM_DEV=1`.
+
+---
+
+## 13. First-run experience
+
+1. **Welcome screen**. Brand mark, single CTA "Get started".
+2. **Hardware probe** (background). Chip, RAM, disk free, GPU/ANE.
+3. **Create first profile**. Name + avatar color.
+4. **Add source**. Paste M3U URL, Xtream credentials, or skip.
+5. **Download Whisper model**. Recommended `large-v3-turbo q5_0`. Background download with progress.
+6. **Download translation model**. Recommended NLLB-200 distilled 600M. Same UX. **Skippable** — translation is also useful but not required to start watching.
+7. **Compile for Apple Silicon**. "Optimizing for your Mac (one-time, ~2 min)…" with progress.
+8. **First import**. Streaming progress: parsed N entries, cached M logos, fetched EPG.
+9. **Set reading language**. "When content isn't in [English], offer translation to [English]." Defaults from system locale; user can change.
+10. **Home**. Browse view. Continue Watching empty, Recently Added populated.
+
+Target wall-clock: under 3 minutes on a typical connection (longer if both ML models are downloaded). Models can be deferred to "Settings → Models" if user skips.
+
+---
+
+## 14. Build, sign, distribute
+
+### macOS
+- Apple Silicon first; universal binary later via `cargo build --target` + `lipo`.
+- Code signing: Developer ID Application cert via `tauri.conf.json` `bundle.macOS.signingIdentity`.
+- Notarization: `xcrun notarytool` in release workflow.
+- Output: `.dmg` with custom background, drag-to-Applications.
+
+### Windows (later)
+- MSI via WiX through Tauri.
+- Code signing with EV cert.
+
+### Updates
+- Tauri built-in updater pointing at GitHub Releases.
+- Delta updates not necessary at this scale.
+
+### Model distribution
+- Whisper and NLLB models downloaded post-install from Hugging Face mirrors.
+- Bundle does NOT include models — keeps installer to ~30MB instead of ~2GB.
+- Models verified by SHA-256 against pinned manifests in `scripts/models.json`.
+
+---
+
+## 15. Initial implementation order
+
+Each step ends with something runnable.
+
+**Phase 0 — Scaffolding (1 session)**
+1. Repo layout per §3.
+2. `mise.toml`, `rust-toolchain.toml`, `Justfile`, `pnpm-workspace.yaml`, `Cargo.toml` workspace.
+3. Tauri 2 + React + TS + Vite + Tailwind 4 + shadcn/ui.
+4. Stub all crates in `crates/` (including `translate`) with empty `lib.rs`.
+5. ESLint, Prettier, clippy, rustfmt. `just lint`, `just typecheck` pass.
+6. CI workflow on every push.
+7. Reference notes for each area in §11 (including `translate-config`, `caption-renderer`).
+
+**Phase 1 — Profiles and storage**
+1. `storage` crate with `app.db` migrations.
+2. Profile CRUD.
+3. Netflix-style profile picker.
+
+**Phase 2 — M3U import (vertical slice)**
+1. `m3u` crate streaming parser.
+2. Xtream detection routing to `xtream` crate stub.
+3. Per-profile DB on profile create.
+4. UI: "Add source" form with progress.
+5. Logo caching via `jobs` crate.
+
+**Phase 3 — Browse UI**
+1. Source selector, full import counts, country/category facets, and search-as-you-type. **Implemented.**
+2. Live and Movie pagination for large imports. **Implemented.**
+3. VOD/Series browsing and series episode detail. **Implemented.**
+4. Favorites, Continue Watching, Recently Added. **Pending.**
+
+**Phase 4 — EPG**
+1. `epg` crate XMLTV parser.
+2. `xtream` crate `xmltv.php` fetch.
+3. Now-and-next + full guide.
+4. Background refresh.
+
+**Phase 5 — Playback (standard captions only)**
+1. `hls-proxy` crate (Axum) passthrough.
+2. Vidstack integration.
+3. All keyboard shortcuts, control chrome.
+4. Mode A caption renderer (standard subtitles).
+5. Watch history.
+
+**Phase 6 — Transcription (VOD)**
+1. Bundle FFmpeg.
+2. Build whisper.cpp with Core ML enabled.
+3. `transcribe` crate batch transcription with word timestamps.
+4. First-run model download + Core ML compile.
+5. Job queue runs transcriptions.
+6. Source-language VTT injected into manifest, picker reflects state.
+
+**Phase 7 — Translation (VOD)**
+1. `translate` crate with NLLB-200 distilled 600M via CTranslate2.
+2. Model download + conversion in first-run + Settings.
+3. Translation jobs run after transcription.
+4. Per-segment caching.
+5. Translated VTT served by proxy.
+6. **Mode B (middle-box) caption renderer**.
+7. **Mode C (dual) caption renderer**.
+8. Captions picker UI with display-mode + target-language sections.
+9. Sticky per-content and per-source-language preferences.
+
+**Phase 8 — Search**
+1. `search` crate over FTS5 (source + translations).
+2. Global search.
+3. Transcript-deep-link search.
+
+**Phase 9 — Live transcription**
+1. Streaming ASR session in `transcribe`.
+2. Rolling captions VTT served by proxy.
+3. Toggle in player UI.
+
+**Phase 10 — Live translation**
+1. Live streaming pipeline: whisper → NLLB → VTT.
+2. Player picker supports target language for live captions.
+3. End-to-end latency budget verified.
+
+**Phase 11 — Cloud translation backends (optional)**
+1. DeepL backend in `translate` crate.
+2. Google backend in `translate` crate.
+3. Settings: API key entry, backend selection.
+4. Per-job backend override.
+
+**Phase 12 — Polish**
+1. Transcript companion panel synced to playback.
+2. Thumbnail sprites for scrubbing.
+3. Word-level alignment in dual mode.
+4. Settings: model picker, language preferences, refresh intervals.
+5. About / acknowledgements / licenses.
+
+**Phase 13 — Distribution**
+1. Code signing + notarization.
+2. Auto-updater wired up.
+3. Beta release.
+
+---
+
+## 16. Open questions (defaults assumed, called out for override)
+
+The following defaults are assumed by this document. Each can be revisited.
+
+| Question | Default | Override how |
+|---|---|---|
+| Final product name | "Stream" (placeholder) | Decide before Phase 0 |
+| Bundle identifier | `com.example.stream` (placeholder) | Decide before Phase 0 |
+| Apple Developer Team ID | None | Required before Phase 13 |
+| EPG source | Provider's Xtream `xmltv.php` if available, else user-provided URL | Per-source UI |
+| Adult-content gating | PIN-protected per profile, on by default if categories detected | Per-profile setting |
+| Telemetry / crash reporting | None (local-first ethos) | Could add Sentry with opt-in |
+| Project license | MIT | Decide before publishing |
+| Default behavior when source ≠ reading language | Stay off until user opts in once; then sticky per source-language | Settings: "auto-offer translation" toggle |
+| Live captions + live translation as one toggle or two | Two distinct toggles (Captions on/off, Translation on/off with target picker) | Could collapse later |
+| Dual mode availability | Yes, included from Phase 7 | Could be hidden behind "advanced" toggle |
+| DeepL/Google backends | Available from Phase 11 (post-MVP) | Could be brought into MVP if needed |
+| Fast-English-mode (Whisper translate task → English in one pass) | Off by default; opt-in setting | Settings toggle |
+
+---
+
+## 17. Notes on premium feel
+
+- **Typography**: Inter Variable (Latin), IBM Plex Sans Arabic or Cairo (Arabic), Noto Sans CJK (CJK). One scale: 12/14/16/18/22/28/36. Two weights: 400 and 500.
+- **Motion**: every state change has motion. Entries: `cubic-bezier(0.16, 1, 0.3, 1)`. Exits: `cubic-bezier(0.7, 0, 0.84, 0)`. 200ms default; 400ms for layout shifts.
+- **Color**: dark mode first. Surface `#0a0a0c`, never pure black. One brand accent color.
+- **Iconography**: Lucide React, outlined, 1.5px stroke. Never mixed with filled.
+- **Loading**: skeletons over spinners. Spinners only after 400ms.
+- **Sound**: optional, off by default. If on: subtle UI ticks at -30dB, never on hover.
+- **Empty states**: every list, panel, grid has a designed empty state with one action.
+- **Translation card**: the middle-box rendering is the signature visual of this app. It must look better than anything Netflix/Disney+/Apple TV+ ships.
+
+---
+
+## 18. Definition of done for Phase 0
+
+When scaffolding is finished:
+
+- `just setup` completes on a fresh clone (without model downloads; those are deferred to first-run).
+- `just dev` opens a Tauri window showing a placeholder home screen.
+- `just lint` passes with zero warnings.
+- `just typecheck` passes.
+- `just test` runs (smoke test minimum).
+- CI runs the same on push and passes.
+- All crates in `crates/` (including `translate`) exist as empty libraries that build.
+- `README.md` documents `just setup` → `just dev`.
+
+If any fail, Phase 0 is not done.
+
+---
+
+End of brief.

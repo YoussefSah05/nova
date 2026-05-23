@@ -1,0 +1,10 @@
+[package]
+name = "nova-core"
+version = "0.1.0"
+edition = "2021"
+description = "Domain types, traits, and errors shared across all Nova crates"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

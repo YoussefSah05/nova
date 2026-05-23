@@ -1,0 +1,13 @@
+[package]
+name = "nova-hls-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "Local HLS proxy server (Axum): manifest rewriting, subtitle injection, segment caching"
+
+[dependencies]
+nova-core = { path = "../core" }
+thiserror = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }

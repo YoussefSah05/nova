@@ -1,0 +1,7 @@
+{
+  "name": "@nova/types",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generated TypeScript bindings from Rust via ts-rs (do not edit manually)",
+  "main": "./src/index.ts"
+}

@@ -1,0 +1,22 @@
+[package]
+name = "nova-xtream"
+version = "0.1.0"
+edition = "2021"
+description = "Xtream Codes JSON API client"
+
+[dependencies]
+nova-core = { path = "../core" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+nova-m3u = { path = "../m3u" }
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "probe"
+path = "examples/probe.rs"

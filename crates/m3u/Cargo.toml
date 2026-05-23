@@ -1,0 +1,11 @@
+[package]
+name = "nova-m3u"
+version = "0.1.0"
+edition = "2021"
+description = "Streaming M3U / M3U8 playlist parser"
+
+[dependencies]
+nova-core = { path = "../core" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
