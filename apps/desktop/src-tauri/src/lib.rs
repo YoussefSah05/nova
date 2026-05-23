@@ -1,0 +1,61 @@
+pub mod commands;
+pub mod ipc;
+pub mod state;
+
+use nova_storage::init_app_db;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tracing_subscriber::fmt::init();
+
+    let pool = tauri::async_runtime::block_on(async {
+        let data_dir = dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("nova");
+        std::fs::create_dir_all(&data_dir).expect("failed to create Nova data dir");
+        let db_path = data_dir.join("app.db");
+        init_app_db(db_path.to_str().expect("non-utf8 path"))
+            .await
+            .expect("failed to initialise Nova database")
+    });
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .manage(state::AppState::new(pool))
+        .invoke_handler(tauri::generate_handler![
+            // Phase 1
+            commands::list_profiles,
+            commands::create_profile,
+            commands::delete_profile,
+            commands::select_profile,
+            // Phase 2
+            commands::list_sources,
+            commands::add_source,
+            commands::list_channels,
+            commands::count_channels,
+            commands::list_channel_countries,
+            commands::list_channel_categories,
+            commands::list_vod,
+            commands::count_vod,
+            commands::list_vod_categories,
+            commands::list_series,
+            commands::count_series,
+            commands::list_series_categories,
+            commands::list_series_episodes,
+            // Phase 3
+            commands::set_channel_favorite,
+            commands::set_vod_favorite,
+            commands::set_series_favorite,
+            commands::set_channel_in_watchlist,
+            commands::set_vod_in_watchlist,
+            commands::set_series_in_watchlist,
+            commands::list_continue_watching,
+            // Phase 4 — EPG
+            commands::epg::epg_now_and_next,
+            commands::epg::epg_range,
+            commands::epg::add_epg_url,
+            commands::epg::epg_refresh,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Nova");
+}
