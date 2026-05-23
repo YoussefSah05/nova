@@ -1,0 +1,129 @@
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import type { SeriesEpisode, SeriesSummary } from "@/types";
+import { FavoriteButton } from "@/features/browse/FavoriteButton";
+import { WatchlistButton } from "@/features/browse/WatchlistButton";
+
+interface SeriesDetailProps {
+  profileId: string;
+  series: SeriesSummary;
+  onBack: () => void;
+  onToggleFavorite: (next: boolean) => Promise<void> | void;
+  onToggleWatchlist: (next: boolean) => Promise<void> | void;
+}
+
+export function SeriesDetail({
+  profileId,
+  series,
+  onBack,
+  onToggleFavorite,
+  onToggleWatchlist,
+}: SeriesDetailProps) {
+  const [episodes, setEpisodes] = useState<SeriesEpisode[]>([]);
+  const [openSeasons, setOpenSeasons] = useState<Set<number>>(new Set([1]));
+
+  useEffect(() => {
+    invoke<SeriesEpisode[]>("list_series_episodes", {
+      profileId,
+      sourceId: series.sourceId,
+      seriesTitle: series.seriesTitle,
+    }).then(setEpisodes);
+  }, [profileId, series]);
+
+  const bySeasonMap = new Map<number, SeriesEpisode[]>();
+  for (const ep of episodes) {
+    const list = bySeasonMap.get(ep.season) ?? [];
+    list.push(ep);
+    bySeasonMap.set(ep.season, list);
+  }
+  const seasons = Array.from(bySeasonMap.keys()).sort((a, b) => a - b);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <button
+        onClick={onBack}
+        className="flex items-center gap-2 text-sm text-white/50 hover:text-white transition-colors w-fit"
+      >
+        ← Back
+      </button>
+
+      <div className="flex items-start gap-4">
+        {series.posterUrl && (
+          <img
+            src={series.posterUrl}
+            alt={series.seriesTitle}
+            className="w-20 h-28 object-cover rounded-lg flex-shrink-0"
+          />
+        )}
+        <div className="flex flex-1 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold text-white">{series.seriesTitle}</h2>
+            <p className="text-sm text-white/50 mt-1">
+              {series.seasonCount} season{series.seasonCount !== 1 ? "s" : ""} ·{" "}
+              {series.episodeCount} episode{series.episodeCount !== 1 ? "s" : ""}
+              {series.category ? ` · ${series.category}` : ""}
+            </p>
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <WatchlistButton
+              inWatchlist={series.isInWatchlist}
+              onToggle={onToggleWatchlist}
+              label={series.seriesTitle}
+            />
+            <FavoriteButton
+              isFavorite={series.isFavorite}
+              onToggle={onToggleFavorite}
+              label={series.seriesTitle}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        {seasons.map((season) => {
+          const eps = bySeasonMap.get(season) ?? [];
+          const isOpen = openSeasons.has(season);
+          return (
+            <div key={season} className="rounded-xl bg-neutral-900 overflow-hidden">
+              <button
+                className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-white hover:bg-neutral-800 transition-colors"
+                onClick={() =>
+                  setOpenSeasons((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(season)) next.delete(season);
+                    else next.add(season);
+                    return next;
+                  })
+                }
+              >
+                <span>Season {season}</span>
+                <span className="text-white/40">{isOpen ? "▲" : "▼"}</span>
+              </button>
+              {isOpen && (
+                <div className="divide-y divide-white/5">
+                  {eps.map((ep) => (
+                    <div key={ep.id} className="flex items-center gap-3 px-4 py-2.5">
+                      {ep.logoUrl ? (
+                        <img
+                          src={ep.logoUrl}
+                          alt=""
+                          className="w-16 h-9 object-cover rounded flex-shrink-0 bg-neutral-800"
+                        />
+                      ) : (
+                        <div className="w-16 h-9 rounded bg-neutral-800 flex-shrink-0" />
+                      )}
+                      <span className="text-sm text-white/80">
+                        E{String(ep.episode).padStart(2, "0")}
+                        {ep.episodeTitle ? ` — ${ep.episodeTitle}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
