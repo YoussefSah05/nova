@@ -8,14 +8,18 @@ pub struct AppState {
     pub active_profile_id: Arc<RwLock<Option<String>>>,
     /// Per-profile SQLite pools, keyed by profile UUID.
     pub profile_pools: Arc<RwLock<HashMap<String, Arc<SqlitePool>>>>,
+    /// Port the local HLS proxy bound to. The player asks for it via
+    /// `get_proxy_port` and constructs `http://127.0.0.1:<port>/proxy?url=…`.
+    pub hls_proxy_port: u16,
 }
 
 impl AppState {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: SqlitePool, hls_proxy_port: u16) -> Self {
         Self {
             pool: Arc::new(pool),
             active_profile_id: Arc::new(RwLock::new(None)),
             profile_pools: Arc::new(RwLock::new(HashMap::new())),
+            hls_proxy_port,
         }
     }
 

@@ -15,6 +15,7 @@ use crate::state::AppState;
 use std::time::{Duration, Instant};
 
 pub mod epg;
+pub mod playback;
 
 // ── Profile commands (Phase 1) ────────────────────────────────────────────────
 

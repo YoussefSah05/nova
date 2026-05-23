@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed)\n            VALUES (?, ?, ?, ?, ?, ?)\n            ON CONFLICT(media_kind, media_id) DO UPDATE SET\n                position_sec = excluded.position_sec,\n                duration_sec = COALESCE(excluded.duration_sec, watch_history.duration_sec),\n                watched_at   = excluded.watched_at,\n                completed    = excluded.completed\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "309f33c2ada5a278fc8a47b81075e6855715d4a8ee4e9cd56a877d796cfff0ad"
+}

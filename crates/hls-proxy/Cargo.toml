@@ -10,4 +10,5 @@ thiserror = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
+serde = { workspace = true }
 tracing = { workspace = true }

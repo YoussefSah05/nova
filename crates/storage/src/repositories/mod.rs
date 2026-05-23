@@ -16,4 +16,4 @@ pub use programs::{NowAndNext, ProgramsRepository};
 pub use series::SeriesRepository;
 pub use sources::SourceRepository;
 pub use vod::VodRepository;
-pub use watch_history::WatchHistoryRepository;
+pub use watch_history::{ResumePosition, WatchHistoryRepository};

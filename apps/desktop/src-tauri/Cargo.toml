@@ -23,6 +23,7 @@ nova-storage = { path = "../../../crates/storage" }
 nova-m3u = { path = "../../../crates/m3u" }
 nova-xtream = { path = "../../../crates/xtream" }
 nova-epg = { path = "../../../crates/epg" }
+nova-hls-proxy = { path = "../../../crates/hls-proxy" }
 sqlx = { workspace = true }
 uuid = { workspace = true }
 dirs = "5"
