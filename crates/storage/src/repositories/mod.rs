@@ -1,0 +1,19 @@
+pub mod channels;
+pub mod epg_sources;
+pub mod jobs;
+pub mod profiles;
+pub mod programs;
+pub mod series;
+pub mod sources;
+pub mod vod;
+pub mod watch_history;
+
+pub use channels::ChannelRepository;
+pub use epg_sources::{EpgSource, EpgSourcesRepository};
+pub use jobs::JobRepository;
+pub use profiles::ProfileRepository;
+pub use programs::{NowAndNext, ProgramsRepository};
+pub use series::SeriesRepository;
+pub use sources::SourceRepository;
+pub use vod::VodRepository;
+pub use watch_history::WatchHistoryRepository;
