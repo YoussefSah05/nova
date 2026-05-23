@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+@theme {
+  /* Typography */
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-arabic: "IBM Plex Sans Arabic", "Cairo", sans-serif;
+  --font-cjk: "Noto Sans CJK", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Fira Code", monospace;
+
+  /* Type scale */
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 36px;
+
+  /* Surface colors (dark-first) */
+  --color-surface: #0a0a0c;
+  --color-surface-raised: #111113;
+  --color-surface-overlay: #1a1a1e;
+
+  /* Brand accent */
+  --color-accent: #6366f1;
+  --color-accent-hover: #818cf8;
+
+  /* Text */
+  --color-text-primary: rgba(255, 255, 255, 0.96);
+  --color-text-secondary: rgba(255, 255, 255, 0.55);
+  --color-text-muted: rgba(255, 255, 255, 0.3);
+
+  /* Borders */
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Motion — see ARCHITECTURE.md §17 */
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
+  --duration-fast: 150ms;
+  --duration-default: 200ms;
+  --duration-layout: 400ms;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  margin: 0;
+  padding: 0;
+}
