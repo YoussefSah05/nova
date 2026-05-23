@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 concurrency:
@@ -13,6 +14,10 @@ jobs:
   rust:
     name: Rust — check / clippy / test / fmt
     runs-on: macos-14
+    env:
+      # sqlx::query! macros read the committed .sqlx/ cache instead of
+      # connecting to a live database during the build.
+      SQLX_OFFLINE: "true"
     steps:
       - uses: actions/checkout@v4
 
