@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE epg_sources SET last_refresh_utc = ?, last_error = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "66a3c7e3ecd5b53f3cd56e75e91be5d0aadf501109c7b4c430cb8d29c033a2f2"
+}

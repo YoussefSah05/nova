@@ -1,0 +1,80 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at\n                 FROM vod_items\n                 WHERE source_id = ?\n                   AND (? IS NULL OR category = ?)\n                   AND (? IS NULL OR name LIKE ? OR clean_title LIKE ? OR category LIKE ?)\n                   AND (? = 0 OR is_favorite = 1)\n                   AND (? = 0 OR is_in_watchlist = 1)\n                 ORDER BY added_at DESC, id DESC LIMIT ? OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "clean_title",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "year",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "logo_url",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "stream_url",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "category",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_favorite",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_in_watchlist",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "added_at",
+        "ordinal": 10,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "c5a4234a7b0e8decfe79d3e068d4a3d312e544b742f5ce3a74370f61f2ec5381"
+}

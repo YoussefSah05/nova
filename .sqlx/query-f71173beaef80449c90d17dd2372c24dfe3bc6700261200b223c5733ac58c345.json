@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO epg_sources (source_id, url, kind) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "f71173beaef80449c90d17dd2372c24dfe3bc6700261200b223c5733ac58c345"
+}

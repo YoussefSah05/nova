@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT category as \"value!\" FROM channels\n               WHERE source_id = ? AND category IS NOT NULL AND category != ''\n               ORDER BY category ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "value!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ae19a99788b9fe07d4b791944f9cb4c12f1a1b2d661938868c7619949a8d9946"
+}
