@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO jobs (kind, payload, state, priority, created_at) VALUES (?, ?, 'queued', ?, ?) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "37ea00bf4ed70b0ecbc9fb88055aa6a56081ed244ed30af392b7035e0b1cb7be"
+}

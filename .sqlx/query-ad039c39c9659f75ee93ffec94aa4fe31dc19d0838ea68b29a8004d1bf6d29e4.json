@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT channel_tvg_id, title, sub_title, description,\n                          start_utc as \"start_utc!: i64\", stop_utc as \"stop_utc!: i64\",\n                          category, icon_url\n                   FROM programs\n                   WHERE channel_tvg_id = ? AND stop_utc > ? AND start_utc < ?\n                   ORDER BY start_utc ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "channel_tvg_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "title",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "sub_title",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "description",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "start_utc!: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "stop_utc!: i64",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "category",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "icon_url",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "ad039c39c9659f75ee93ffec94aa4fe31dc19d0838ea68b29a8004d1bf6d29e4"
+}

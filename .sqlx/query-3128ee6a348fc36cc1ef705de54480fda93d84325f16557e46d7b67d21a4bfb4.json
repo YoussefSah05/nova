@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as \"n!: i64\"\n             FROM vod_items\n             WHERE source_id = ?\n               AND (? IS NULL OR category = ?)\n               AND (? IS NULL OR name LIKE ? OR clean_title LIKE ? OR category LIKE ?)\n               AND (? = 0 OR is_favorite = 1)\n               AND (? = 0 OR is_in_watchlist = 1)",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3128ee6a348fc36cc1ef705de54480fda93d84325f16557e46d7b67d21a4bfb4"
+}

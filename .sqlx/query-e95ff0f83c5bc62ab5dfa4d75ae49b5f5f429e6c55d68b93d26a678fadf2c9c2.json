@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE channels SET is_in_watchlist = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e95ff0f83c5bc62ab5dfa4d75ae49b5f5f429e6c55d68b93d26a678fadf2c9c2"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT country as \"value!\" FROM channels\n               WHERE source_id = ? AND country IS NOT NULL AND country != ''\n               ORDER BY country ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "value!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c4e4f4a18ce3362a1695c32cf5f1ca03ffadbb0305781e0f0eb947b4cb9bfee1"
+}

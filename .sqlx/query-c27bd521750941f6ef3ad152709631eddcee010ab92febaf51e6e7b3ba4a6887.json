@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE series_episodes SET is_favorite = ? WHERE source_id = ? AND series_title = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c27bd521750941f6ef3ad152709631eddcee010ab92febaf51e6e7b3ba4a6887"
+}

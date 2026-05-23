@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE series_episodes SET is_in_watchlist = ? WHERE source_id = ? AND series_title = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c8028c91fb3664fba59c3e4ac683d9566c498e88b3b5f42252d5282dbca5d55f"
+}

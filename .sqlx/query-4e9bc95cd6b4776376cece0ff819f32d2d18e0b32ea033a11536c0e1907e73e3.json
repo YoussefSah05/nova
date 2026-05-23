@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM programs WHERE stop_utc < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "4e9bc95cd6b4776376cece0ff819f32d2d18e0b32ea033a11536c0e1907e73e3"
+}

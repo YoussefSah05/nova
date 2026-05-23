@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT category as \"value!\" FROM series_episodes\n               WHERE source_id = ? AND category IS NOT NULL AND category != ''\n               ORDER BY category ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "value!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a7258152819e6af2f56a51a0f1008956dc0d2af0ff8521f9756de5b2d31a5ffd"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM programs WHERE channel_tvg_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9e6323c36b61331187829b1c027bdbfa18dda9bfa70ccff1a00e435c4ebea298"
+}

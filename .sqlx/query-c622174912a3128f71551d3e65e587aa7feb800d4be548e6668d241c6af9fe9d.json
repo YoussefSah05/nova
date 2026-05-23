@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\", source_id, url, kind, last_refresh_utc, last_error\n               FROM epg_sources WHERE source_id = ? ORDER BY id ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "url",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "kind",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_refresh_utc",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "last_error",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "c622174912a3128f71551d3e65e587aa7feb800d4be548e6668d241c6af9fe9d"
+}

@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO sources (kind, name, url) VALUES (?, ?, ?) RETURNING id, kind, name, url, last_refreshed_at, auto_refresh_hours",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "kind",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "url",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_refreshed_at",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "auto_refresh_hours",
+        "ordinal": 5,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "fc6d01e43f164df777d595810eec4c0a40d172defcf40524f4d1b97d42107d95"
+}

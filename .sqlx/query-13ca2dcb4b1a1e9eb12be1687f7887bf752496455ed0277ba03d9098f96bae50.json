@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO profiles (id, name, avatar_color, created_at) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "13ca2dcb4b1a1e9eb12be1687f7887bf752496455ed0277ba03d9098f96bae50"
+}

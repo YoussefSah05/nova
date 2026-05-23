@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT category as \"value!\" FROM vod_items\n               WHERE source_id = ? AND category IS NOT NULL AND category != ''\n               ORDER BY category ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "value!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "8c3e9116d456270e17514caeffaa39bf79c954512b1069cac09575ce6b2f2b0e"
+}
