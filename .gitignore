@@ -1,0 +1,92 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Node / pnpm
+node_modules/
+.pnpm-store/
+dist/
+build/
+.vite/
+
+# Tauri
+apps/desktop/src-tauri/target/
+apps/desktop/dist/
+apps/desktop/gen/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# Nova-specific: ML models (too large for git)
+models/
+*.gguf
+*.bin
+*.ot
+*.pt
+*.pth
+*.mlmodel
+*.mlmodelc/
+
+# Nova-specific: generated bindings
+packages/types/src/generated/
+
+
+# Dev SQLite DBs used to regenerate the sqlx offline cache
+nova_dev.db
+nova_dev.db-journal
+nova_dev.db-wal
+nova_dev.db-shm
+
+# Test output
+coverage/
+playwright-report/
+test-results/

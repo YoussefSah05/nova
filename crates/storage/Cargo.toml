@@ -1,0 +1,16 @@
+[package]
+name = "nova-storage"
+version = "0.1.0"
+edition = "2021"
+description = "SQLite storage layer (sqlx, WAL mode): app.db + per-profile DBs, migrations, repositories"
+
+[dependencies]
+nova-core = { path = "../core" }
+nova-epg = { path = "../epg" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }

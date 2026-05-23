@@ -1,0 +1,14 @@
+[package]
+name = "nova-jobs"
+version = "0.1.0"
+edition = "2021"
+description = "Background job scheduler and worker pool"
+
+[dependencies]
+nova-core = { path = "../core" }
+nova-storage = { path = "../storage" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

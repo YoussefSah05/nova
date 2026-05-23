@@ -1,0 +1,11 @@
+[package]
+name = "nova-media"
+version = "0.1.0"
+edition = "2021"
+description = "FFmpeg subprocess wrapper: audio extraction, thumbnail sprites, codec probing"
+
+[dependencies]
+nova-core = { path = "../core" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

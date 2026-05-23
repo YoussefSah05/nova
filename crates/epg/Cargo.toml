@@ -1,0 +1,12 @@
+[package]
+name = "nova-epg"
+version = "0.1.0"
+edition = "2021"
+description = "XMLTV EPG parser and normalizer"
+
+[dependencies]
+nova-core = { path = "../core" }
+thiserror = { workspace = true }
+quick-xml = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
