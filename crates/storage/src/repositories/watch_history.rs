@@ -1,7 +1,15 @@
-use nova_core::ContinueWatchingItem;
+use nova_core::{now_ts, ContinueWatchingItem};
 use sqlx::SqlitePool;
 
 use crate::error::StorageError;
+
+/// Resume state for a single media item. Returned by [`WatchHistoryRepository::resume_position`].
+#[derive(Debug, Clone, Copy)]
+pub struct ResumePosition {
+    pub position_sec: f64,
+    pub duration_sec: Option<f64>,
+    pub completed: bool,
+}
 
 pub struct WatchHistoryRepository<'a> {
     pool: &'a SqlitePool,
@@ -10,6 +18,69 @@ pub struct WatchHistoryRepository<'a> {
 impl<'a> WatchHistoryRepository<'a> {
     pub fn new(pool: &'a SqlitePool) -> Self {
         Self { pool }
+    }
+
+    /// INSERT-OR-REPLACE on (media_kind, media_id). Called periodically while
+    /// the player is open (e.g. every 5s) so the Continue Watching shelf and
+    /// the player's "resume" hint stay current.
+    pub async fn record_progress(
+        &self,
+        media_kind: &str,
+        media_id: i64,
+        position_sec: f64,
+        duration_sec: Option<f64>,
+        completed: bool,
+    ) -> Result<(), StorageError> {
+        let watched_at = now_ts();
+        let completed_flag: i64 = if completed { 1 } else { 0 };
+        sqlx::query!(
+            r#"
+            INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(media_kind, media_id) DO UPDATE SET
+                position_sec = excluded.position_sec,
+                duration_sec = COALESCE(excluded.duration_sec, watch_history.duration_sec),
+                watched_at   = excluded.watched_at,
+                completed    = excluded.completed
+            "#,
+            media_kind,
+            media_id,
+            position_sec,
+            duration_sec,
+            watched_at,
+            completed_flag,
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Returns the latest position for a (kind, id) — used when opening the
+    /// player to seek to the resume point. `None` if the user never started
+    /// the item, or if they previously marked it completed.
+    pub async fn resume_position(
+        &self,
+        media_kind: &str,
+        media_id: i64,
+    ) -> Result<Option<ResumePosition>, StorageError> {
+        let row = sqlx::query!(
+            r#"SELECT
+                position_sec as "position_sec!: f64",
+                duration_sec as "duration_sec?: f64",
+                completed    as "completed!: i64"
+               FROM watch_history
+               WHERE media_kind = ? AND media_id = ?
+               LIMIT 1"#,
+            media_kind,
+            media_id,
+        )
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|r| ResumePosition {
+            position_sec: r.position_sec,
+            duration_sec: r.duration_sec,
+            completed: r.completed != 0,
+        }))
     }
 
     /// Continue Watching shelf. Joins `watch_history` with `vod_items` /

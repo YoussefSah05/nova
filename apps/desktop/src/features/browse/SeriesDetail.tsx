@@ -10,6 +10,7 @@ interface SeriesDetailProps {
   onBack: () => void;
   onToggleFavorite: (next: boolean) => Promise<void> | void;
   onToggleWatchlist: (next: boolean) => Promise<void> | void;
+  onPlayEpisode: (episode: SeriesEpisode) => void;
 }
 
 export function SeriesDetail({
@@ -18,6 +19,7 @@ export function SeriesDetail({
   onBack,
   onToggleFavorite,
   onToggleWatchlist,
+  onPlayEpisode,
 }: SeriesDetailProps) {
   const [episodes, setEpisodes] = useState<SeriesEpisode[]>([]);
   const [openSeasons, setOpenSeasons] = useState<Set<number>>(new Set([1]));
@@ -102,7 +104,12 @@ export function SeriesDetail({
               {isOpen && (
                 <div className="divide-y divide-white/5">
                   {eps.map((ep) => (
-                    <div key={ep.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <button
+                      key={ep.id}
+                      onClick={() => onPlayEpisode(ep)}
+                      className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-white/[0.04] focus:outline-none focus:bg-white/[0.04]"
+                      aria-label={`Play ${series.seriesTitle} S${season} E${ep.episode}`}
+                    >
                       {ep.logoUrl ? (
                         <img
                           src={ep.logoUrl}
@@ -116,7 +123,7 @@ export function SeriesDetail({
                         E{String(ep.episode).padStart(2, "0")}
                         {ep.episodeTitle ? ` — ${ep.episodeTitle}` : ""}
                       </span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}

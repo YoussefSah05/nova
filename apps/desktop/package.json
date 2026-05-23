@@ -18,7 +18,9 @@
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-shell": "^2",
+    "@vidstack/react": "^0.6.15",
     "clsx": "^2",
+    "hls.js": "^1.6.16",
     "lucide-react": "^0.474",
     "react": "^19",
     "react-dom": "^19",

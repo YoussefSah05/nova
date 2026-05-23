@@ -8,20 +8,33 @@ use nova_storage::init_app_db;
 pub fn run() {
     tracing_subscriber::fmt::init();
 
-    let pool = tauri::async_runtime::block_on(async {
+    let (pool, proxy_handle) = tauri::async_runtime::block_on(async {
         let data_dir = dirs::data_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("nova");
         std::fs::create_dir_all(&data_dir).expect("failed to create Nova data dir");
         let db_path = data_dir.join("app.db");
-        init_app_db(db_path.to_str().expect("non-utf8 path"))
+        let pool = init_app_db(db_path.to_str().expect("non-utf8 path"))
             .await
-            .expect("failed to initialise Nova database")
+            .expect("failed to initialise Nova database");
+
+        // Local HLS reverse proxy. Phase 5 ships a passthrough; later phases
+        // rewrite manifests through this port to inject captions.
+        let proxy = nova_hls_proxy::start()
+            .await
+            .expect("failed to start HLS proxy");
+        (pool, proxy)
     });
+
+    let proxy_port = proxy_handle.port;
+    // Keep the proxy alive for the lifetime of the app. We deliberately leak
+    // the handle — Tauri's process is the proxy's lifecycle owner; cleanup
+    // happens when the process exits.
+    std::mem::forget(proxy_handle);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .manage(state::AppState::new(pool))
+        .manage(state::AppState::new(pool, proxy_port))
         .invoke_handler(tauri::generate_handler![
             // Phase 1
             commands::list_profiles,
@@ -55,6 +68,10 @@ pub fn run() {
             commands::epg::epg_range,
             commands::epg::add_epg_url,
             commands::epg::epg_refresh,
+            // Phase 5 — Playback
+            commands::playback::get_proxy_port,
+            commands::playback::record_watch_progress,
+            commands::playback::get_resume_position,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nova");

@@ -17,6 +17,7 @@ import { FavoriteButton } from "@/features/browse/FavoriteButton";
 import { WatchlistButton } from "@/features/browse/WatchlistButton";
 import { NowAndNextChip } from "@/features/browse/NowAndNextChip";
 import { useNowAndNext } from "@/features/browse/useNowAndNext";
+import { PlayerModal, type PlayMedia } from "@/features/player/PlayerModal";
 import { cn } from "@/lib/utils";
 
 type Tab = "live" | "movies" | "series";
@@ -62,6 +63,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const [vod, setVod] = useState<VodItem[]>([]);
   const [series, setSeries] = useState<SeriesSummary[]>([]);
   const [selectedSeries, setSelectedSeries] = useState<SeriesSummary | null>(null);
+  const [playingMedia, setPlayingMedia] = useState<PlayMedia | null>(null);
   const [showAddSource, setShowAddSource] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
@@ -616,15 +618,34 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
 
   if (selectedSeries) {
     return (
-      <div className="min-h-screen bg-neutral-950 p-6">
-        <SeriesDetail
-          profileId={profile.id}
-          series={selectedSeries}
-          onBack={() => setSelectedSeries(null)}
-          onToggleFavorite={(next) => handleToggleSeriesFavorite(selectedSeries, next)}
-          onToggleWatchlist={(next) => handleToggleSeriesWatchlist(selectedSeries, next)}
-        />
-      </div>
+      <>
+        <div className="min-h-screen bg-neutral-950 p-6">
+          <SeriesDetail
+            profileId={profile.id}
+            series={selectedSeries}
+            onBack={() => setSelectedSeries(null)}
+            onToggleFavorite={(next) => handleToggleSeriesFavorite(selectedSeries, next)}
+            onToggleWatchlist={(next) => handleToggleSeriesWatchlist(selectedSeries, next)}
+            onPlayEpisode={(episode) =>
+              setPlayingMedia({
+                kind: "episode",
+                id: episode.id,
+                streamUrl: episode.streamUrl,
+                title: selectedSeries.seriesTitle,
+                subtitle: `S${String(episode.season).padStart(2, "0")}E${String(episode.episode).padStart(2, "0")}${episode.episodeTitle ? ` — ${episode.episodeTitle}` : ""}`,
+                posterUrl: episode.logoUrl ?? selectedSeries.posterUrl,
+              })
+            }
+          />
+        </div>
+        {playingMedia && (
+          <PlayerModal
+            profileId={profile.id}
+            media={playingMedia}
+            onClose={() => setPlayingMedia(null)}
+          />
+        )}
+      </>
     );
   }
 
@@ -817,6 +838,17 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                     channels={channels}
                     onToggleFavorite={handleToggleChannelFavorite}
                     onToggleWatchlist={handleToggleChannelWatchlist}
+                    onPlay={(channel) =>
+                      setPlayingMedia({
+                        kind: "live",
+                        id: channel.id,
+                        streamUrl: channel.streamUrl,
+                        title: channel.name,
+                        subtitle:
+                          [channel.country, channel.category].filter(Boolean).join(" / ") || null,
+                        posterUrl: channel.logoUrl,
+                      })
+                    }
                   />
                 )}
                 {tab === "movies" && (
@@ -824,6 +856,18 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                     items={vod}
                     onToggleFavorite={handleToggleVodFavorite}
                     onToggleWatchlist={handleToggleVodWatchlist}
+                    onPlay={(item) =>
+                      setPlayingMedia({
+                        kind: "vod",
+                        id: item.id,
+                        streamUrl: item.streamUrl,
+                        title: item.cleanTitle ?? item.name,
+                        subtitle:
+                          [item.year?.toString(), item.category].filter(Boolean).join(" / ") ||
+                          null,
+                        posterUrl: item.logoUrl,
+                      })
+                    }
                   />
                 )}
                 {tab === "series" && (
@@ -868,6 +912,14 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           onCancel={() => setShowAddSource(false)}
         />
       )}
+
+      {playingMedia && (
+        <PlayerModal
+          profileId={profile.id}
+          media={playingMedia}
+          onClose={() => setPlayingMedia(null)}
+        />
+      )}
     </div>
   );
 }
@@ -877,11 +929,13 @@ function ChannelList({
   channels,
   onToggleFavorite,
   onToggleWatchlist,
+  onPlay,
 }: {
   profileId: string;
   channels: Channel[];
   onToggleFavorite: (channel: Channel, next: boolean) => Promise<void> | void;
   onToggleWatchlist: (channel: Channel, next: boolean) => Promise<void> | void;
+  onPlay: (channel: Channel) => void;
 }) {
   const nowMap = useNowAndNext(profileId, channels);
   if (channels.length === 0) return null;
@@ -890,14 +944,20 @@ function ChannelList({
     <div className="flex flex-col divide-y divide-white/5 rounded-2xl border border-white/5 bg-white/[0.02]">
       {channels.map((channel) => (
         <div key={channel.id} className="flex items-center gap-3 px-3 py-2.5">
-          <MediaThumb src={channel.logoUrl} className="h-9 w-9 rounded-lg object-contain" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm text-white">{channel.name}</p>
-            <p className="truncate text-xs text-white/30">
-              {[channel.country, channel.category].filter(Boolean).join(" / ") || "Live channel"}
-            </p>
-            {channel.tvgId && <NowAndNextChip data={nowMap[channel.tvgId]} />}
-          </div>
+          <button
+            onClick={() => onPlay(channel)}
+            className="flex min-w-0 flex-1 items-center gap-3 text-left transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 rounded-lg"
+            aria-label={`Play ${channel.name}`}
+          >
+            <MediaThumb src={channel.logoUrl} className="h-9 w-9 rounded-lg object-contain" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm text-white">{channel.name}</p>
+              <p className="truncate text-xs text-white/30">
+                {[channel.country, channel.category].filter(Boolean).join(" / ") || "Live channel"}
+              </p>
+              {channel.tvgId && <NowAndNextChip data={nowMap[channel.tvgId]} />}
+            </div>
+          </button>
           <WatchlistButton
             inWatchlist={channel.isInWatchlist}
             onToggle={(next) => onToggleWatchlist(channel, next)}
@@ -920,10 +980,12 @@ function VodList({
   items,
   onToggleFavorite,
   onToggleWatchlist,
+  onPlay,
 }: {
   items: VodItem[];
   onToggleFavorite: (item: VodItem, next: boolean) => Promise<void> | void;
   onToggleWatchlist: (item: VodItem, next: boolean) => Promise<void> | void;
+  onPlay: (item: VodItem) => void;
 }) {
   if (items.length === 0) return null;
 
@@ -931,13 +993,19 @@ function VodList({
     <div className="flex flex-col divide-y divide-white/5 rounded-2xl border border-white/5 bg-white/[0.02]">
       {items.map((item) => (
         <div key={item.id} className="flex items-center gap-3 px-3 py-2.5">
-          <MediaThumb src={item.logoUrl} className="h-14 w-10 rounded-lg object-cover" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm text-white">{item.cleanTitle ?? item.name}</p>
-            <p className="truncate text-xs text-white/30">
-              {[item.year?.toString(), item.category].filter(Boolean).join(" / ") || "Movie"}
-            </p>
-          </div>
+          <button
+            onClick={() => onPlay(item)}
+            className="flex min-w-0 flex-1 items-center gap-3 text-left transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 rounded-lg"
+            aria-label={`Play ${item.cleanTitle ?? item.name}`}
+          >
+            <MediaThumb src={item.logoUrl} className="h-14 w-10 rounded-lg object-cover" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm text-white">{item.cleanTitle ?? item.name}</p>
+              <p className="truncate text-xs text-white/30">
+                {[item.year?.toString(), item.category].filter(Boolean).join(" / ") || "Movie"}
+              </p>
+            </div>
+          </button>
           <WatchlistButton
             inWatchlist={item.isInWatchlist}
             onToggle={(next) => onToggleWatchlist(item, next)}
