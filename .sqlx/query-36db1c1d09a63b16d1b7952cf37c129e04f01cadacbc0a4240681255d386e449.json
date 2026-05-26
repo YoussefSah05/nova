@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                        stream_url        as \"stream_url!: String\",\n                        detected_language as \"detected_language?: String\"\n                       FROM vod_items WHERE id = ? LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "stream_url!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "detected_language?: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "36db1c1d09a63b16d1b7952cf37c129e04f01cadacbc0a4240681255d386e449"
+}

@@ -23,6 +23,12 @@ impl<'a> WatchHistoryRepository<'a> {
     /// INSERT-OR-REPLACE on (media_kind, media_id). Called periodically while
     /// the player is open (e.g. every 5s) so the Continue Watching shelf and
     /// the player's "resume" hint stay current.
+    ///
+    /// `caption_mode` is the user's caption selection at the time of write
+    /// ('off' | 'source' | 'translation:<lang>' | 'dual:<src>:<tgt>'). In
+    /// Phase 5 the frontend always sends 'off'; Phase 6/7 will pass real values.
+    /// `None` leaves the existing value untouched so a Phase 5 client can't
+    /// clobber a preference written by a future build.
     pub async fn record_progress(
         &self,
         media_kind: &str,
@@ -30,18 +36,20 @@ impl<'a> WatchHistoryRepository<'a> {
         position_sec: f64,
         duration_sec: Option<f64>,
         completed: bool,
+        caption_mode: Option<&str>,
     ) -> Result<(), StorageError> {
         let watched_at = now_ts();
         let completed_flag: i64 = if completed { 1 } else { 0 };
         sqlx::query!(
             r#"
-            INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed, caption_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(media_kind, media_id) DO UPDATE SET
                 position_sec = excluded.position_sec,
                 duration_sec = COALESCE(excluded.duration_sec, watch_history.duration_sec),
                 watched_at   = excluded.watched_at,
-                completed    = excluded.completed
+                completed    = excluded.completed,
+                caption_mode = COALESCE(excluded.caption_mode, watch_history.caption_mode)
             "#,
             media_kind,
             media_id,
@@ -49,13 +57,14 @@ impl<'a> WatchHistoryRepository<'a> {
             duration_sec,
             watched_at,
             completed_flag,
+            caption_mode,
         )
         .execute(self.pool)
         .await?;
         Ok(())
     }
 
-    /// Returns the latest position for a (kind, id) — used when opening the
+    /// Returns the latest position for a (kind, id) - used when opening the
     /// player to seek to the resume point. `None` if the user never started
     /// the item, or if they previously marked it completed.
     pub async fn resume_position(

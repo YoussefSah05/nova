@@ -27,6 +27,7 @@ pub fn run() {
     });
 
     let proxy_port = proxy_handle.port;
+    let proxy_sessions = proxy_handle.sessions().clone();
     // Keep the proxy alive for the lifetime of the app. We deliberately leak
     // the handle — Tauri's process is the proxy's lifecycle owner; cleanup
     // happens when the process exits.
@@ -34,7 +35,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .manage(state::AppState::new(pool, proxy_port))
+        .manage(state::AppState::new(pool, proxy_port, proxy_sessions))
         .invoke_handler(tauri::generate_handler![
             // Phase 1
             commands::list_profiles,
@@ -70,6 +71,8 @@ pub fn run() {
             commands::epg::epg_refresh,
             // Phase 5 — Playback
             commands::playback::get_proxy_port,
+            commands::playback::resolve_stream,
+            commands::playback::stop_playback,
             commands::playback::record_watch_progress,
             commands::playback::get_resume_position,
         ])

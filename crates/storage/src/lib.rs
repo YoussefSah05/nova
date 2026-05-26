@@ -12,6 +12,6 @@ pub use db::{init_app_db, init_profile_db};
 pub use error::StorageError;
 pub use repositories::{
     ChannelRepository, EpgSource, EpgSourcesRepository, JobRepository, NowAndNext,
-    ProfileRepository, ProgramsRepository, ResumePosition, SeriesRepository, SourceRepository,
-    VodRepository, WatchHistoryRepository,
+    PlaybackRepository, ProfileRepository, ProgramsRepository, ResolvedStreamUrl, ResumePosition,
+    SeriesRepository, SourceRepository, VodRepository, WatchHistoryRepository,
 };

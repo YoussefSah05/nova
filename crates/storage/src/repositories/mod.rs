@@ -1,6 +1,7 @@
 pub mod channels;
 pub mod epg_sources;
 pub mod jobs;
+pub mod playback;
 pub mod profiles;
 pub mod programs;
 pub mod series;
@@ -11,6 +12,7 @@ pub mod watch_history;
 pub use channels::ChannelRepository;
 pub use epg_sources::{EpgSource, EpgSourcesRepository};
 pub use jobs::JobRepository;
+pub use playback::{PlaybackRepository, ResolvedStreamUrl};
 pub use profiles::ProfileRepository;
 pub use programs::{NowAndNext, ProgramsRepository};
 pub use series::SeriesRepository;
