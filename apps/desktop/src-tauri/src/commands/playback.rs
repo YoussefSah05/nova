@@ -79,6 +79,7 @@ pub async fn resolve_stream(
     profile_id: String,
     media_kind: String, // 'live' | 'vod' | 'episode'
     media_id: i64,
+    route_override: Option<PlaybackRoute>,
     state: State<'_, AppState>,
 ) -> Result<ResolvedStream, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
@@ -101,7 +102,7 @@ pub async fn resolve_stream(
         fallback_reason,
     } = state
         .hls_sessions
-        .register(resolved.upstream_url.clone(), is_live)
+        .register(resolved.upstream_url.clone(), is_live, route_override)
         .await
         .map_err(|e| ApiError::Internal(format!("playback session failed: {e}")))?;
 

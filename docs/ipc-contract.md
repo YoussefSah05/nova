@@ -28,7 +28,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `count_series` | `{ profileId, sourceId, filters? }` | `number` | 3 |
 | `list_series_categories` | `{ profileId, sourceId }` | `string[]` | 3 |
 | `list_series_episodes` | `{ profileId, sourceId, seriesTitle }` | `SeriesEpisode[]` | 3 |
-| `resolve_stream` | `{ profileId, mediaKind: 'live'\|'vod'\|'episode', mediaId }` | `ResolvedStream` | 5 |
+| `resolve_stream` | `{ profileId, mediaKind: 'live'\|'vod'\|'episode', mediaId, routeOverride?: 'remux_hls'\|'transcode_hls' }` | `ResolvedStream` | 5 |
 | `stop_playback` | `{ token: string }` | `void` | 5 |
 | `record_watch_progress` | `{ profileId, mediaKind, mediaId, positionSec, durationSec?, completed, captionMode? }` | `void` | 5 |
 | `get_resume_position` | `{ profileId, mediaKind, mediaId }` | `ResumeInfo \| null` | 5 |
@@ -122,8 +122,11 @@ Player flow:
 
 1. `invoke("resolve_stream", { profileId, mediaKind, mediaId })` -> `ResolvedStream`.
 2. If `kind === "hls"`: attach `hls.js` to `url`. Otherwise set `<video src={url}>`.
-3. Every 5s while playing, `invoke("record_watch_progress", { ..., captionMode: "off" })`.
-4. On modal close / unmount: `invoke("stop_playback", { token })`.
+3. If the player raises a decode/src-not-supported error, stop the current session and retry
+   `resolve_stream` with `routeOverride: "remux_hls"`, then `"transcode_hls"` if remuxed output
+   still cannot decode.
+4. Every 5s while playing, `invoke("record_watch_progress", { ..., captionMode: "off" })`.
+5. On modal close / unmount: `invoke("stop_playback", { token })`.
 
 ### Proxy routes (Phase 5)
 

@@ -76,6 +76,7 @@ interface ResolvedStream {
 }
 
 type PlaybackRoute = "hls_passthrough" | "file_passthrough" | "remux_hls" | "transcode_hls";
+type PlaybackRouteOverride = "remux_hls" | "transcode_hls";
 
 type CaptionAssetState = "unavailable" | "pending" | "ready";
 
@@ -159,6 +160,12 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>("resolving");
   const [loadingProgress, setLoadingProgress] = useState(8);
   const [forceHlsJs, setForceHlsJs] = useState(false);
+  const mediaKey = `${profileId}:${media.kind}:${media.id}`;
+  const [routeOverride, setRouteOverride] = useState<{
+    mediaKey: string;
+    route: PlaybackRouteOverride;
+  } | null>(null);
+  const activeRouteOverride = routeOverride?.mediaKey === mediaKey ? routeOverride.route : null;
 
   // -- transient overlay state (skip indicator, controls visibility) ------
   const [skipIndicator, setSkipIndicator] = useState<{ dir: -1 | 1; key: number } | null>(null);
@@ -192,6 +199,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
           profileId,
           mediaKind: media.kind,
           mediaId: media.id,
+          routeOverride: activeRouteOverride,
         });
         if (cancelled) {
           void invoke("stop_playback", { token: stream.token }).catch(() => undefined);
@@ -211,7 +219,32 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
         void invoke("stop_playback", { token: activeToken }).catch(() => undefined);
       }
     };
-  }, [profileId, media.kind, media.id]);
+  }, [profileId, media.kind, media.id, activeRouteOverride]);
+
+  const requestPlaybackFallback = useCallback(
+    (reason: string): boolean => {
+      if (!resolved) return false;
+      const nextRoute = nextFallbackRoute(resolved.route);
+      if (!nextRoute || activeRouteOverride === nextRoute) return false;
+
+      console.warn("[player fallback]", reason, {
+        from: resolved.route,
+        to: nextRoute,
+      });
+      hlsRef.current?.destroy();
+      hlsRef.current = null;
+      setRouteOverride({ mediaKey, route: nextRoute });
+      setResolved(null);
+      setReady(false);
+      setBuffering(true);
+      setError(null);
+      setForceHlsJs(false);
+      setLoadingPhase("resolving");
+      setLoadingProgress(nextRoute === "remux_hls" ? 18 : 12);
+      return true;
+    },
+    [activeRouteOverride, mediaKey, resolved]
+  );
 
   // -- 2. Attach hls.js (preferred for HLS) or native source --------------
   useEffect(() => {
@@ -270,6 +303,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
             hls.startLoad();
             return;
           case Hls.ErrorTypes.MEDIA_ERROR:
+            if (requestPlaybackFallback(reason)) return;
             hls.recoverMediaError();
             return;
           default:
@@ -304,7 +338,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
       video.removeAttribute("src");
       video.load();
     };
-  }, [forceHlsJs, resolved]);
+  }, [forceHlsJs, requestPlaybackFallback, resolved]);
 
   // -- 3. PiP capability detection (must run after mount) -----------------
   useEffect(() => {
@@ -398,6 +432,9 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
                 : "UNKNOWN";
       const detail = me?.message ? `: ${me.message}` : "";
       console.error("[<video> error]", codeName, code, me);
+      if ((code === 3 || code === 4) && requestPlaybackFallback(`${codeName}${detail}`)) {
+        return;
+      }
       setError(`Could not play this stream (${codeName}${detail}).`);
     };
     const onPipEnter = () => setPipActive(true);
@@ -434,7 +471,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
       video.removeEventListener("enterpictureinpicture", onPipEnter);
       video.removeEventListener("leavepictureinpicture", onPipLeave);
     };
-  }, [resolved]);
+  }, [requestPlaybackFallback, resolved]);
 
   // -- Loading progress animation ----------------------------------------
   useEffect(() => {
@@ -792,7 +829,9 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     ready && buffering ? Math.max(5, bufferHealthPct) : Math.min(99, Math.round(loadingProgress));
   const loadingDetail = resolved
     ? playbackDetail(resolved, bufferedAheadSec, ready && buffering)
-    : "Backend is resolving the provider stream";
+    : activeRouteOverride
+      ? `Retrying with local ${activeRouteOverride.replace("_hls", "").replace("_", " ")}`
+      : "Backend is resolving the provider stream";
 
   // -- Render -------------------------------------------------------------
   return (
@@ -1343,6 +1382,18 @@ function playbackDetail(
   if (stream.fallbackReason) return `Fallback ${route}: ${stream.fallbackReason}`;
   if (codecParts) return `${route} - ${codecParts}`;
   return route;
+}
+
+function nextFallbackRoute(route: PlaybackRoute): PlaybackRouteOverride | null {
+  switch (route) {
+    case "hls_passthrough":
+    case "file_passthrough":
+      return "remux_hls";
+    case "remux_hls":
+      return "transcode_hls";
+    case "transcode_hls":
+      return null;
+  }
 }
 
 function formatSeconds(seconds: number): string {

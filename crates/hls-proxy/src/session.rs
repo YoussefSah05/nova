@@ -92,46 +92,56 @@ impl SessionRegistry {
         &self,
         upstream_url: String,
         is_live: bool,
+        route_override: Option<PlaybackRoute>,
     ) -> Result<SessionInfo, SessionError> {
-        // URL shape is enough for common Xtream/IPTV paths. Avoid blocking
-        // startup on ffprobe when a direct route is obvious.
-        let (probe, mut route, mut fallback_reason) = match fast_probe_from_url(&upstream_url) {
-            Some(p) => {
-                let route = p.route;
-                (p, route, None)
-            }
-            None => match probe_stream(&upstream_url, PROBE_DEADLINE).await {
-                Ok(p) => {
+        let forced_route = route_override;
+        let (probe, mut route, mut fallback_reason) = if let Some(route) = forced_route {
+            (
+                forced_probe_from_url(&upstream_url, route),
+                route,
+                Some(format!("player decode fallback forced {route:?}")),
+            )
+        } else {
+            // URL shape is enough for common Xtream/IPTV paths. Avoid blocking
+            // startup on ffprobe when a direct route is obvious.
+            match fast_probe_from_url(&upstream_url) {
+                Some(p) => {
                     let route = p.route;
                     (p, route, None)
                 }
-                Err(e) => {
-                    let route = fallback_route_for_url(&upstream_url);
-                    let reason = format!("probe failed: {e}");
-                    tracing::warn!(
-                        error = %e,
-                        route = ?route,
-                        url = %upstream_url,
-                        "probe failed; using fast playback fallback"
-                    );
-                    (
-                        StreamProbe {
-                            container: None,
-                            format_name: None,
-                            video_codec: None,
-                            audio_codec: None,
-                            duration_sec: None,
-                            width: None,
-                            height: None,
-                            is_playlist_hls: matches!(route, PlaybackRoute::HlsPassthrough),
-                            is_transport_stream: matches!(route, PlaybackRoute::RemuxHls),
+                None => match probe_stream(&upstream_url, PROBE_DEADLINE).await {
+                    Ok(p) => {
+                        let route = p.route;
+                        (p, route, None)
+                    }
+                    Err(e) => {
+                        let route = fallback_route_for_url(&upstream_url);
+                        let reason = format!("probe failed: {e}");
+                        tracing::warn!(
+                            error = %e,
+                            route = ?route,
+                            url = %upstream_url,
+                            "probe failed; using fast playback fallback"
+                        );
+                        (
+                            StreamProbe {
+                                container: None,
+                                format_name: None,
+                                video_codec: None,
+                                audio_codec: None,
+                                duration_sec: None,
+                                width: None,
+                                height: None,
+                                is_playlist_hls: matches!(route, PlaybackRoute::HlsPassthrough),
+                                is_transport_stream: matches!(route, PlaybackRoute::RemuxHls),
+                                route,
+                            },
                             route,
-                        },
-                        route,
-                        Some(reason),
-                    )
-                }
-            },
+                            Some(reason),
+                        )
+                    }
+                },
+            }
         };
         if fallback_reason.is_none() {
             route = probe.route;
@@ -141,6 +151,9 @@ impl SessionRegistry {
             match RemuxSession::start(&upstream_url, route, REMUX_STARTUP).await {
                 Ok(session) => Some(session),
                 Err(e) => {
+                    if forced_route.is_some() {
+                        return Err(SessionError::Remux(e));
+                    }
                     let fallback_route = fallback_route_for_probe(&upstream_url, &probe);
                     let reason = format!("remux failed for {route:?}: {e}");
                     tracing::warn!(
@@ -236,12 +249,10 @@ fn fallback_route_for_probe(url: &str, probe: &StreamProbe) -> PlaybackRoute {
 fn fast_probe_from_url(url: &str) -> Option<StreamProbe> {
     let (route, format_name, is_playlist_hls, is_transport_stream) =
         if url_looks_like_hls_playlist(url) {
-            (
-                PlaybackRoute::HlsPassthrough,
-                Some("hls".to_string()),
-                true,
-                false,
-            )
+            // Do not fast-path HLS playlists. The manifest extension tells us
+            // nothing about segment codecs; IPTV providers often hide AC-3,
+            // E-AC-3, HEVC, or other browser-hostile tracks behind .m3u8.
+            return None;
         } else if url_looks_like_transport_stream(url) {
             (
                 PlaybackRoute::RemuxHls,
@@ -272,4 +283,49 @@ fn fast_probe_from_url(url: &str) -> Option<StreamProbe> {
         is_transport_stream,
         route,
     })
+}
+
+fn forced_probe_from_url(url: &str, route: PlaybackRoute) -> StreamProbe {
+    let (format_name, is_playlist_hls, is_transport_stream) = if url_looks_like_hls_playlist(url) {
+        (Some("hls".to_string()), true, false)
+    } else if url_looks_like_transport_stream(url) {
+        (Some("mpegts".to_string()), false, true)
+    } else if url_looks_like_browser_file(url) {
+        (Some("mov,mp4,m4a,3gp,3g2,mj2".to_string()), false, false)
+    } else {
+        (None, false, false)
+    };
+
+    StreamProbe {
+        container: None,
+        format_name,
+        video_codec: None,
+        audio_codec: None,
+        duration_sec: None,
+        width: None,
+        height: None,
+        is_playlist_hls,
+        is_transport_stream,
+        route,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fast_probe_does_not_trust_hls_extension() {
+        assert!(fast_probe_from_url("https://provider.test/live/1.m3u8").is_none());
+    }
+
+    #[test]
+    fn forced_probe_preserves_requested_route() {
+        let probe = forced_probe_from_url(
+            "https://provider.test/live/1.m3u8",
+            PlaybackRoute::TranscodeHls,
+        );
+        assert_eq!(probe.route, PlaybackRoute::TranscodeHls);
+        assert!(probe.is_playlist_hls);
+    }
 }
