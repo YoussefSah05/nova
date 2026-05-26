@@ -1,8 +1,10 @@
 pub mod commands;
 pub mod ipc;
+pub mod native_player_view;
 pub mod state;
 
 use nova_storage::init_app_db;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,6 +38,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(state::AppState::new(pool, proxy_port, proxy_sessions))
+        .setup(|app| {
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                let engine = app.state::<state::AppState>().mpv_engine.clone();
+                native_player_view::install_mpv_embed_view(&window, engine)?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // Phase 1
             commands::list_profiles,

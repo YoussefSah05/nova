@@ -78,6 +78,7 @@ interface ResolvedStream {
 interface NativeOpenResult {
   token: string;
   engine: "mpv";
+  embedded: boolean;
 }
 
 type NativePlayerPhase = "opening" | "buffering" | "playing" | "paused" | "ended" | "error";
@@ -181,6 +182,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   const [loadingProgress, setLoadingProgress] = useState(8);
   const [forceHlsJs, setForceHlsJs] = useState(false);
   const [nativeToken, setNativeToken] = useState<string | null>(null);
+  const [nativeEmbedded, setNativeEmbedded] = useState(false);
   const mediaKey = `${profileId}:${media.kind}:${media.id}`;
   const [routeOverride, setRouteOverride] = useState<{
     mediaKey: string;
@@ -212,6 +214,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     let cancelled = false;
     let token: string | null = null;
     setNativeToken(null);
+    setNativeEmbedded(false);
     setResolved(null);
     setReady(false);
     setBuffering(true);
@@ -233,6 +236,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
         }
         token = result.token;
         setNativeToken(result.token);
+        setNativeEmbedded(result.embedded);
         setLoadingPhase("connecting");
         setLoadingProgress(45);
       } catch (e) {
@@ -247,6 +251,14 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
       }
     };
   }, [profileId, media.kind, media.id, media.title]);
+
+  useEffect(() => {
+    if (!USE_MPV_ENGINE || !nativeEmbedded) return;
+    document.documentElement.classList.add("nova-native-player-active");
+    return () => {
+      document.documentElement.classList.remove("nova-native-player-active");
+    };
+  }, [nativeEmbedded]);
 
   useEffect(() => {
     if (!USE_MPV_ENGINE || !nativeToken) return;
@@ -879,12 +891,13 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   const revealControls = useCallback(() => {
     setControlsVisible(true);
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
-    if (!videoRef.current?.paused) {
+    const shouldAutoHide = USE_MPV_ENGINE ? playing : !videoRef.current?.paused;
+    if (shouldAutoHide) {
       hideTimerRef.current = window.setTimeout(() => {
         setControlsVisible(false);
       }, CONTROLS_HIDE_DELAY_MS);
     }
-  }, []);
+  }, [playing]);
 
   useEffect(() => {
     if (!playing) {
@@ -949,12 +962,12 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
           return;
         case "ArrowUp":
           e.preventDefault();
-          setVol((videoRef.current?.volume ?? 0) + VOLUME_STEP);
+          setVol((USE_MPV_ENGINE ? volume : (videoRef.current?.volume ?? 0)) + VOLUME_STEP);
           revealControls();
           return;
         case "ArrowDown":
           e.preventDefault();
-          setVol((videoRef.current?.volume ?? 0) - VOLUME_STEP);
+          setVol((USE_MPV_ENGINE ? volume : (videoRef.current?.volume ?? 0)) - VOLUME_STEP);
           revealControls();
           return;
         case "m":
@@ -973,9 +986,9 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
         default:
           // 0-9 -> jump to that decile (VOD only).
           if (/^[0-9]$/.test(e.key) && !isLive) {
-            const v = videoRef.current;
-            if (v && Number.isFinite(v.duration)) {
-              seekTo((parseInt(e.key, 10) / 10) * v.duration);
+            const targetDuration = USE_MPV_ENGINE ? duration : videoRef.current?.duration;
+            if (targetDuration && Number.isFinite(targetDuration)) {
+              seekTo((parseInt(e.key, 10) / 10) * targetDuration);
               revealControls();
             }
           }
@@ -995,6 +1008,8 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     flashSkip,
     revealControls,
     isLive,
+    duration,
+    volume,
   ]);
 
   // -- Surface interactions: single tap = play/pause, double tap = skip --
@@ -1084,7 +1099,8 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     <div
       ref={containerRef}
       className={cn(
-        "fixed inset-0 z-50 flex flex-col bg-black select-none",
+        "nova-native-player-shell fixed inset-0 z-50 flex flex-col select-none",
+        USE_MPV_ENGINE && nativeEmbedded ? "bg-transparent" : "bg-black",
         // When controls hide we also hide the cursor.
         !controlsVisible && playing && "cursor-none"
       )}
@@ -1097,6 +1113,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
             title={media.title}
             playing={playing}
             buffering={buffering}
+            embedded={nativeEmbedded}
           />
         ) : (
           <video
@@ -1343,12 +1360,18 @@ function NativePlaybackBackdrop({
   title,
   playing,
   buffering,
+  embedded,
 }: {
   posterUrl?: string | null;
   title: string;
   playing: boolean;
   buffering: boolean;
+  embedded: boolean;
 }) {
+  if (embedded) {
+    return <div className="pointer-events-none absolute inset-0 bg-transparent" />;
+  }
+
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
       {posterUrl && (

@@ -34,6 +34,7 @@ pub enum MpvError {
 pub struct MpvOpenResult {
     pub token: String,
     pub engine: String,
+    pub embedded: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,16 +67,24 @@ pub struct MpvOpenOptions {
     pub url: String,
     pub title: String,
     pub user_agent: Option<String>,
+    pub embed_wid: Option<u64>,
 }
 
 #[derive(Clone, Default)]
 pub struct MpvEngine {
     inner: Arc<Mutex<Option<MpvSession>>>,
+    embed_wid: Arc<Mutex<Option<u64>>>,
 }
 
 impl MpvEngine {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_embed_wid(&self, wid: u64) -> Result<(), MpvError> {
+        let mut guard = self.embed_wid.lock().map_err(|_| MpvError::Poisoned)?;
+        *guard = Some(wid);
+        Ok(())
     }
 
     pub fn open(&self, options: MpvOpenOptions) -> Result<MpvOpenResult, MpvError> {
@@ -84,13 +93,20 @@ impl MpvEngine {
             drop(session);
         }
 
+        let embed_wid = *self.embed_wid.lock().map_err(|_| MpvError::Poisoned)?;
+        let options = MpvOpenOptions {
+            embed_wid: options.embed_wid.or(embed_wid),
+            ..options
+        };
         let session = MpvSession::open(options)?;
         let token = session.token.clone();
+        let embedded = session.embed_wid.is_some();
         *guard = Some(session);
 
         Ok(MpvOpenResult {
             token,
             engine: "mpv".to_string(),
+            embedded,
         })
     }
 
@@ -186,6 +202,7 @@ struct MpvSession {
     last_phase: MpvPlaybackPhase,
     last_error: Option<String>,
     opened_at: Instant,
+    embed_wid: Option<u64>,
 }
 
 unsafe impl Send for MpvSession {}
@@ -203,9 +220,15 @@ impl MpvSession {
             last_phase: MpvPlaybackPhase::Opening,
             last_error: None,
             opened_at: Instant::now(),
+            embed_wid: options.embed_wid,
         };
 
-        session.set_option("force-window", "yes")?;
+        if let Some(wid) = options.embed_wid {
+            session.set_option("wid", &wid.to_string())?;
+            session.set_option("vo", "libmpv")?;
+        } else {
+            session.set_option("force-window", "yes")?;
+        }
         session.set_option("keep-open", "yes")?;
         session.set_option("idle", "yes")?;
         session.set_option("terminal", "no")?;
@@ -251,8 +274,8 @@ impl MpvSession {
             / 100.0;
         let muted = self.property_bool("mute").unwrap_or(false);
         let paused = self.property_bool("pause").unwrap_or(false);
+        let paused_for_cache = self.property_bool("paused-for-cache").unwrap_or(false);
         let idle = self.property_bool("idle-active").unwrap_or(false);
-        let cache_percent = self.property_f64("cache-buffering-state").unwrap_or(100.0);
         let seekable = self.property_bool("seekable").unwrap_or(duration.is_some());
 
         let phase = if self.last_error.is_some() {
@@ -263,7 +286,7 @@ impl MpvSession {
             MpvPlaybackPhase::Opening
         } else if paused {
             MpvPlaybackPhase::Paused
-        } else if cache_percent < 100.0 {
+        } else if paused_for_cache {
             MpvPlaybackPhase::Buffering
         } else {
             MpvPlaybackPhase::Playing

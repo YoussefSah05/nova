@@ -29,3 +29,9 @@ sqlx = { workspace = true }
 uuid = { workspace = true }
 dirs = "5"
 reqwest = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-web-kit = { workspace = true }

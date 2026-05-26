@@ -67,3 +67,18 @@ body {
   margin: 0;
   padding: 0;
 }
+
+html.nova-native-player-active,
+html.nova-native-player-active body,
+html.nova-native-player-active #root {
+  background: transparent !important;
+}
+
+html.nova-native-player-active #root > * {
+  visibility: hidden;
+}
+
+html.nova-native-player-active .nova-native-player-shell,
+html.nova-native-player-active .nova-native-player-shell * {
+  visibility: visible;
+}

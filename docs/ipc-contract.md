@@ -30,7 +30,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `list_series_episodes` | `{ profileId, sourceId, seriesTitle }` | `SeriesEpisode[]` | 3 |
 | `resolve_stream` | `{ profileId, mediaKind: 'live'\|'vod'\|'episode', mediaId, routeOverride?: 'remux_hls'\|'transcode_hls' }` | `ResolvedStream` | 5 |
 | `stop_playback` | `{ token: string }` | `void` | 5 |
-| `mpv_open_stream` | `{ profileId, mediaKind, mediaId, title }` | `{ token, engine: 'mpv' }` | 5 |
+| `mpv_open_stream` | `{ profileId, mediaKind, mediaId, title }` | `{ token, engine: 'mpv', embedded }` | 5 |
 | `mpv_close` | `{ token }` | `void` | 5 |
 | `mpv_player_state` | `{ token? }` | `MpvPlayerState` | 5 |
 | `mpv_toggle_pause` | `{ token }` | `void` | 5 |
@@ -89,12 +89,21 @@ Nova now defaults to the native `libmpv` engine for viewing. The Rust backend
 looks the upstream URL up from the profile DB and opens it in libmpv; React owns
 controls, watch history, and the caption overlay. The older WebKit/hls.js
 `resolve_stream` path remains as a fallback and for proxy/transcription work.
+On macOS, Nova installs a native player view beneath the Tauri webview and
+passes that view to libmpv via `wid`, so playback renders inside the app window
+instead of a detached mpv window.
 
 ```ts
 type PlaybackKind = "hls" | "file";
 type PlaybackRoute = "hls_passthrough" | "file_passthrough" | "remux_hls" | "transcode_hls";
 type CaptionAssetState = "unavailable" | "pending" | "ready";
 type MpvPlayerPhase = "opening" | "buffering" | "playing" | "paused" | "ended" | "error";
+
+type MpvOpenResult = {
+  token: string;
+  engine: "mpv";
+  embedded: boolean;
+};
 
 type MpvPlayerState = {
   token: string | null;
