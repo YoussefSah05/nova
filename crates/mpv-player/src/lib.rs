@@ -6,8 +6,12 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_double, c_int, c_void};
 use std::ptr;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Condvar, Mutex,
+};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use thiserror::Error;
@@ -27,6 +31,10 @@ pub enum MpvError {
     TokenMismatch,
     #[error("native mpv embed surface is not available")]
     EmbedSurfaceUnavailable,
+    #[error("native mpv render surface is not available")]
+    RenderSurfaceUnavailable,
+    #[error("native mpv render context failed: {0}")]
+    RenderContext(String),
     #[error("native playback mutex poisoned")]
     Poisoned,
 }
@@ -71,12 +79,42 @@ pub struct MpvOpenOptions {
     pub user_agent: Option<String>,
     pub embed_wid: Option<u64>,
     pub embedded_required: bool,
+    pub render_surface_required: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MpvRenderSurface {
+    pub callback_ctx: usize,
+    pub make_current: unsafe extern "C" fn(usize) -> bool,
+    pub flush: unsafe extern "C" fn(usize),
+    pub size: unsafe extern "C" fn(usize, *mut c_int, *mut c_int) -> bool,
+    pub get_proc_address_ctx: usize,
+    pub get_proc_address: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+}
+
+#[derive(Clone)]
+pub struct MpvRenderSurfaceRegistration {
+    surface: MpvRenderSurface,
+    _keepalive: Arc<dyn std::any::Any + Send + Sync>,
+}
+
+impl MpvRenderSurfaceRegistration {
+    pub fn new<T>(surface: MpvRenderSurface, keepalive: Arc<T>) -> Self
+    where
+        T: std::any::Any + Send + Sync + 'static,
+    {
+        Self {
+            surface,
+            _keepalive: keepalive,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
 pub struct MpvEngine {
     inner: Arc<Mutex<Option<MpvSession>>>,
     embed_wid: Arc<Mutex<Option<u64>>>,
+    render_surface: Arc<Mutex<Option<MpvRenderSurfaceRegistration>>>,
 }
 
 impl MpvEngine {
@@ -90,27 +128,52 @@ impl MpvEngine {
         Ok(())
     }
 
+    pub fn set_render_surface(
+        &self,
+        registration: MpvRenderSurfaceRegistration,
+    ) -> Result<(), MpvError> {
+        let mut guard = self.render_surface.lock().map_err(|_| MpvError::Poisoned)?;
+        *guard = Some(registration);
+        Ok(())
+    }
+
     pub fn open(&self, options: MpvOpenOptions) -> Result<MpvOpenResult, MpvError> {
+        let render_surface = self
+            .render_surface
+            .lock()
+            .map_err(|_| MpvError::Poisoned)?
+            .clone();
+        let render_surface = render_surface.map(|registration| registration.surface);
+        if options.render_surface_required && render_surface.is_none() {
+            return Err(MpvError::RenderSurfaceUnavailable);
+        }
+
         let embed_wid = *self.embed_wid.lock().map_err(|_| MpvError::Poisoned)?;
-        let window_target =
-            resolve_window_target(options.embed_wid, embed_wid, options.embedded_required)?;
-        let embed_wid = match window_target {
-            MpvWindowTarget::Embedded(wid) => Some(wid),
-            MpvWindowTarget::ExternalWindow => None,
-        };
+        let window_target = resolve_window_target(
+            render_surface,
+            options.embed_wid,
+            embed_wid,
+            options.embedded_required,
+        )?;
 
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         if let Some(session) = guard.take() {
             drop(session);
         }
 
+        let (render_surface, embed_wid) = match window_target {
+            MpvWindowTarget::RenderApi(surface) => (Some(surface), None),
+            MpvWindowTarget::Embedded(wid) => (None, Some(wid)),
+            MpvWindowTarget::ExternalWindow => (None, None),
+        };
         let options = MpvOpenOptions {
             embed_wid,
+            render_surface_required: options.render_surface_required,
             ..options
         };
-        let session = MpvSession::open(options)?;
+        let session = MpvSession::open(options, render_surface)?;
         let token = session.token.clone();
-        let embedded = session.embed_wid.is_some();
+        let embedded = session.is_embedded();
         *guard = Some(session);
 
         Ok(MpvOpenResult {
@@ -206,17 +269,23 @@ fn active_session<'a>(
     Ok(session)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 enum MpvWindowTarget {
+    RenderApi(MpvRenderSurface),
     Embedded(u64),
     ExternalWindow,
 }
 
 fn resolve_window_target(
+    render_surface: Option<MpvRenderSurface>,
     requested_wid: Option<u64>,
     registered_wid: Option<u64>,
     embedded_required: bool,
 ) -> Result<MpvWindowTarget, MpvError> {
+    if let Some(surface) = render_surface {
+        return Ok(MpvWindowTarget::RenderApi(surface));
+    }
+
     if let Some(wid) = requested_wid.or(registered_wid) {
         return Ok(MpvWindowTarget::Embedded(wid));
     }
@@ -235,13 +304,20 @@ struct MpvSession {
     last_error: Option<String>,
     opened_at: Instant,
     embed_wid: Option<u64>,
+    render: Option<MpvRenderSession>,
 }
 
 unsafe impl Send for MpvSession {}
 
 impl MpvSession {
-    fn open(options: MpvOpenOptions) -> Result<Self, MpvError> {
-        if options.embedded_required && options.embed_wid.is_none() {
+    fn open(
+        options: MpvOpenOptions,
+        render_surface: Option<MpvRenderSurface>,
+    ) -> Result<Self, MpvError> {
+        if options.render_surface_required && render_surface.is_none() {
+            return Err(MpvError::RenderSurfaceUnavailable);
+        }
+        if options.embedded_required && options.embed_wid.is_none() && render_surface.is_none() {
             return Err(MpvError::EmbedSurfaceUnavailable);
         }
 
@@ -257,9 +333,13 @@ impl MpvSession {
             last_error: None,
             opened_at: Instant::now(),
             embed_wid: options.embed_wid,
+            render: None,
         };
 
-        if let Some(wid) = options.embed_wid {
+        if render_surface.is_some() {
+            session.set_option("vo", "libmpv")?;
+            session.set_option("force-window", "no")?;
+        } else if let Some(wid) = options.embed_wid {
             // `wid` is mpv's native-window embedding path. Forcing `vo=libmpv`
             // here switches to render-context embedding, but Nova does not own
             // a render context for this session.
@@ -286,9 +366,17 @@ impl MpvSession {
 
         let rc = unsafe { mpv_initialize(handle) };
         session.check(rc)?;
+        let mut session = session;
+        if let Some(surface) = render_surface {
+            session.render = Some(MpvRenderSession::new(handle, surface)?);
+        }
         let _ = session.set_property("force-media-title", &options.title);
         session.command(&["loadfile", &options.url, "replace"])?;
         Ok(session)
+    }
+
+    fn is_embedded(&self) -> bool {
+        self.render.is_some() || self.embed_wid.is_some()
     }
 
     fn require_token(&self, token: &str) -> Result<(), MpvError> {
@@ -440,11 +528,206 @@ impl MpvSession {
 
 impl Drop for MpvSession {
     fn drop(&mut self) {
+        if let Some(render) = self.render.take() {
+            drop(render);
+        }
         if !self.handle.is_null() {
             unsafe { mpv_terminate_destroy(self.handle) };
             self.handle = ptr::null_mut();
         }
     }
+}
+
+struct MpvRenderSession {
+    ctx: *mut mpv_render_context,
+    stop: Arc<AtomicBool>,
+    wake: Arc<(Mutex<bool>, Condvar)>,
+    wake_raw: *const (Mutex<bool>, Condvar),
+    thread: Option<JoinHandle<()>>,
+}
+
+unsafe impl Send for MpvRenderSession {}
+
+impl MpvRenderSession {
+    fn new(handle: *mut mpv_handle, surface: MpvRenderSurface) -> Result<Self, MpvError> {
+        if unsafe { !(surface.make_current)(surface.callback_ctx) } {
+            return Err(MpvError::RenderContext(
+                "OpenGL context could not be made current".to_string(),
+            ));
+        }
+
+        let mut init_params = mpv_opengl_init_params {
+            get_proc_address: Some(surface.get_proc_address),
+            get_proc_address_ctx: surface.get_proc_address_ctx as *mut c_void,
+        };
+        let api_type = CString::new(MPV_RENDER_API_TYPE_OPENGL)
+            .map_err(|_| MpvError::RenderContext("invalid render API type".to_string()))?;
+        let mut params = [
+            mpv_render_param {
+                param_type: MPV_RENDER_PARAM_API_TYPE,
+                data: api_type.as_ptr().cast::<c_void>().cast_mut(),
+            },
+            mpv_render_param {
+                param_type: MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+                data: (&mut init_params as *mut mpv_opengl_init_params).cast::<c_void>(),
+            },
+            mpv_render_param {
+                param_type: MPV_RENDER_PARAM_INVALID,
+                data: ptr::null_mut(),
+            },
+        ];
+        let mut ctx = ptr::null_mut();
+        let rc = unsafe { mpv_render_context_create(&mut ctx, handle, params.as_mut_ptr()) };
+        if rc < 0 {
+            return Err(MpvError::RenderContext(mpv_error_to_string(rc)));
+        }
+        if ctx.is_null() {
+            return Err(MpvError::RenderContext(
+                "libmpv returned a null render context".to_string(),
+            ));
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let wake = Arc::new((Mutex::new(false), Condvar::new()));
+        let wake_raw = Arc::into_raw(wake.clone());
+        unsafe {
+            mpv_render_context_set_update_callback(
+                ctx,
+                Some(render_update_callback),
+                wake_raw.cast::<c_void>().cast_mut(),
+            );
+        }
+
+        let thread_stop = stop.clone();
+        let thread_wake = wake.clone();
+        let thread_ctx = RenderContextPtr(ctx);
+        let thread = thread::spawn(move || {
+            render_loop(thread_ctx, surface, thread_stop, thread_wake);
+        });
+
+        Ok(Self {
+            ctx,
+            stop,
+            wake,
+            wake_raw,
+            thread: Some(thread),
+        })
+    }
+}
+
+impl Drop for MpvRenderSession {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        {
+            let (lock, cvar) = &*self.wake;
+            if let Ok(mut pending) = lock.lock() {
+                *pending = true;
+                cvar.notify_one();
+            }
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        if !self.ctx.is_null() {
+            unsafe {
+                mpv_render_context_set_update_callback(self.ctx, None, ptr::null_mut());
+                mpv_render_context_free(self.ctx);
+            }
+            self.ctx = ptr::null_mut();
+        }
+        if !self.wake_raw.is_null() {
+            unsafe {
+                drop(Arc::from_raw(self.wake_raw));
+            }
+            self.wake_raw = ptr::null();
+        }
+    }
+}
+
+struct RenderContextPtr(*mut mpv_render_context);
+
+unsafe impl Send for RenderContextPtr {}
+
+unsafe extern "C" fn render_update_callback(callback_ctx: *mut c_void) {
+    if callback_ctx.is_null() {
+        return;
+    }
+    let wake = unsafe { &*(callback_ctx.cast::<(Mutex<bool>, Condvar)>()) };
+    let (lock, cvar) = wake;
+    if let Ok(mut pending) = lock.lock() {
+        *pending = true;
+        cvar.notify_one();
+    }
+}
+
+fn render_loop(
+    ctx: RenderContextPtr,
+    surface: MpvRenderSurface,
+    stop: Arc<AtomicBool>,
+    wake: Arc<(Mutex<bool>, Condvar)>,
+) {
+    while !stop.load(Ordering::SeqCst) {
+        let (lock, cvar) = &*wake;
+        if let Ok(mut pending) = lock.lock() {
+            if !*pending {
+                let (guard, _) = cvar
+                    .wait_timeout(pending, Duration::from_millis(16))
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                pending = guard;
+            }
+            *pending = false;
+        }
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        unsafe {
+            render_frame(ctx.0, surface);
+        }
+    }
+}
+
+unsafe fn render_frame(ctx: *mut mpv_render_context, surface: MpvRenderSurface) {
+    if ctx.is_null() || !(surface.make_current)(surface.callback_ctx) {
+        return;
+    }
+
+    let update = mpv_render_context_update(ctx);
+    if update & MPV_RENDER_UPDATE_FRAME == 0 {
+        return;
+    }
+
+    let mut width = 0;
+    let mut height = 0;
+    if !(surface.size)(surface.callback_ctx, &mut width, &mut height) {
+        return;
+    }
+    if width <= 0 || height <= 0 {
+        return;
+    }
+
+    let mut fbo = mpv_opengl_fbo {
+        fbo: 0,
+        w: width,
+        h: height,
+        internal_format: 0,
+    };
+    let mut flip_y: c_int = 1;
+    let mut params = [
+        mpv_render_param {
+            param_type: MPV_RENDER_PARAM_OPENGL_FBO,
+            data: (&mut fbo as *mut mpv_opengl_fbo).cast::<c_void>(),
+        },
+        mpv_render_param {
+            param_type: MPV_RENDER_PARAM_FLIP_Y,
+            data: (&mut flip_y as *mut c_int).cast::<c_void>(),
+        },
+        mpv_render_param {
+            param_type: MPV_RENDER_PARAM_INVALID,
+            data: ptr::null_mut(),
+        },
+    ];
+    let _ = mpv_render_context_render(ctx, params.as_mut_ptr());
+    (surface.flush)(surface.callback_ctx);
 }
 
 fn mpv_error_to_string(error: c_int) -> String {
@@ -463,30 +746,68 @@ mod tests {
 
     #[test]
     fn embedded_required_rejects_missing_surface() {
-        let result = resolve_window_target(None, None, true);
+        let result = resolve_window_target(None, None, None, true);
 
         assert!(matches!(result, Err(MpvError::EmbedSurfaceUnavailable)));
     }
 
     #[test]
     fn embedded_required_uses_registered_surface() {
-        let result = resolve_window_target(None, Some(42), true);
+        let result = resolve_window_target(None, None, Some(42), true);
 
-        assert_eq!(result.unwrap(), MpvWindowTarget::Embedded(42));
+        assert!(matches!(result.unwrap(), MpvWindowTarget::Embedded(42)));
+    }
+
+    #[test]
+    fn render_api_wins_over_window_ids() {
+        let result = resolve_window_target(Some(test_surface()), Some(7), Some(42), true);
+
+        assert!(matches!(result.unwrap(), MpvWindowTarget::RenderApi(_)));
     }
 
     #[test]
     fn explicit_surface_wins_over_registered_surface() {
-        let result = resolve_window_target(Some(7), Some(42), true);
+        let result = resolve_window_target(None, Some(7), Some(42), true);
 
-        assert_eq!(result.unwrap(), MpvWindowTarget::Embedded(7));
+        assert!(matches!(result.unwrap(), MpvWindowTarget::Embedded(7)));
     }
 
     #[test]
     fn external_window_allowed_only_when_embedding_not_required() {
-        let result = resolve_window_target(None, None, false);
+        let result = resolve_window_target(None, None, None, false);
 
-        assert_eq!(result.unwrap(), MpvWindowTarget::ExternalWindow);
+        assert!(matches!(result.unwrap(), MpvWindowTarget::ExternalWindow));
+    }
+
+    fn test_surface() -> MpvRenderSurface {
+        MpvRenderSurface {
+            callback_ctx: 0,
+            make_current: test_make_current,
+            flush: test_flush,
+            size: test_size,
+            get_proc_address_ctx: 0,
+            get_proc_address: test_get_proc_address,
+        }
+    }
+
+    unsafe extern "C" fn test_make_current(_: usize) -> bool {
+        true
+    }
+
+    unsafe extern "C" fn test_flush(_: usize) {}
+
+    unsafe extern "C" fn test_size(_: usize, width: *mut c_int, height: *mut c_int) -> bool {
+        if !width.is_null() {
+            unsafe { *width = 1 };
+        }
+        if !height.is_null() {
+            unsafe { *height = 1 };
+        }
+        true
+    }
+
+    unsafe extern "C" fn test_get_proc_address(_: *mut c_void, _: *const c_char) -> *mut c_void {
+        ptr::null_mut()
     }
 }
 
@@ -510,6 +831,29 @@ struct mpv_event_end_file {
     playlist_insert_num_entries: c_int,
 }
 
+#[allow(non_camel_case_types)]
+enum mpv_render_context {}
+
+#[repr(C)]
+struct mpv_render_param {
+    param_type: c_int,
+    data: *mut c_void,
+}
+
+#[repr(C)]
+struct mpv_opengl_init_params {
+    get_proc_address: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void>,
+    get_proc_address_ctx: *mut c_void,
+}
+
+#[repr(C)]
+struct mpv_opengl_fbo {
+    fbo: c_int,
+    w: c_int,
+    h: c_int,
+    internal_format: c_int,
+}
+
 const MPV_EVENT_NONE: c_int = 0;
 const MPV_EVENT_SHUTDOWN: c_int = 1;
 const MPV_EVENT_END_FILE: c_int = 7;
@@ -518,6 +862,14 @@ const MPV_EVENT_PLAYBACK_RESTART: c_int = 21;
 
 const MPV_END_FILE_REASON_EOF: c_int = 0;
 const MPV_END_FILE_REASON_ERROR: c_int = 4;
+
+const MPV_RENDER_API_TYPE_OPENGL: &str = "opengl";
+const MPV_RENDER_PARAM_INVALID: c_int = 0;
+const MPV_RENDER_PARAM_API_TYPE: c_int = 1;
+const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
+const MPV_RENDER_PARAM_OPENGL_FBO: c_int = 3;
+const MPV_RENDER_PARAM_FLIP_Y: c_int = 4;
+const MPV_RENDER_UPDATE_FRAME: u64 = 1;
 
 unsafe extern "C" {
     fn mpv_create() -> *mut mpv_handle;
@@ -538,4 +890,20 @@ unsafe extern "C" {
     fn mpv_wait_event(ctx: *mut mpv_handle, timeout: c_double) -> *mut mpv_event;
     fn mpv_error_string(error: c_int) -> *const c_char;
     fn mpv_free(data: *mut c_void);
+    fn mpv_render_context_create(
+        res: *mut *mut mpv_render_context,
+        mpv: *mut mpv_handle,
+        params: *mut mpv_render_param,
+    ) -> c_int;
+    fn mpv_render_context_set_update_callback(
+        ctx: *mut mpv_render_context,
+        callback: Option<unsafe extern "C" fn(*mut c_void)>,
+        callback_ctx: *mut c_void,
+    );
+    fn mpv_render_context_update(ctx: *mut mpv_render_context) -> u64;
+    fn mpv_render_context_render(
+        ctx: *mut mpv_render_context,
+        params: *mut mpv_render_param,
+    ) -> c_int;
+    fn mpv_render_context_free(ctx: *mut mpv_render_context);
 }

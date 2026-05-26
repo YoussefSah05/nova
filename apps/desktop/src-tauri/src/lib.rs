@@ -42,7 +42,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
                 let engine = app.state::<state::AppState>().mpv_engine.clone();
-                native_player_view::install_mpv_embed_view(&window, engine)?;
+                native_player_view::install_mpv_render_view(&window, engine)?;
             }
             Ok(())
         })

@@ -89,11 +89,14 @@ Nova now defaults to the native `libmpv` engine for viewing. The Rust backend
 looks the upstream URL up from the profile DB and opens it in libmpv; React owns
 controls, watch history, and the caption overlay. The older WebKit/hls.js
 `resolve_stream` path remains as a fallback and for proxy/transcription work.
-On macOS, Nova installs a native player view beneath the Tauri webview and
-passes that view to libmpv via `wid`, so playback renders inside the app window
-instead of a detached mpv window. Native playback requires this embedded surface;
-if it is unavailable, `mpv_open_stream` returns an in-app error instead of
-opening a standalone mpv window.
+On macOS, Nova installs a native OpenGL player surface beneath the Tauri webview
+and drives it through libmpv's render API (`vo=libmpv`). Playback renders into
+Nova's app window instead of a detached mpv window, while React remains
+responsible for controls and overlays. Native playback requires this render
+surface; if it is unavailable, `mpv_open_stream` returns an in-app error instead
+of opening a standalone mpv window. The older `wid` path remains inside the Rust
+wrapper only as a lower-priority fallback for platforms that can provide a
+reliable embedded native window.
 
 ```ts
 type PlaybackKind = "hls" | "file";
