@@ -46,7 +46,12 @@ fn install_macos_player_view(webview: &PlatformWebview, engine: &MpvEngine) -> R
             .superview()
             .ok_or_else(|| "WKWebView is not attached to an NSView hierarchy".to_string())?;
 
-        let player_view = NSView::initWithFrame(mtm.alloc::<NSView>(), webview_view.frame());
+        let mut player_frame = superview.bounds();
+        if player_frame.size.width <= 0.0 || player_frame.size.height <= 0.0 {
+            player_frame = webview_view.frame();
+        }
+
+        let player_view = NSView::initWithFrame(mtm.alloc::<NSView>(), player_frame);
         player_view.setWantsLayer(true);
         player_view.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable

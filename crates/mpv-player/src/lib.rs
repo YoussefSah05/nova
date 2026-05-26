@@ -224,8 +224,10 @@ impl MpvSession {
         };
 
         if let Some(wid) = options.embed_wid {
+            // `wid` is mpv's native-window embedding path. Forcing `vo=libmpv`
+            // here switches to render-context embedding, but Nova does not own
+            // a render context for this session.
             session.set_option("wid", &wid.to_string())?;
-            session.set_option("vo", "libmpv")?;
         } else {
             session.set_option("force-window", "yes")?;
         }
