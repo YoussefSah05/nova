@@ -1,4 +1,5 @@
 use nova_hls_proxy::SessionRegistry;
+use nova_mpv_player::MpvEngine;
 use sqlx::SqlitePool;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
@@ -14,6 +15,8 @@ pub struct AppState {
     /// Shared session registry on the proxy. `resolve_stream` calls
     /// [`SessionRegistry::register`]; `stop_playback` calls `release`.
     pub hls_sessions: SessionRegistry,
+    /// Native libmpv playback engine used for reliable IPTV playback.
+    pub mpv_engine: MpvEngine,
 }
 
 impl AppState {
@@ -24,6 +27,7 @@ impl AppState {
             profile_pools: Arc::new(RwLock::new(HashMap::new())),
             hls_proxy_port,
             hls_sessions,
+            mpv_engine: MpvEngine::new(),
         }
     }
 

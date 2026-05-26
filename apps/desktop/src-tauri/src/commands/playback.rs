@@ -15,6 +15,7 @@
 //!   to `resolve_stream`; will be removed once nothing references it.
 
 use nova_hls_proxy::{PlaybackKind, PlaybackRoute, SessionInfo};
+use nova_mpv_player::{MpvOpenOptions, MpvOpenResult, MpvPlayerState};
 use nova_storage::{PlaybackRepository, ResumePosition, WatchHistoryRepository};
 use serde::Serialize;
 use tauri::State;
@@ -27,6 +28,112 @@ use super::require_profile_pool;
 #[tauri::command]
 pub fn get_proxy_port(state: State<'_, AppState>) -> u16 {
     state.hls_proxy_port
+}
+
+#[tauri::command]
+pub async fn mpv_open_stream(
+    profile_id: String,
+    media_kind: String,
+    media_id: i64,
+    title: String,
+    state: State<'_, AppState>,
+) -> Result<MpvOpenResult, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let resolved = PlaybackRepository::new(&pool)
+        .resolve_stream_url(&media_kind, media_id)
+        .await?;
+
+    state
+        .mpv_engine
+        .open(MpvOpenOptions {
+            url: resolved.upstream_url,
+            title,
+            user_agent: Some("Mozilla/5.0 (compatible; nova-iptv/1.0)".to_string()),
+        })
+        .map_err(|e| ApiError::Internal(format!("native player failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_close(token: String, state: State<'_, AppState>) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .close(&token)
+        .map_err(|e| ApiError::Internal(format!("native player close failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_player_state(
+    token: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<MpvPlayerState, ApiError> {
+    state
+        .mpv_engine
+        .state(token.as_deref())
+        .map_err(|e| ApiError::Internal(format!("native player state failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_toggle_pause(token: String, state: State<'_, AppState>) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .toggle_pause(&token)
+        .map_err(|e| ApiError::Internal(format!("native player pause failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_seek_relative(
+    token: String,
+    delta_sec: f64,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .seek_relative(&token, delta_sec)
+        .map_err(|e| ApiError::Internal(format!("native player seek failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_seek_absolute(
+    token: String,
+    position_sec: f64,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .seek_absolute(&token, position_sec)
+        .map_err(|e| ApiError::Internal(format!("native player seek failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_seek_live_edge(token: String, state: State<'_, AppState>) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .seek_live_edge(&token)
+        .map_err(|e| ApiError::Internal(format!("native player live seek failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_set_volume(
+    token: String,
+    volume: f64,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .set_volume(&token, volume)
+        .map_err(|e| ApiError::Internal(format!("native player volume failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_set_mute(
+    token: String,
+    muted: bool,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .set_mute(&token, muted)
+        .map_err(|e| ApiError::Internal(format!("native player mute failed: {e}")))
 }
 
 /// Response from [`resolve_stream`]. `kind` tells the player whether to

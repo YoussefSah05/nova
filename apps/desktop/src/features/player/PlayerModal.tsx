@@ -75,6 +75,25 @@ interface ResolvedStream {
   captionState: CaptionState;
 }
 
+interface NativeOpenResult {
+  token: string;
+  engine: "mpv";
+}
+
+type NativePlayerPhase = "opening" | "buffering" | "playing" | "paused" | "ended" | "error";
+
+interface NativePlayerState {
+  token: string | null;
+  engine: "mpv";
+  phase: NativePlayerPhase;
+  positionSec: number;
+  durationSec: number | null;
+  volume: number;
+  muted: boolean;
+  seekable: boolean;
+  error: string | null;
+}
+
 type PlaybackRoute = "hls_passthrough" | "file_passthrough" | "remux_hls" | "transcode_hls";
 type PlaybackRouteOverride = "remux_hls" | "transcode_hls";
 
@@ -95,6 +114,7 @@ const SKIP_SECONDS = 10;
 const ARROW_SECONDS = 5;
 const VOLUME_STEP = 0.1;
 const BUFFER_TARGET_SECONDS = 8;
+const USE_MPV_ENGINE = true;
 
 // hls.js tuning notes:
 //  * `lowLatencyMode: false` - IPTV providers rarely ship LL-HLS playlists
@@ -160,6 +180,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>("resolving");
   const [loadingProgress, setLoadingProgress] = useState(8);
   const [forceHlsJs, setForceHlsJs] = useState(false);
+  const [nativeToken, setNativeToken] = useState<string | null>(null);
   const mediaKey = `${profileId}:${media.kind}:${media.id}`;
   const [routeOverride, setRouteOverride] = useState<{
     mediaKey: string;
@@ -178,12 +199,112 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   const [captionMenuOpen, setCaptionMenuOpen] = useState(false);
   const sourceCues: Cue[] = [];
   const translatedCues: Cue[] = [];
+  const latestPlaybackRef = useRef({ currentTime: 0, duration: 0, playing: false });
+
+  useEffect(() => {
+    latestPlaybackRef.current = { currentTime, duration, playing };
+  }, [currentTime, duration, playing]);
+
+  // -- Native libmpv playback path ---------------------------------------
+  useEffect(() => {
+    if (!USE_MPV_ENGINE) return;
+
+    let cancelled = false;
+    let token: string | null = null;
+    setNativeToken(null);
+    setResolved(null);
+    setReady(false);
+    setBuffering(true);
+    setError(null);
+    setLoadingPhase("resolving");
+    setLoadingProgress(12);
+
+    void (async () => {
+      try {
+        const result = await invoke<NativeOpenResult>("mpv_open_stream", {
+          profileId,
+          mediaKind: media.kind,
+          mediaId: media.id,
+          title: media.title,
+        });
+        if (cancelled) {
+          void invoke("mpv_close", { token: result.token }).catch(() => undefined);
+          return;
+        }
+        token = result.token;
+        setNativeToken(result.token);
+        setLoadingPhase("connecting");
+        setLoadingProgress(45);
+      } catch (e) {
+        if (!cancelled) setError(errorMessage(e));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (token) {
+        void invoke("mpv_close", { token }).catch(() => undefined);
+      }
+    };
+  }, [profileId, media.kind, media.id, media.title]);
+
+  useEffect(() => {
+    if (!USE_MPV_ENGINE || !nativeToken) return;
+
+    let cancelled = false;
+    const syncState = async () => {
+      try {
+        const state = await invoke<NativePlayerState>("mpv_player_state", { token: nativeToken });
+        if (cancelled) return;
+
+        setCurrentTime(state.positionSec);
+        setDuration(state.durationSec ?? 0);
+        setVolume(state.volume);
+        setMuted(state.muted);
+
+        if (state.phase === "error") {
+          setReady(false);
+          setBuffering(false);
+          setPlaying(false);
+          setError(state.error ?? "Native playback failed.");
+          return;
+        }
+
+        setError(null);
+        setPlaying(state.phase === "playing" || state.phase === "buffering");
+        setReady(state.phase === "playing" || state.phase === "paused" || state.phase === "ended");
+        setBuffering(state.phase === "opening" || state.phase === "buffering");
+
+        if (state.phase === "opening") {
+          setLoadingPhase("resolving");
+          setLoadingProgress((p) => Math.max(p, 28));
+        } else if (state.phase === "buffering") {
+          setLoadingPhase("buffering");
+          setLoadingProgress((p) => Math.min(Math.max(p, 68), 88));
+        } else {
+          setLoadingPhase("ready");
+          setLoadingProgress(100);
+        }
+      } catch (e) {
+        if (!cancelled) setError(errorMessage(e));
+      }
+    };
+
+    void syncState();
+    const interval = window.setInterval(syncState, 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [nativeToken]);
 
   // -- 1. Resolve the playback URL through the backend --------------------
   // The backend probes the upstream codec/container, optionally starts a
   // ffmpeg remuxer, and tells us whether to attach hls.js or use the native
   // video element. The frontend never sees the raw upstream URL.
   useEffect(() => {
+    if (USE_MPV_ENGINE) return;
+
     let cancelled = false;
     let activeToken: string | null = null;
     setResolved(null);
@@ -248,6 +369,8 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
 
   // -- 2. Attach hls.js (preferred for HLS) or native source --------------
   useEffect(() => {
+    if (USE_MPV_ENGINE) return;
+
     const video = videoRef.current;
     if (!video || !resolved) return;
 
@@ -342,6 +465,11 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
 
   // -- 3. PiP capability detection (must run after mount) -----------------
   useEffect(() => {
+    if (USE_MPV_ENGINE) {
+      setPipSupported(false);
+      return;
+    }
+
     const video = videoRef.current as PiPVideoElement | null;
     const doc = document as PiPDocument;
     setPipSupported(
@@ -353,6 +481,8 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
 
   // -- 4. Video element event wiring --------------------------------------
   useEffect(() => {
+    if (USE_MPV_ENGINE) return;
+
     const video = videoRef.current;
     if (!video) return;
 
@@ -476,7 +606,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   // -- Loading progress animation ----------------------------------------
   useEffect(() => {
     if (error || (ready && !buffering)) return;
-    const cap = loadingCap(loadingPhase);
+    const cap = USE_MPV_ENGINE && loadingPhase === "buffering" ? 88 : loadingCap(loadingPhase);
     const interval = window.setInterval(() => {
       setLoadingProgress((current) => {
         if (current >= cap) return current;
@@ -490,6 +620,30 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   // -- 5. Resume position (VOD/episode only) ------------------------------
   useEffect(() => {
     if (!ready || isLive) return;
+    if (USE_MPV_ENGINE) {
+      if (!nativeToken) return;
+      let cancelled = false;
+      void (async () => {
+        try {
+          const info = await invoke<ResumeInfo | null>("get_resume_position", {
+            profileId,
+            mediaKind: media.kind,
+            mediaId: media.id,
+          });
+          if (cancelled || !info || info.completed || info.positionSec <= 5) return;
+          await invoke("mpv_seek_absolute", {
+            token: nativeToken,
+            positionSec: info.positionSec,
+          });
+        } catch {
+          /* resume is best-effort */
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const video = videoRef.current;
     if (!video) return;
 
@@ -512,10 +666,40 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     return () => {
       cancelled = true;
     };
-  }, [ready, isLive, profileId, media.kind, media.id]);
+  }, [ready, isLive, nativeToken, profileId, media.kind, media.id]);
 
   // -- 6. Watch-history writes (every 5s + on pause + on close) -----------
   useEffect(() => {
+    if (USE_MPV_ENGINE) {
+      if (!nativeToken || !ready) return;
+      const tick = () => {
+        const latest = latestPlaybackRef.current;
+        if (!Number.isFinite(latest.currentTime)) return;
+        const dur =
+          Number.isFinite(latest.duration) && latest.duration > 0 ? latest.duration : null;
+        const completed = dur !== null && latest.currentTime / dur >= COMPLETED_THRESHOLD;
+        void invoke("record_watch_progress", {
+          profileId,
+          mediaKind: media.kind,
+          mediaId: media.id,
+          positionSec: latest.currentTime,
+          durationSec: dur,
+          completed,
+          captionMode: "off",
+        }).catch(() => {
+          /* progress writes are best-effort */
+        });
+      };
+
+      const interval = window.setInterval(() => {
+        if (latestPlaybackRef.current.playing) tick();
+      }, PROGRESS_INTERVAL_MS);
+      return () => {
+        window.clearInterval(interval);
+        tick();
+      };
+    }
+
     const video = videoRef.current;
     if (!video || !ready) return;
 
@@ -548,7 +732,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
       video.removeEventListener("pause", tick);
       tick();
     };
-  }, [ready, profileId, media.kind, media.id]);
+  }, [nativeToken, ready, profileId, media.kind, media.id]);
 
   // -- 7. Fullscreen sync -------------------------------------------------
   useEffect(() => {
@@ -559,32 +743,60 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
 
   // -- Imperative actions -------------------------------------------------
   const togglePlay = useCallback(() => {
+    if (USE_MPV_ENGINE) {
+      if (nativeToken)
+        void invoke("mpv_toggle_pause", { token: nativeToken }).catch(() => undefined);
+      return;
+    }
+
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) void v.play().catch(() => undefined);
     else v.pause();
-  }, []);
+  }, [nativeToken]);
 
   const seekBy = useCallback(
     (delta: number) => {
+      if (USE_MPV_ENGINE) {
+        if (!nativeToken || isLive) return;
+        void invoke("mpv_seek_relative", { token: nativeToken, deltaSec: delta }).catch(
+          () => undefined
+        );
+        return;
+      }
+
       const v = videoRef.current;
       if (!v || isLive) return;
       const next = Math.max(0, Math.min((v.duration || 0) - 0.1, v.currentTime + delta));
       v.currentTime = next;
     },
-    [isLive]
+    [isLive, nativeToken]
   );
 
   const seekTo = useCallback(
     (seconds: number) => {
+      if (USE_MPV_ENGINE) {
+        if (!nativeToken || isLive) return;
+        void invoke("mpv_seek_absolute", { token: nativeToken, positionSec: seconds }).catch(
+          () => undefined
+        );
+        return;
+      }
+
       const v = videoRef.current;
       if (!v || isLive || !Number.isFinite(v.duration)) return;
       v.currentTime = Math.max(0, Math.min(v.duration - 0.1, seconds));
     },
-    [isLive]
+    [isLive, nativeToken]
   );
 
   const seekToLiveEdge = useCallback(() => {
+    if (USE_MPV_ENGINE) {
+      if (nativeToken)
+        void invoke("mpv_seek_live_edge", { token: nativeToken }).catch(() => undefined);
+      return;
+    }
+
     const v = videoRef.current;
     if (!v) return;
     const hls = hlsRef.current;
@@ -594,21 +806,48 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     }
     // Native HLS: seek to the end of the seekable range.
     if (v.seekable.length > 0) v.currentTime = v.seekable.end(v.seekable.length - 1);
-  }, []);
+  }, [nativeToken]);
 
-  const setVol = useCallback((next: number) => {
-    const v = videoRef.current;
-    if (!v) return;
-    const clamped = Math.max(0, Math.min(1, next));
-    v.volume = clamped;
-    if (clamped > 0 && v.muted) v.muted = false;
-  }, []);
+  const setVol = useCallback(
+    (next: number) => {
+      const clamped = Math.max(0, Math.min(1, next));
+      if (USE_MPV_ENGINE) {
+        setVolume(clamped);
+        if (nativeToken)
+          void invoke("mpv_set_volume", { token: nativeToken, volume: clamped }).catch(
+            () => undefined
+          );
+        if (clamped > 0 && muted) {
+          setMuted(false);
+          if (nativeToken)
+            void invoke("mpv_set_mute", { token: nativeToken, muted: false }).catch(
+              () => undefined
+            );
+        }
+        return;
+      }
+
+      const v = videoRef.current;
+      if (!v) return;
+      v.volume = clamped;
+      if (clamped > 0 && v.muted) v.muted = false;
+    },
+    [muted, nativeToken]
+  );
 
   const toggleMute = useCallback(() => {
+    if (USE_MPV_ENGINE) {
+      const next = !muted;
+      setMuted(next);
+      if (nativeToken)
+        void invoke("mpv_set_mute", { token: nativeToken, muted: next }).catch(() => undefined);
+      return;
+    }
+
     const v = videoRef.current;
     if (!v) return;
     v.muted = !v.muted;
-  }, []);
+  }, [muted, nativeToken]);
 
   const toggleFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
@@ -808,6 +1047,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
 
   const atLiveEdge = useMemo(() => {
     if (!isLive) return false;
+    if (USE_MPV_ENGINE) return true;
     const hls = hlsRef.current;
     if (hls?.liveSyncPosition != null) {
       return Math.abs(currentTime - hls.liveSyncPosition) < 4;
@@ -820,18 +1060,24 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     return true;
   }, [currentTime, isLive]);
 
-  const loadingVisible = !error && (!resolved || !ready || buffering);
+  const loadingVisible =
+    !error && (USE_MPV_ENGINE ? !ready || buffering : !resolved || !ready || buffering);
   const bufferHealthPct = Math.min(
     99,
     Math.round((bufferedAheadSec / BUFFER_TARGET_SECONDS) * 100)
   );
-  const visibleLoadingPct =
-    ready && buffering ? Math.max(5, bufferHealthPct) : Math.min(99, Math.round(loadingProgress));
-  const loadingDetail = resolved
-    ? playbackDetail(resolved, bufferedAheadSec, ready && buffering)
-    : activeRouteOverride
-      ? `Retrying with local ${activeRouteOverride.replace("_hls", "").replace("_", " ")}`
-      : "Backend is resolving the provider stream";
+  const visibleLoadingPct = USE_MPV_ENGINE
+    ? Math.min(99, Math.round(loadingProgress))
+    : ready && buffering
+      ? Math.max(5, bufferHealthPct)
+      : Math.min(99, Math.round(loadingProgress));
+  const loadingDetail = USE_MPV_ENGINE
+    ? "Opening the provider stream"
+    : resolved
+      ? playbackDetail(resolved, bufferedAheadSec, ready && buffering)
+      : activeRouteOverride
+        ? `Retrying with local ${activeRouteOverride.replace("_hls", "").replace("_", " ")}`
+        : "Backend is resolving the provider stream";
 
   // -- Render -------------------------------------------------------------
   return (
@@ -845,14 +1091,23 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
       onPointerMove={revealControls}
     >
       <div className="relative flex-1 overflow-hidden" onPointerDown={onSurfacePointerDown}>
-        <video
-          ref={videoRef}
-          poster={media.posterUrl ?? undefined}
-          autoPlay
-          playsInline
-          preload="auto"
-          className="absolute inset-0 h-full w-full bg-black"
-        />
+        {USE_MPV_ENGINE ? (
+          <NativePlaybackBackdrop
+            posterUrl={media.posterUrl}
+            title={media.title}
+            playing={playing}
+            buffering={buffering}
+          />
+        ) : (
+          <video
+            ref={videoRef}
+            poster={media.posterUrl ?? undefined}
+            autoPlay
+            playsInline
+            preload="auto"
+            className="absolute inset-0 h-full w-full bg-black"
+          />
+        )}
 
         {/* Caption overlay - inert in Phase 5; Phase 6/7 populate the cues. */}
         <CaptionOverlay
@@ -885,7 +1140,11 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
         {loadingVisible && (
           <LoadingBanner
             percent={visibleLoadingPct}
-            title={loadingTitle(loadingPhase, resolved)}
+            title={
+              USE_MPV_ENGINE
+                ? nativeLoadingTitle(loadingPhase)
+                : loadingTitle(loadingPhase, resolved)
+            }
             detail={loadingDetail}
           />
         )}
@@ -1076,6 +1335,39 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+function NativePlaybackBackdrop({
+  posterUrl,
+  title,
+  playing,
+  buffering,
+}: {
+  posterUrl?: string | null;
+  title: string;
+  playing: boolean;
+  buffering: boolean;
+}) {
+  return (
+    <div className="absolute inset-0 overflow-hidden bg-black">
+      {posterUrl && (
+        <img
+          src={posterUrl}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover opacity-25 blur-xl scale-110"
+        />
+      )}
+      <div className="absolute inset-0 bg-black/70" />
+      <div className="absolute inset-0 flex items-center justify-center px-6">
+        <div className="max-w-md text-center">
+          <p className="truncate text-lg font-medium text-white">{title}</p>
+          <p className="mt-2 text-sm text-white/60">
+            {buffering ? "Opening stream" : playing ? "Playing" : "Paused"}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1364,6 +1656,19 @@ function loadingTitle(phase: LoadingPhase, stream: ResolvedStream | null): strin
       return "Loading stream manifest";
     case "buffering":
       return "Buffering video";
+    case "ready":
+      return "Ready";
+  }
+}
+
+function nativeLoadingTitle(phase: LoadingPhase): string {
+  switch (phase) {
+    case "resolving":
+    case "connecting":
+    case "manifest":
+      return "Opening player";
+    case "buffering":
+      return "Buffering stream";
     case "ready":
       return "Ready";
   }

@@ -10,6 +10,7 @@ members = [
     "crates/transcribe",
     "crates/translate",
     "crates/media",
+    "crates/mpv-player",
     "crates/storage",
     "crates/jobs",
     "crates/search",

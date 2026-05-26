@@ -30,6 +30,15 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `list_series_episodes` | `{ profileId, sourceId, seriesTitle }` | `SeriesEpisode[]` | 3 |
 | `resolve_stream` | `{ profileId, mediaKind: 'live'\|'vod'\|'episode', mediaId, routeOverride?: 'remux_hls'\|'transcode_hls' }` | `ResolvedStream` | 5 |
 | `stop_playback` | `{ token: string }` | `void` | 5 |
+| `mpv_open_stream` | `{ profileId, mediaKind, mediaId, title }` | `{ token, engine: 'mpv' }` | 5 |
+| `mpv_close` | `{ token }` | `void` | 5 |
+| `mpv_player_state` | `{ token? }` | `MpvPlayerState` | 5 |
+| `mpv_toggle_pause` | `{ token }` | `void` | 5 |
+| `mpv_seek_relative` | `{ token, deltaSec }` | `void` | 5 |
+| `mpv_seek_absolute` | `{ token, positionSec }` | `void` | 5 |
+| `mpv_seek_live_edge` | `{ token }` | `void` | 5 |
+| `mpv_set_volume` | `{ token, volume }` | `void` | 5 |
+| `mpv_set_mute` | `{ token, muted }` | `void` | 5 |
 | `record_watch_progress` | `{ profileId, mediaKind, mediaId, positionSec, durationSec?, completed, captionMode? }` | `void` | 5 |
 | `get_resume_position` | `{ profileId, mediaKind, mediaId }` | `ResumeInfo \| null` | 5 |
 | `get_proxy_port` | `{}` | `number` (deprecated - use `resolve_stream`) | 5 |
@@ -76,15 +85,28 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 
 ## Playback (Phase 5)
 
-The player never sees the raw upstream URL. `resolve_stream` looks the URL up
-from the profile DB, probes the codec/container, optionally starts an
-ffmpeg-fed fMP4-HLS remuxer in the local proxy, and returns a URL the player
-can consume directly.
+Nova now defaults to the native `libmpv` engine for viewing. The Rust backend
+looks the upstream URL up from the profile DB and opens it in libmpv; React owns
+controls, watch history, and the caption overlay. The older WebKit/hls.js
+`resolve_stream` path remains as a fallback and for proxy/transcription work.
 
 ```ts
 type PlaybackKind = "hls" | "file";
 type PlaybackRoute = "hls_passthrough" | "file_passthrough" | "remux_hls" | "transcode_hls";
 type CaptionAssetState = "unavailable" | "pending" | "ready";
+type MpvPlayerPhase = "opening" | "buffering" | "playing" | "paused" | "ended" | "error";
+
+type MpvPlayerState = {
+  token: string | null;
+  engine: "mpv";
+  phase: MpvPlayerPhase;
+  positionSec: number;
+  durationSec: number | null;
+  volume: number;
+  muted: boolean;
+  seekable: boolean;
+  error: string | null;
+};
 
 type ResolvedStream = {
   /// URL to give the player. For kind === 'hls' it points at
@@ -120,13 +142,20 @@ type ResolvedStream = {
 
 Player flow:
 
+1. `invoke("mpv_open_stream", { profileId, mediaKind, mediaId, title })` opens native playback.
+2. Poll `mpv_player_state` for time, duration, volume, mute, and phase.
+3. Use `mpv_*` control commands for play/pause, seeking, volume, mute, and live edge.
+4. Every 5s while playing, `invoke("record_watch_progress", { ..., captionMode: "off" })`.
+5. On modal close / unmount: `invoke("mpv_close", { token })`.
+
+Fallback WebKit flow:
+
 1. `invoke("resolve_stream", { profileId, mediaKind, mediaId })` -> `ResolvedStream`.
 2. If `kind === "hls"`: attach `hls.js` to `url`. Otherwise set `<video src={url}>`.
-3. If the player raises a decode/src-not-supported error, stop the current session and retry
+3. If the web player raises a decode/src-not-supported error, stop the current session and retry
    `resolve_stream` with `routeOverride: "remux_hls"`, then `"transcode_hls"` if remuxed output
    still cannot decode.
-4. Every 5s while playing, `invoke("record_watch_progress", { ..., captionMode: "off" })`.
-5. On modal close / unmount: `invoke("stop_playback", { token })`.
+4. On modal close / unmount: `invoke("stop_playback", { token })`.
 
 ### Proxy routes (Phase 5)
 
