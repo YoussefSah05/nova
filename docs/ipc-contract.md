@@ -28,8 +28,11 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `count_series` | `{ profileId, sourceId, filters? }` | `number` | 3 |
 | `list_series_categories` | `{ profileId, sourceId }` | `string[]` | 3 |
 | `list_series_episodes` | `{ profileId, sourceId, seriesTitle }` | `SeriesEpisode[]` | 3 |
-| `play_vod` | `{ vod_id: number, caption_mode: CaptionMode }` | `PlaybackHandle` | 5 |
-| `play_channel` | `{ channel_id: number, caption_mode: CaptionMode }` | `PlaybackHandle` | 5 |
+| `resolve_stream` | `{ profileId, mediaKind: 'live'\|'vod'\|'episode', mediaId }` | `ResolvedStream` | 5 |
+| `stop_playback` | `{ token: string }` | `void` | 5 |
+| `record_watch_progress` | `{ profileId, mediaKind, mediaId, positionSec, durationSec?, completed, captionMode? }` | `void` | 5 |
+| `get_resume_position` | `{ profileId, mediaKind, mediaId }` | `ResumeInfo \| null` | 5 |
+| `get_proxy_port` | `{}` | `number` (deprecated - use `resolve_stream`) | 5 |
 | `enqueue_transcription` | `{ media_kind: MediaKind, media_id: number, lang?: string }` | `JobId` | 6 |
 | `enqueue_translation` | `{ transcript_id: number, target_lang: string, backend: TranslationBackend }` | `JobId` | 7 |
 | `get_transcript` | `{ transcript_id: number }` | `Transcript` | 6 |
@@ -55,7 +58,7 @@ Use `limit` and `offset` for Live and VOD pagination. The Home UI currently requ
 per page and uses the corresponding `count_*` command to decide whether to show **Load more**.
 `list_series` returns grouped series summaries; use `list_series_episodes` for episode detail.
 
-## Events (backend → frontend)
+## Events (backend -> frontend)
 
 Event names use colon namespaces because Tauri rejects dots in event names.
 
@@ -70,6 +73,68 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | `live:caption:translated` | `{ channel_id: number, target_lang: string, cue: VttCue }` | 10 |
 | `jobs:queue:changed` | `{ jobs: JobSummary[] }` | 2 |
 | `epg:refresh:progress` | `{ source_id: number, pct: number }` | 4 |
+
+## Playback (Phase 5)
+
+The player never sees the raw upstream URL. `resolve_stream` looks the URL up
+from the profile DB, probes the codec/container, optionally starts an
+ffmpeg-fed fMP4-HLS remuxer in the local proxy, and returns a URL the player
+can consume directly.
+
+```ts
+type PlaybackKind = "hls" | "file";
+type PlaybackRoute = "hls_passthrough" | "file_passthrough" | "remux_hls" | "transcode_hls";
+type CaptionAssetState = "unavailable" | "pending" | "ready";
+
+type ResolvedStream = {
+  /// URL to give the player. For kind === 'hls' it points at
+  /// http://127.0.0.1:<port>/stream/<token>/master.m3u8 served by the proxy.
+  /// For kind === 'file' it's the proxy's /proxy?url=... passthrough with
+  /// byte-range support, suitable for the native <video> element.
+  url: string;
+  kind: PlaybackKind;
+  /// Backend route decision. MPEG-TS transport streams are not classified as
+  /// HLS unless the upstream is an actual playlist.
+  route: PlaybackRoute;
+  /// Opaque proxy session token. Pass back to `stop_playback` on unmount so
+  /// the proxy can release any ffmpeg remux subprocess.
+  token: string;
+  supportsSeek: boolean;
+  durationSec: number | null;
+  sourceLang: string | null;
+  container: string | null;
+  videoCodec: string | null;
+  audioCodec: string | null;
+  width: number | null;
+  height: number | null;
+  /// Non-null when playback is using fast fallback after probe/remux failure.
+  fallbackReason: string | null;
+  /// Phase 5 returns unavailable; Phase 6/7 upgrade these without changing
+  /// the playback session contract.
+  captionState: {
+    source: CaptionAssetState;
+    translation: CaptionAssetState;
+  };
+};
+```
+
+Player flow:
+
+1. `invoke("resolve_stream", { profileId, mediaKind, mediaId })` -> `ResolvedStream`.
+2. If `kind === "hls"`: attach `hls.js` to `url`. Otherwise set `<video src={url}>`.
+3. Every 5s while playing, `invoke("record_watch_progress", { ..., captionMode: "off" })`.
+4. On modal close / unmount: `invoke("stop_playback", { token })`.
+
+### Proxy routes (Phase 5)
+
+| Route | Phase | Purpose |
+|---|---|---|
+| `GET /health` | 5 | Liveness check. Returns `"ok"`. |
+| `GET /proxy?url={encoded}` | 5 | Proxies HLS sub-playlists and segments after manifest rewriting, and direct file playback for `kind === "file"`. Rewrites `.m3u8` responses recursively and forwards `Range` for media bytes. |
+| `GET /stream/{token}/master.m3u8` | 5 | Manifest endpoint. Behaviour depends on session route: passthrough-HLS rewrites the upstream manifest; remuxed/transcoded sessions serve the file ffmpeg is writing. |
+| `GET /stream/{token}/local/{file}` | 5 | Serves files from the remux session's temp dir (segments). |
+| `GET /captions/{token}/{lang}.vtt` | 6 | Source-language captions. Returns 404 in Phase 5. |
+| `GET /captions/{token}/{src}-to-{tgt}.vtt` | 7 | Translated captions. Returns 404 in Phase 5. |
 
 ### `playlist:import:progress`
 
