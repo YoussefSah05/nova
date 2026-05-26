@@ -630,7 +630,6 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               setPlayingMedia({
                 kind: "episode",
                 id: episode.id,
-                streamUrl: episode.streamUrl,
                 title: selectedSeries.seriesTitle,
                 subtitle: `S${String(episode.season).padStart(2, "0")}E${String(episode.episode).padStart(2, "0")}${episode.episodeTitle ? ` — ${episode.episodeTitle}` : ""}`,
                 posterUrl: episode.logoUrl ?? selectedSeries.posterUrl,
@@ -842,7 +841,6 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                       setPlayingMedia({
                         kind: "live",
                         id: channel.id,
-                        streamUrl: channel.streamUrl,
                         title: channel.name,
                         subtitle:
                           [channel.country, channel.category].filter(Boolean).join(" / ") || null,
@@ -860,7 +858,6 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                       setPlayingMedia({
                         kind: "vod",
                         id: item.id,
-                        streamUrl: item.streamUrl,
                         title: item.cleanTitle ?? item.name,
                         subtitle:
                           [item.year?.toString(), item.category].filter(Boolean).join(" / ") ||

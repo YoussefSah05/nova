@@ -1,7 +1,33 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
-import Hls from "hls.js";
-import { XIcon } from "lucide-react";
+import Hls, { type ErrorData } from "hls.js";
+import {
+  Maximize,
+  Minimize,
+  Pause,
+  PictureInPicture,
+  Play,
+  Radio,
+  SkipBack,
+  SkipForward,
+  Volume1,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
+
+import { cn } from "@/lib/utils";
+
+import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
+import { CaptionButton } from "./CaptionPicker";
 
 export type PlayMediaKind = "live" | "vod" | "episode";
 
@@ -9,8 +35,6 @@ export interface PlayMedia {
   kind: PlayMediaKind;
   /// `channels.id` / `vod_items.id` / `series_episodes.id`.
   id: number;
-  /// Upstream stream URL — proxied through the local HLS proxy before playback.
-  streamUrl: string;
   /// Display title in the player overlay.
   title: string;
   subtitle?: string | null;
@@ -29,73 +53,250 @@ interface ResumeInfo {
   completed: boolean;
 }
 
-/// How often to push playback position to the backend. Watch history rows
-/// are keyed on (kind, id) so updates are idempotent.
-const PROGRESS_INTERVAL_MS = 5_000;
+interface ResolvedStream {
+  /// URL the player should consume. For `kind === "hls"` it's a master.m3u8
+  /// served by the local proxy; for `kind === "file"` it's a direct-MP4
+  /// passthrough URL with byte-range support.
+  url: string;
+  kind: "hls" | "file";
+  route: PlaybackRoute;
+  /// Session token; passed to `stop_playback` on unmount so the proxy can
+  /// release any ffmpeg remux subprocess.
+  token: string;
+  supportsSeek: boolean;
+  durationSec: number | null;
+  sourceLang: string | null;
+  container: string | null;
+  videoCodec: string | null;
+  audioCodec: string | null;
+  width: number | null;
+  height: number | null;
+  fallbackReason: string | null;
+  captionState: CaptionState;
+}
 
-/// A programme is considered "watched" past this fraction of duration.
-/// Continue Watching hides completed entries.
+type PlaybackRoute = "hls_passthrough" | "file_passthrough" | "remux_hls" | "transcode_hls";
+
+type CaptionAssetState = "unavailable" | "pending" | "ready";
+
+interface CaptionState {
+  source: CaptionAssetState;
+  translation: CaptionAssetState;
+}
+
+type LoadingPhase = "resolving" | "connecting" | "manifest" | "buffering" | "ready";
+
+const PROGRESS_INTERVAL_MS = 5_000;
 const COMPLETED_THRESHOLD = 0.95;
+const CONTROLS_HIDE_DELAY_MS = 2_800;
+const DOUBLE_TAP_WINDOW_MS = 280;
+const SKIP_SECONDS = 10;
+const ARROW_SECONDS = 5;
+const VOLUME_STEP = 0.1;
+const BUFFER_TARGET_SECONDS = 8;
+
+// hls.js tuning notes:
+//  * `lowLatencyMode: false` - IPTV providers rarely ship LL-HLS playlists
+//    and enabling it on a non-LL stream slows startup.
+//  * `backBufferLength: 15` - keep a short tail for quick re-seek without
+//    pinning the entire session in memory.
+//  * `*MaxRetry` is intentionally generous since IPTV CDNs flap.
+//  * `abrEwmaDefaultEstimate` seeds the bitrate estimator at ~2.5 Mbps so
+//    the very first segment isn't forced to the lowest rendition.
+const HLS_CONFIG = {
+  lowLatencyMode: false,
+  enableWorker: true,
+  startFragPrefetch: true,
+  testBandwidth: false,
+  backBufferLength: 15,
+  maxBufferLength: 12,
+  maxMaxBufferLength: 30,
+  liveSyncDurationCount: 2,
+  liveMaxLatencyDurationCount: 10,
+  manifestLoadingTimeOut: 15_000,
+  manifestLoadingMaxRetry: 4,
+  levelLoadingTimeOut: 15_000,
+  levelLoadingMaxRetry: 4,
+  fragLoadingTimeOut: 25_000,
+  fragLoadingMaxRetry: 6,
+  abrEwmaDefaultEstimate: 2_500_000,
+} as const;
+
+type PiPVideoElement = HTMLVideoElement & {
+  requestPictureInPicture?: () => Promise<unknown>;
+  disablePictureInPicture?: boolean;
+};
+
+type PiPDocument = Document & {
+  pictureInPictureEnabled?: boolean;
+  pictureInPictureElement?: Element | null;
+  exitPictureInPicture?: () => Promise<unknown>;
+};
 
 export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
 
-  // Build the proxied URL once we know the proxy port. The Phase 5 proxy
-  // is passthrough; future phases will rewrite manifests for captions but
-  // the URL shape stays the same.
-  const [proxiedSrc, setProxiedSrc] = useState<string | null>(null);
+  const isLive = media.kind === "live";
+
+  // -- playback / stream state --------------------------------------------
+  const [resolved, setResolved] = useState<ResolvedStream | null>(null);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [playing, setPlaying] = useState(false);
+  const [buffering, setBuffering] = useState(true);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [bufferedEnd, setBufferedEnd] = useState(0);
+  const [bufferedAheadSec, setBufferedAheadSec] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [pipActive, setPipActive] = useState(false);
+  const [pipSupported, setPipSupported] = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>("resolving");
+  const [loadingProgress, setLoadingProgress] = useState(8);
+  const [forceHlsJs, setForceHlsJs] = useState(false);
+
+  // -- transient overlay state (skip indicator, controls visibility) ------
+  const [skipIndicator, setSkipIndicator] = useState<{ dir: -1 | 1; key: number } | null>(null);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const hideTimerRef = useRef<number | null>(null);
+  const lastTapRef = useRef<{ t: number; x: number } | null>(null);
+
+  // -- caption state (Phase 5: inert; Phase 6/7 will populate the cue arrays) --
+  const [captionMode, setCaptionMode] = useState<CaptionMode>("off");
+  const [captionMenuOpen, setCaptionMenuOpen] = useState(false);
+  const sourceCues: Cue[] = [];
+  const translatedCues: Cue[] = [];
+
+  // -- 1. Resolve the playback URL through the backend --------------------
+  // The backend probes the upstream codec/container, optionally starts a
+  // ffmpeg remuxer, and tells us whether to attach hls.js or use the native
+  // video element. The frontend never sees the raw upstream URL.
   useEffect(() => {
     let cancelled = false;
+    let activeToken: string | null = null;
+    setResolved(null);
+    setReady(false);
+    setBuffering(true);
+    setError(null);
+    setLoadingPhase("resolving");
+    setLoadingProgress(8);
+    setForceHlsJs(false);
     void (async () => {
       try {
-        const port = await invoke<number>("get_proxy_port");
-        if (cancelled) return;
-        const src = `http://127.0.0.1:${port}/proxy?url=${encodeURIComponent(media.streamUrl)}`;
-        setProxiedSrc(src);
+        const stream = await invoke<ResolvedStream>("resolve_stream", {
+          profileId,
+          mediaKind: media.kind,
+          mediaId: media.id,
+        });
+        if (cancelled) {
+          void invoke("stop_playback", { token: stream.token }).catch(() => undefined);
+          return;
+        }
+        activeToken = stream.token;
+        setResolved(stream);
+        setLoadingPhase("connecting");
+        setLoadingProgress((p) => Math.max(p, stream.kind === "file" ? 58 : 44));
       } catch (e) {
         if (!cancelled) setError(errorMessage(e));
       }
     })();
     return () => {
       cancelled = true;
+      if (activeToken) {
+        void invoke("stop_playback", { token: activeToken }).catch(() => undefined);
+      }
     };
-  }, [media.streamUrl]);
+  }, [profileId, media.kind, media.id]);
 
-  // Attach hls.js / native source whenever the proxied src resolves.
+  // -- 2. Attach hls.js (preferred for HLS) or native source --------------
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !proxiedSrc) return;
+    if (!video || !resolved) return;
 
     setError(null);
     setReady(false);
+    setBuffering(true);
 
-    const isHls = media.streamUrl.endsWith(".m3u8") || media.streamUrl.includes(".m3u8?");
+    const proxiedSrc = resolved.url;
+    const useHls = resolved.kind === "hls";
+    const canUseNativeHls =
+      useHls && !forceHlsJs && video.canPlayType("application/vnd.apple.mpegurl").length > 0;
+    setLoadingPhase(useHls ? "manifest" : "buffering");
+    setLoadingProgress((p) => Math.max(p, useHls ? 50 : 62));
 
-    // Safari (and WebKit-based Tauri webviews on macOS) play HLS natively.
-    // Fall back to hls.js only when the browser can't, which keeps memory +
-    // CPU lower on macOS.
-    if (isHls && !video.canPlayType("application/vnd.apple.mpegurl") && Hls.isSupported()) {
-      const hls = new Hls({
-        // Defaults are sensible; keep them. The aggressive low-latency mode
-        // is opt-in per stream and many IPTV providers aren't compatible.
+    let nativeFallbackTimer: number | null = null;
+
+    // Native HLS is fastest in macOS WebKit. Use hls.js only when native HLS
+    // is not available so non-WebKit webviews still work.
+    if (useHls && !canUseNativeHls && Hls.isSupported()) {
+      const hls = new Hls(HLS_CONFIG);
+      hls.on(Hls.Events.MANIFEST_LOADING, () => {
+        setLoadingPhase("manifest");
+        setLoadingProgress((p) => Math.max(p, 54));
       });
-      hls.on(Hls.Events.ERROR, (_event, data) => {
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        setLoadingPhase("buffering");
+        setLoadingProgress((p) => Math.max(p, 68));
+      });
+      hls.on(Hls.Events.LEVEL_LOADED, () => {
+        setLoadingProgress((p) => Math.max(p, 74));
+      });
+      hls.on(Hls.Events.FRAG_LOADING, () => {
+        setLoadingPhase("buffering");
+        setLoadingProgress((p) => Math.max(p, 80));
+      });
+      hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        setLoadingProgress((p) => Math.max(p, 90));
+      });
+      hls.on(Hls.Events.ERROR, (_event, data: ErrorData) => {
+        // Log every error (even non-fatal) so diagnosis isn't blind.
+        // hls.js drops ~10-20 NON_FATAL events per buffer hiccup; that's fine,
+        // the console filter handles volume. Without this we have no signal
+        // when "everything fails."
+        const reason = formatHlsError(data);
         if (data.fatal) {
-          setError(`Stream error: ${data.details}`);
+          console.error("[hls.js fatal]", reason, data);
+        } else {
+          console.warn("[hls.js]", reason);
+        }
+        if (!data.fatal) return;
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            hls.startLoad();
+            return;
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            hls.recoverMediaError();
+            return;
+          default:
+            hls.destroy();
+            setError(reason);
         }
       });
       hls.loadSource(proxiedSrc);
       hls.attachMedia(video);
       hlsRef.current = hls;
     } else {
-      // Native: HLS via WebKit, or MP4 / MKV / TS by direct URL.
+      // Native HLS is the fastest path in macOS WebKit. hls.js remains the
+      // fallback for webviews that cannot play HLS directly.
       video.src = proxiedSrc;
+      if (useHls && canUseNativeHls && Hls.isSupported()) {
+        nativeFallbackTimer = window.setTimeout(() => {
+          const current = videoRef.current;
+          if (!current || current.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return;
+          setLoadingPhase("manifest");
+          setLoadingProgress((p) => Math.min(Math.max(p, 72), 94));
+          setForceHlsJs(true);
+        }, 7_000);
+      }
     }
 
     return () => {
+      if (nativeFallbackTimer !== null) window.clearTimeout(nativeFallbackTimer);
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -103,12 +304,155 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
       video.removeAttribute("src");
       video.load();
     };
-  }, [proxiedSrc, media.streamUrl]);
+  }, [forceHlsJs, resolved]);
 
-  // Seek to the saved resume position once the player can play. Live streams
-  // get media_kind='live' for tracking but no seek (no duration).
+  // -- 3. PiP capability detection (must run after mount) -----------------
   useEffect(() => {
-    if (!ready) return;
+    const video = videoRef.current as PiPVideoElement | null;
+    const doc = document as PiPDocument;
+    setPipSupported(
+      Boolean(doc.pictureInPictureEnabled) &&
+        Boolean(video?.requestPictureInPicture) &&
+        !video?.disablePictureInPicture
+    );
+  }, [resolved]);
+
+  // -- 4. Video element event wiring --------------------------------------
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const updateBuffered = () => {
+      const buf = video.buffered;
+      if (buf.length === 0) {
+        setBufferedEnd(0);
+        setBufferedAheadSec(0);
+        return;
+      }
+      // Use the buffered range that contains currentTime; fall back to last.
+      let end = buf.end(buf.length - 1);
+      for (let i = 0; i < buf.length; i++) {
+        if (video.currentTime >= buf.start(i) && video.currentTime <= buf.end(i)) {
+          end = buf.end(i);
+          break;
+        }
+      }
+      setBufferedEnd(end);
+      setBufferedAheadSec(Math.max(0, end - video.currentTime));
+    };
+
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
+    const onWaiting = () => {
+      setBuffering(true);
+      setLoadingPhase("buffering");
+      setLoadingProgress((p) => Math.min(Math.max(p, 72), 94));
+      updateBuffered();
+    };
+    const onLoadedMetadata = () => {
+      setLoadingProgress((p) => Math.max(p, 72));
+      updateBuffered();
+    };
+    const onLoadedData = () => {
+      setLoadingProgress((p) => Math.max(p, 86));
+      updateBuffered();
+    };
+    const onPlaying = () => {
+      setLoadingPhase("ready");
+      setLoadingProgress(100);
+      setBuffering(false);
+    };
+    const onCanPlay = () => {
+      setReady(true);
+      setLoadingPhase("ready");
+      setLoadingProgress(100);
+      setBuffering(false);
+      updateBuffered();
+    };
+    const onTimeUpdate = () => {
+      setCurrentTime(video.currentTime);
+      updateBuffered();
+    };
+    const onDurationChange = () => {
+      setDuration(Number.isFinite(video.duration) ? video.duration : 0);
+    };
+    const onVolumeChange = () => {
+      setVolume(video.volume);
+      setMuted(video.muted);
+    };
+    const onErr = () => {
+      // Fall through to hls.js error handler when present; only set a
+      // generic error if there's nothing else to say.
+      if (hlsRef.current) return;
+      const me = video.error;
+      const code = me?.code;
+      const codeName =
+        code === 1
+          ? "ABORTED"
+          : code === 2
+            ? "NETWORK"
+            : code === 3
+              ? "DECODE"
+              : code === 4
+                ? "SRC_NOT_SUPPORTED"
+                : "UNKNOWN";
+      const detail = me?.message ? `: ${me.message}` : "";
+      console.error("[<video> error]", codeName, code, me);
+      setError(`Could not play this stream (${codeName}${detail}).`);
+    };
+    const onPipEnter = () => setPipActive(true);
+    const onPipLeave = () => setPipActive(false);
+
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("loadedmetadata", onLoadedMetadata);
+    video.addEventListener("loadeddata", onLoadedData);
+    video.addEventListener("playing", onPlaying);
+    video.addEventListener("canplay", onCanPlay);
+    video.addEventListener("timeupdate", onTimeUpdate);
+    video.addEventListener("progress", updateBuffered);
+    video.addEventListener("durationchange", onDurationChange);
+    video.addEventListener("volumechange", onVolumeChange);
+    video.addEventListener("error", onErr);
+    video.addEventListener("enterpictureinpicture", onPipEnter);
+    video.addEventListener("leavepictureinpicture", onPipLeave);
+
+    return () => {
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("loadedmetadata", onLoadedMetadata);
+      video.removeEventListener("loadeddata", onLoadedData);
+      video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("timeupdate", onTimeUpdate);
+      video.removeEventListener("progress", updateBuffered);
+      video.removeEventListener("durationchange", onDurationChange);
+      video.removeEventListener("volumechange", onVolumeChange);
+      video.removeEventListener("error", onErr);
+      video.removeEventListener("enterpictureinpicture", onPipEnter);
+      video.removeEventListener("leavepictureinpicture", onPipLeave);
+    };
+  }, [resolved]);
+
+  // -- Loading progress animation ----------------------------------------
+  useEffect(() => {
+    if (error || (ready && !buffering)) return;
+    const cap = loadingCap(loadingPhase);
+    const interval = window.setInterval(() => {
+      setLoadingProgress((current) => {
+        if (current >= cap) return current;
+        const next = current + Math.max(0.35, (cap - current) * 0.075);
+        return Math.min(cap, next);
+      });
+    }, 300);
+    return () => window.clearInterval(interval);
+  }, [buffering, error, loadingPhase, ready]);
+
+  // -- 5. Resume position (VOD/episode only) ------------------------------
+  useEffect(() => {
+    if (!ready || isLive) return;
     const video = videoRef.current;
     if (!video) return;
 
@@ -121,8 +465,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
           mediaId: media.id,
         });
         if (cancelled || !info || info.completed) return;
-        // Only seek for finite-duration content; live streams have NaN duration.
-        if (media.kind !== "live" && info.positionSec > 5) {
+        if (info.positionSec > 5) {
           video.currentTime = info.positionSec;
         }
       } catch {
@@ -132,96 +475,904 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     return () => {
       cancelled = true;
     };
-  }, [ready, profileId, media.kind, media.id]);
+  }, [ready, isLive, profileId, media.kind, media.id]);
 
-  // Periodic watch-history writes. The backend upserts on (kind, id) so we
-  // can fire-and-forget without sequencing.
+  // -- 6. Watch-history writes (every 5s + on pause + on close) -----------
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !ready) return;
 
     const tick = () => {
-      if (video.paused || !Number.isFinite(video.currentTime)) return;
-      const duration = Number.isFinite(video.duration) ? video.duration : null;
-      const completed = duration !== null && video.currentTime / duration >= COMPLETED_THRESHOLD;
+      if (!Number.isFinite(video.currentTime)) return;
+      const dur = Number.isFinite(video.duration) ? video.duration : null;
+      const completed = dur !== null && video.currentTime / dur >= COMPLETED_THRESHOLD;
       void invoke("record_watch_progress", {
         profileId,
         mediaKind: media.kind,
         mediaId: media.id,
         positionSec: video.currentTime,
-        durationSec: duration,
+        durationSec: dur,
         completed,
+        // Always 'off' in Phase 5. Phase 6/7 will read the active selection
+        // from the caption picker and pass it through here so it persists
+        // per (media_kind, media_id).
+        captionMode: "off",
       }).catch(() => {
         /* progress writes are best-effort */
       });
     };
 
-    const interval = setInterval(tick, PROGRESS_INTERVAL_MS);
-    // Also flush on pause / close so the resume position is accurate when the
-    // user steps away mid-programme.
-    const flush = () => tick();
-    video.addEventListener("pause", flush);
+    const interval = window.setInterval(() => {
+      if (!video.paused) tick();
+    }, PROGRESS_INTERVAL_MS);
+    video.addEventListener("pause", tick);
     return () => {
-      clearInterval(interval);
-      video.removeEventListener("pause", flush);
-      flush();
+      window.clearInterval(interval);
+      video.removeEventListener("pause", tick);
+      tick();
     };
   }, [ready, profileId, media.kind, media.id]);
 
-  // Esc to close.
+  // -- 7. Fullscreen sync -------------------------------------------------
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  // -- Imperative actions -------------------------------------------------
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) void v.play().catch(() => undefined);
+    else v.pause();
+  }, []);
+
+  const seekBy = useCallback(
+    (delta: number) => {
+      const v = videoRef.current;
+      if (!v || isLive) return;
+      const next = Math.max(0, Math.min((v.duration || 0) - 0.1, v.currentTime + delta));
+      v.currentTime = next;
+    },
+    [isLive]
+  );
+
+  const seekTo = useCallback(
+    (seconds: number) => {
+      const v = videoRef.current;
+      if (!v || isLive || !Number.isFinite(v.duration)) return;
+      v.currentTime = Math.max(0, Math.min(v.duration - 0.1, seconds));
+    },
+    [isLive]
+  );
+
+  const seekToLiveEdge = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const hls = hlsRef.current;
+    if (hls && hls.liveSyncPosition != null) {
+      v.currentTime = hls.liveSyncPosition;
+      return;
+    }
+    // Native HLS: seek to the end of the seekable range.
+    if (v.seekable.length > 0) v.currentTime = v.seekable.end(v.seekable.length - 1);
+  }, []);
+
+  const setVol = useCallback((next: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const clamped = Math.max(0, Math.min(1, next));
+    v.volume = clamped;
+    if (clamped > 0 && v.muted) v.muted = false;
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = !v.muted;
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    } else if (containerRef.current?.requestFullscreen) {
+      void containerRef.current.requestFullscreen().catch(() => undefined);
+    }
+  }, []);
+
+  const togglePip = useCallback(() => {
+    const video = videoRef.current as PiPVideoElement | null;
+    const doc = document as PiPDocument;
+    if (!video || !pipSupported) return;
+    if (doc.pictureInPictureElement) {
+      void doc.exitPictureInPicture?.().catch(() => undefined);
+    } else {
+      void video.requestPictureInPicture?.().catch(() => undefined);
+    }
+  }, [pipSupported]);
+
+  const flashSkip = useCallback((dir: -1 | 1) => {
+    setSkipIndicator({ dir, key: Date.now() });
+    // The indicator hides itself after the CSS animation completes; we
+    // clear state shortly after so the same direction can re-trigger.
+    window.setTimeout(() => setSkipIndicator(null), 600);
+  }, []);
+
+  // -- Controls visibility (auto-hide while playing) ----------------------
+  const revealControls = useCallback(() => {
+    setControlsVisible(true);
+    if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+    if (!videoRef.current?.paused) {
+      hideTimerRef.current = window.setTimeout(() => {
+        setControlsVisible(false);
+      }, CONTROLS_HIDE_DELAY_MS);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!playing) {
+      setControlsVisible(true);
+      if (hideTimerRef.current) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    } else {
+      revealControls();
+    }
+  }, [playing, revealControls]);
+
+  useEffect(() => {
+    return () => {
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+    };
+  }, []);
+
+  // -- Keyboard shortcuts -------------------------------------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        // Allow Esc to exit fullscreen first — only close the modal when
-        // we're back in windowed mode.
-        if (!document.fullscreenElement) onClose();
+      // Don't hijack typing in inputs (defensive - none exist in the modal
+      // today but easy to add later).
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+
+      switch (e.key) {
+        case "Escape":
+          if (!document.fullscreenElement) onClose();
+          return;
+        case " ":
+        case "k":
+        case "K":
+          e.preventDefault();
+          togglePlay();
+          revealControls();
+          return;
+        case "ArrowLeft":
+          e.preventDefault();
+          seekBy(-ARROW_SECONDS);
+          flashSkip(-1);
+          revealControls();
+          return;
+        case "ArrowRight":
+          e.preventDefault();
+          seekBy(ARROW_SECONDS);
+          flashSkip(1);
+          revealControls();
+          return;
+        case "j":
+        case "J":
+          seekBy(-SKIP_SECONDS);
+          flashSkip(-1);
+          revealControls();
+          return;
+        case "l":
+        case "L":
+          seekBy(SKIP_SECONDS);
+          flashSkip(1);
+          revealControls();
+          return;
+        case "ArrowUp":
+          e.preventDefault();
+          setVol((videoRef.current?.volume ?? 0) + VOLUME_STEP);
+          revealControls();
+          return;
+        case "ArrowDown":
+          e.preventDefault();
+          setVol((videoRef.current?.volume ?? 0) - VOLUME_STEP);
+          revealControls();
+          return;
+        case "m":
+        case "M":
+          toggleMute();
+          revealControls();
+          return;
+        case "f":
+        case "F":
+          toggleFullscreen();
+          return;
+        case "p":
+        case "P":
+          togglePip();
+          return;
+        default:
+          // 0-9 -> jump to that decile (VOD only).
+          if (/^[0-9]$/.test(e.key) && !isLive) {
+            const v = videoRef.current;
+            if (v && Number.isFinite(v.duration)) {
+              seekTo((parseInt(e.key, 10) / 10) * v.duration);
+              revealControls();
+            }
+          }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [
+    onClose,
+    togglePlay,
+    seekBy,
+    seekTo,
+    setVol,
+    toggleMute,
+    toggleFullscreen,
+    togglePip,
+    flashSkip,
+    revealControls,
+    isLive,
+  ]);
 
+  // -- Surface interactions: single tap = play/pause, double tap = skip --
+  const onSurfacePointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      // Ignore clicks that originated on controls.
+      if ((e.target as HTMLElement).closest("[data-controls]")) return;
+
+      revealControls();
+      const now = Date.now();
+      const last = lastTapRef.current;
+      const x = e.clientX;
+      const w = e.currentTarget.clientWidth;
+
+      if (last && now - last.t < DOUBLE_TAP_WINDOW_MS && Math.abs(last.x - x) < 60) {
+        // Double tap - left third = -10, right third = +10, middle = fullscreen.
+        lastTapRef.current = null;
+        const ratio = x / w;
+        if (ratio < 0.35 && !isLive) {
+          seekBy(-SKIP_SECONDS);
+          flashSkip(-1);
+        } else if (ratio > 0.65 && !isLive) {
+          seekBy(SKIP_SECONDS);
+          flashSkip(1);
+        } else {
+          toggleFullscreen();
+        }
+        return;
+      }
+      lastTapRef.current = { t: now, x };
+      // Single-tap play/pause fires after the double-tap window expires so
+      // it doesn't race the skip gesture.
+      window.setTimeout(() => {
+        if (lastTapRef.current?.t === now) togglePlay();
+      }, DOUBLE_TAP_WINDOW_MS);
+    },
+    [flashSkip, isLive, revealControls, seekBy, toggleFullscreen, togglePlay]
+  );
+
+  // -- Derived display values ---------------------------------------------
+  const progressPct = useMemo(() => {
+    if (isLive || !duration) return 0;
+    return Math.min(100, (currentTime / duration) * 100);
+  }, [currentTime, duration, isLive]);
+
+  const bufferedPct = useMemo(() => {
+    if (isLive || !duration) return 0;
+    return Math.min(100, (bufferedEnd / duration) * 100);
+  }, [bufferedEnd, duration, isLive]);
+
+  const atLiveEdge = useMemo(() => {
+    if (!isLive) return false;
+    const hls = hlsRef.current;
+    if (hls?.liveSyncPosition != null) {
+      return Math.abs(currentTime - hls.liveSyncPosition) < 4;
+    }
+    const v = videoRef.current;
+    if (v && v.seekable.length > 0) {
+      const end = v.seekable.end(v.seekable.length - 1);
+      return Math.abs(currentTime - end) < 4;
+    }
+    return true;
+  }, [currentTime, isLive]);
+
+  const loadingVisible = !error && (!resolved || !ready || buffering);
+  const bufferHealthPct = Math.min(
+    99,
+    Math.round((bufferedAheadSec / BUFFER_TARGET_SECONDS) * 100)
+  );
+  const visibleLoadingPct =
+    ready && buffering ? Math.max(5, bufferHealthPct) : Math.min(99, Math.round(loadingProgress));
+  const loadingDetail = resolved
+    ? playbackDetail(resolved, bufferedAheadSec, ready && buffering)
+    : "Backend is resolving the provider stream";
+
+  // -- Render -------------------------------------------------------------
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-black">
-      <div className="flex items-center justify-between px-5 py-3 text-white">
-        <div className="min-w-0">
-          <p className="truncate text-base font-semibold">{media.title}</p>
-          {media.subtitle && <p className="truncate text-xs text-white/55">{media.subtitle}</p>}
-        </div>
-        <button
-          onClick={onClose}
-          className="rounded-full bg-white/10 p-2 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
-          aria-label="Close player"
-        >
-          <XIcon className="h-4 w-4" />
-        </button>
-      </div>
+    <div
+      ref={containerRef}
+      className={cn(
+        "fixed inset-0 z-50 flex flex-col bg-black select-none",
+        // When controls hide we also hide the cursor.
+        !controlsVisible && playing && "cursor-none"
+      )}
+      onPointerMove={revealControls}
+    >
+      <div className="relative flex-1 overflow-hidden" onPointerDown={onSurfacePointerDown}>
+        <video
+          ref={videoRef}
+          poster={media.posterUrl ?? undefined}
+          autoPlay
+          playsInline
+          preload="auto"
+          className="absolute inset-0 h-full w-full bg-black"
+        />
 
-      <div className="relative flex-1">
+        {/* Caption overlay - inert in Phase 5; Phase 6/7 populate the cues. */}
+        <CaptionOverlay
+          mode={captionMode}
+          sourceCues={sourceCues}
+          translatedCues={translatedCues}
+          currentTime={currentTime}
+          sourceLang={resolved?.sourceLang}
+        />
+
+        {/* Skip indicator (+-10s) */}
+        {skipIndicator && (
+          <div
+            key={skipIndicator.key}
+            className={cn(
+              "pointer-events-none absolute top-1/2 -translate-y-1/2 flex h-24 w-24 items-center justify-center rounded-full bg-white/10 backdrop-blur-md text-white",
+              "animate-[skip-pop_500ms_ease-out_forwards]",
+              skipIndicator.dir < 0 ? "left-[18%]" : "right-[18%]"
+            )}
+          >
+            {skipIndicator.dir < 0 ? (
+              <SkipBack className="h-9 w-9" />
+            ) : (
+              <SkipForward className="h-9 w-9" />
+            )}
+          </div>
+        )}
+
+        {/* Startup / buffering banner */}
+        {loadingVisible && (
+          <LoadingBanner
+            percent={visibleLoadingPct}
+            title={loadingTitle(loadingPhase, resolved)}
+            detail={loadingDetail}
+          />
+        )}
+
+        {/* Center play button when paused (gives the empty state weight) */}
+        {!playing && ready && !buffering && !error && (
+          <button
+            data-controls
+            onClick={togglePlay}
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex h-20 w-20 items-center justify-center rounded-full bg-white/15 backdrop-blur-md text-white transition-all hover:bg-white/25 hover:scale-105 active:scale-95"
+            aria-label="Play"
+          >
+            <Play className="h-9 w-9 fill-current ml-1" />
+          </button>
+        )}
+
+        {/* Error overlay */}
         {error && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/80 text-white/75">
-            <p className="text-sm">{error}</p>
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/85 text-white">
+            <p className="text-sm text-white/80">{error}</p>
             <button
               onClick={onClose}
-              className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/15"
+              className="rounded-lg bg-white/10 px-4 py-1.5 text-xs font-medium transition-colors hover:bg-white/20"
             >
               Close
             </button>
           </div>
         )}
-        <video
-          ref={videoRef}
-          poster={media.posterUrl ?? undefined}
-          controls
-          autoPlay
-          playsInline
-          onCanPlay={() => setReady(true)}
-          onError={() => setError("Could not play this stream.")}
-          className="h-full w-full bg-black"
-        />
+
+        {/* Top chrome: gradient + title + close */}
+        <div
+          data-controls
+          className={cn(
+            "absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-4 px-6 pt-5 pb-12",
+            "bg-gradient-to-b from-black/85 via-black/40 to-transparent",
+            "transition-opacity duration-200",
+            controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
+          )}
+        >
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-base font-medium text-white drop-shadow-md">
+              {media.title}
+            </p>
+            {media.subtitle && (
+              <p className="truncate text-xs text-white/65 mt-0.5 drop-shadow-md">
+                {media.subtitle}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="shrink-0 rounded-full bg-white/10 p-2 text-white/85 backdrop-blur-sm transition-all hover:bg-white/20 hover:text-white hover:scale-105"
+            aria-label="Close player"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Bottom chrome: scrubber + controls row */}
+        <div
+          data-controls
+          className={cn(
+            "absolute inset-x-0 bottom-0 z-10 px-6 pt-12 pb-4",
+            "bg-gradient-to-t from-black/90 via-black/55 to-transparent",
+            "transition-opacity duration-200",
+            controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
+          )}
+        >
+          {isLive ? (
+            <LiveBar
+              atLiveEdge={atLiveEdge}
+              onJumpToLive={seekToLiveEdge}
+              bufferedPct={bufferedPct}
+              progressPct={progressPct}
+            />
+          ) : (
+            <Scrubber
+              progressPct={progressPct}
+              bufferedPct={bufferedPct}
+              duration={duration}
+              onSeek={seekTo}
+            />
+          )}
+
+          <div className="mt-2 flex items-center gap-3 text-white">
+            <IconButton onClick={togglePlay} label={playing ? "Pause" : "Play"}>
+              {playing ? (
+                <Pause className="h-5 w-5 fill-current" />
+              ) : (
+                <Play className="h-5 w-5 fill-current" />
+              )}
+            </IconButton>
+
+            {!isLive && (
+              <>
+                <IconButton onClick={() => seekBy(-SKIP_SECONDS)} label="Back 10 seconds">
+                  <SkipBack className="h-5 w-5" />
+                </IconButton>
+                <IconButton onClick={() => seekBy(SKIP_SECONDS)} label="Forward 10 seconds">
+                  <SkipForward className="h-5 w-5" />
+                </IconButton>
+              </>
+            )}
+
+            <VolumeControl
+              volume={volume}
+              muted={muted}
+              onToggleMute={toggleMute}
+              onChange={setVol}
+            />
+
+            <div className="text-xs tabular-nums text-white/85">
+              {isLive ? (
+                <span className="flex items-center gap-1.5">
+                  <Radio className="h-3.5 w-3.5 text-red-500" />
+                  <span className="font-medium tracking-wide">LIVE</span>
+                </span>
+              ) : (
+                <>
+                  <span>{formatTime(currentTime)}</span>
+                  <span className="text-white/40"> / </span>
+                  <span className="text-white/65">{formatTime(duration)}</span>
+                </>
+              )}
+            </div>
+
+            <div className="flex-1" />
+
+            <CaptionButton
+              mode={captionMode}
+              onChange={setCaptionMode}
+              open={captionMenuOpen}
+              onToggle={() => setCaptionMenuOpen((v) => !v)}
+              onClose={() => setCaptionMenuOpen(false)}
+            />
+
+            {pipSupported && (
+              <IconButton onClick={togglePip} label="Picture in Picture" active={pipActive}>
+                <PictureInPicture className="h-5 w-5" />
+              </IconButton>
+            )}
+            <IconButton
+              onClick={toggleFullscreen}
+              label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            >
+              {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
+            </IconButton>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes skip-pop {
+          0%   { opacity: 0; transform: translateY(-50%) scale(0.7); }
+          25%  { opacity: 1; transform: translateY(-50%) scale(1.05); }
+          100% { opacity: 0; transform: translateY(-50%) scale(1); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function IconButton({
+  children,
+  onClick,
+  label,
+  active = false,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  label: string;
+  active?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "flex h-9 w-9 items-center justify-center rounded-full text-white/85",
+        "transition-all hover:bg-white/15 hover:text-white hover:scale-105 active:scale-95",
+        active && "bg-white/15 text-white"
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function LoadingBanner({
+  percent,
+  title,
+  detail,
+}: {
+  percent: number;
+  title: string;
+  detail: string;
+}) {
+  const radius = 28;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.max(0, Math.min(100, percent));
+  const strokeOffset = circumference - (clamped / 100) * circumference;
+
+  return (
+    <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center px-4">
+      <div
+        className={cn(
+          "flex min-h-24 w-full max-w-sm items-center gap-4 rounded-lg border border-white/10",
+          "bg-black/[0.78] px-5 py-4 text-white shadow-2xl backdrop-blur-xl"
+        )}
+      >
+        <div className="relative flex h-20 w-20 shrink-0 items-center justify-center">
+          <svg className="h-20 w-20 -rotate-90" viewBox="0 0 72 72" aria-hidden="true">
+            <circle
+              cx="36"
+              cy="36"
+              r={radius}
+              fill="none"
+              stroke="rgba(255,255,255,0.16)"
+              strokeWidth="5"
+            />
+            <circle
+              cx="36"
+              cy="36"
+              r={radius}
+              fill="none"
+              stroke="var(--color-accent)"
+              strokeLinecap="round"
+              strokeWidth="5"
+              strokeDasharray={circumference}
+              strokeDashoffset={strokeOffset}
+              className="transition-[stroke-dashoffset] duration-300 ease-out"
+            />
+          </svg>
+          <span className="absolute text-sm font-semibold tabular-nums">
+            {Math.round(clamped)}%
+          </span>
+        </div>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{title}</p>
+          <p className="mt-1 max-h-10 overflow-hidden text-xs leading-5 text-white/60">{detail}</p>
+        </div>
       </div>
     </div>
   );
+}
+
+function Scrubber({
+  progressPct,
+  bufferedPct,
+  duration,
+  onSeek,
+}: {
+  progressPct: number;
+  bufferedPct: number;
+  duration: number;
+  onSeek: (sec: number) => void;
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [hoverPct, setHoverPct] = useState<number | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
+
+  const pctFromEvent = (e: { clientX: number }): number => {
+    const el = trackRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  };
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    setScrubbing(true);
+    const pct = pctFromEvent(e);
+    setHoverPct(pct);
+    onSeek(pct * duration);
+  };
+
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const pct = pctFromEvent(e);
+    setHoverPct(pct);
+    if (scrubbing) onSeek(pct * duration);
+  };
+
+  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    (e.target as Element).releasePointerCapture?.(e.pointerId);
+    setScrubbing(false);
+  };
+
+  const previewTime = hoverPct != null ? hoverPct * duration : null;
+  const indicatorStyle: CSSProperties = {
+    left: `${(hoverPct ?? 0) * 100}%`,
+  };
+
+  return (
+    <div
+      className="group relative h-5 cursor-pointer touch-none"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={() => !scrubbing && setHoverPct(null)}
+    >
+      <div
+        ref={trackRef}
+        className={cn(
+          "absolute inset-x-0 top-1/2 -translate-y-1/2 rounded-full bg-white/20 transition-[height] duration-150",
+          scrubbing || hoverPct != null ? "h-1.5" : "h-1"
+        )}
+      >
+        {/* buffered */}
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-white/30"
+          style={{ width: `${bufferedPct}%` }}
+        />
+        {/* progress (accent) */}
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-[var(--color-accent)]"
+          style={{ width: `${progressPct}%` }}
+        />
+        {/* thumb */}
+        <div
+          className={cn(
+            "absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-white shadow-md transition-opacity",
+            scrubbing || hoverPct != null ? "opacity-100" : "opacity-0"
+          )}
+          style={{ left: `calc(${progressPct}% - 6px)` }}
+        />
+      </div>
+
+      {/* Hover/scrub time preview */}
+      {previewTime != null && (
+        <div
+          className="pointer-events-none absolute -top-7 -translate-x-1/2 rounded bg-black/85 px-1.5 py-0.5 text-[11px] tabular-nums text-white shadow-md"
+          style={indicatorStyle}
+        >
+          {formatTime(previewTime)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiveBar({
+  atLiveEdge,
+  onJumpToLive,
+  bufferedPct,
+  progressPct,
+}: {
+  atLiveEdge: boolean;
+  onJumpToLive: () => void;
+  bufferedPct: number;
+  progressPct: number;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="relative h-1 flex-1 overflow-hidden rounded-full bg-white/15">
+        <div
+          className="absolute inset-y-0 left-0 bg-white/25"
+          style={{ width: `${bufferedPct || 100}%` }}
+        />
+        <div
+          className="absolute inset-y-0 left-0 bg-red-500"
+          style={{ width: `${atLiveEdge ? 100 : progressPct}%` }}
+        />
+      </div>
+      <button
+        onClick={onJumpToLive}
+        disabled={atLiveEdge}
+        className={cn(
+          "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide transition-colors",
+          atLiveEdge ? "bg-red-500/15 text-red-400" : "bg-white/10 text-white/85 hover:bg-white/20"
+        )}
+      >
+        <span
+          className={cn("h-1.5 w-1.5 rounded-full", atLiveEdge ? "bg-red-500" : "bg-white/50")}
+        />
+        {atLiveEdge ? "Live" : "Go live"}
+      </button>
+    </div>
+  );
+}
+
+function VolumeControl({
+  volume,
+  muted,
+  onToggleMute,
+  onChange,
+}: {
+  volume: number;
+  muted: boolean;
+  onToggleMute: () => void;
+  onChange: (v: number) => void;
+}) {
+  const displayed = muted ? 0 : volume;
+  const Icon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
+
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const pctFromEvent = (e: { clientX: number }): number => {
+    const el = trackRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  };
+
+  return (
+    <div className="group flex items-center">
+      <IconButton onClick={onToggleMute} label={muted ? "Unmute" : "Mute"}>
+        <Icon className="h-5 w-5" />
+      </IconButton>
+      <div
+        ref={trackRef}
+        className={cn(
+          "ml-1 h-5 w-0 cursor-pointer overflow-hidden transition-[width] duration-200",
+          "group-hover:w-20",
+          dragging && "w-20"
+        )}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          (e.target as Element).setPointerCapture?.(e.pointerId);
+          setDragging(true);
+          onChange(pctFromEvent(e));
+        }}
+        onPointerMove={(e) => {
+          if (dragging) onChange(pctFromEvent(e));
+        }}
+        onPointerUp={(e) => {
+          (e.target as Element).releasePointerCapture?.(e.pointerId);
+          setDragging(false);
+        }}
+      >
+        <div className="relative top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/25">
+          <div
+            className="absolute inset-y-0 left-0 rounded-full bg-white"
+            style={{ width: `${displayed * 100}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function loadingCap(phase: LoadingPhase): number {
+  switch (phase) {
+    case "resolving":
+      return 42;
+    case "connecting":
+      return 58;
+    case "manifest":
+      return 72;
+    case "buffering":
+      return 94;
+    case "ready":
+      return 100;
+  }
+}
+
+function loadingTitle(phase: LoadingPhase, stream: ResolvedStream | null): string {
+  if (!stream) return "Preparing stream";
+  switch (phase) {
+    case "resolving":
+      return "Preparing stream";
+    case "connecting":
+      return "Opening local stream";
+    case "manifest":
+      return "Loading stream manifest";
+    case "buffering":
+      return "Buffering video";
+    case "ready":
+      return "Ready";
+  }
+}
+
+function playbackDetail(
+  stream: ResolvedStream,
+  bufferedAheadSec: number,
+  isRebuffering: boolean
+): string {
+  if (isRebuffering) {
+    return `${formatSeconds(bufferedAheadSec)} buffered ahead`;
+  }
+  const route = stream.route.replaceAll("_", " ");
+  const codecParts = [stream.videoCodec, stream.audioCodec].filter(Boolean).join(" / ");
+  if (stream.fallbackReason) return `Fallback ${route}: ${stream.fallbackReason}`;
+  if (codecParts) return `${route} - ${codecParts}`;
+  return route;
+}
+
+function formatSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0.0s";
+  return `${seconds.toFixed(1)}s`;
+}
+
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const s = Math.floor(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  const ss = String(sec).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function formatHlsError(data: ErrorData): string {
+  const parts: string[] = [];
+  if (data.type) parts.push(String(data.type));
+  if (data.details) parts.push(String(data.details));
+  // For network errors include the HTTP status if we have one - the most
+  // common silent failure today is the proxy returning 5xx and us showing
+  // a generic "Stream error".
+  const status = (data as { response?: { code?: number } }).response?.code;
+  if (typeof status === "number") parts.push(`HTTP ${status}`);
+  const reason = (data as { reason?: string }).reason;
+  if (typeof reason === "string" && reason) parts.push(reason);
+  return parts.join(" - ");
 }
 
 function errorMessage(err: unknown): string {
