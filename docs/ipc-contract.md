@@ -91,7 +91,9 @@ controls, watch history, and the caption overlay. The older WebKit/hls.js
 `resolve_stream` path remains as a fallback and for proxy/transcription work.
 On macOS, Nova installs a native player view beneath the Tauri webview and
 passes that view to libmpv via `wid`, so playback renders inside the app window
-instead of a detached mpv window.
+instead of a detached mpv window. Native playback requires this embedded surface;
+if it is unavailable, `mpv_open_stream` returns an in-app error instead of
+opening a standalone mpv window.
 
 ```ts
 type PlaybackKind = "hls" | "file";

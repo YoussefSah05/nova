@@ -25,6 +25,8 @@ pub enum MpvError {
     NoSession,
     #[error("active native playback token does not match")]
     TokenMismatch,
+    #[error("native mpv embed surface is not available")]
+    EmbedSurfaceUnavailable,
     #[error("native playback mutex poisoned")]
     Poisoned,
 }
@@ -68,6 +70,7 @@ pub struct MpvOpenOptions {
     pub title: String,
     pub user_agent: Option<String>,
     pub embed_wid: Option<u64>,
+    pub embedded_required: bool,
 }
 
 #[derive(Clone, Default)]
@@ -88,14 +91,21 @@ impl MpvEngine {
     }
 
     pub fn open(&self, options: MpvOpenOptions) -> Result<MpvOpenResult, MpvError> {
+        let embed_wid = *self.embed_wid.lock().map_err(|_| MpvError::Poisoned)?;
+        let window_target =
+            resolve_window_target(options.embed_wid, embed_wid, options.embedded_required)?;
+        let embed_wid = match window_target {
+            MpvWindowTarget::Embedded(wid) => Some(wid),
+            MpvWindowTarget::ExternalWindow => None,
+        };
+
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         if let Some(session) = guard.take() {
             drop(session);
         }
 
-        let embed_wid = *self.embed_wid.lock().map_err(|_| MpvError::Poisoned)?;
         let options = MpvOpenOptions {
-            embed_wid: options.embed_wid.or(embed_wid),
+            embed_wid,
             ..options
         };
         let session = MpvSession::open(options)?;
@@ -196,6 +206,28 @@ fn active_session<'a>(
     Ok(session)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MpvWindowTarget {
+    Embedded(u64),
+    ExternalWindow,
+}
+
+fn resolve_window_target(
+    requested_wid: Option<u64>,
+    registered_wid: Option<u64>,
+    embedded_required: bool,
+) -> Result<MpvWindowTarget, MpvError> {
+    if let Some(wid) = requested_wid.or(registered_wid) {
+        return Ok(MpvWindowTarget::Embedded(wid));
+    }
+
+    if embedded_required {
+        return Err(MpvError::EmbedSurfaceUnavailable);
+    }
+
+    Ok(MpvWindowTarget::ExternalWindow)
+}
+
 struct MpvSession {
     handle: *mut mpv_handle,
     token: String,
@@ -209,6 +241,10 @@ unsafe impl Send for MpvSession {}
 
 impl MpvSession {
     fn open(options: MpvOpenOptions) -> Result<Self, MpvError> {
+        if options.embedded_required && options.embed_wid.is_none() {
+            return Err(MpvError::EmbedSurfaceUnavailable);
+        }
+
         let handle = unsafe { mpv_create() };
         if handle.is_null() {
             return Err(MpvError::NotAvailable);
@@ -228,6 +264,7 @@ impl MpvSession {
             // here switches to render-context embedding, but Nova does not own
             // a render context for this session.
             session.set_option("wid", &wid.to_string())?;
+            session.set_option("force-window", "no")?;
         } else {
             session.set_option("force-window", "yes")?;
         }
@@ -418,6 +455,39 @@ fn mpv_error_to_string(error: c_int) -> String {
     unsafe { CStr::from_ptr(raw) }
         .to_string_lossy()
         .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_required_rejects_missing_surface() {
+        let result = resolve_window_target(None, None, true);
+
+        assert!(matches!(result, Err(MpvError::EmbedSurfaceUnavailable)));
+    }
+
+    #[test]
+    fn embedded_required_uses_registered_surface() {
+        let result = resolve_window_target(None, Some(42), true);
+
+        assert_eq!(result.unwrap(), MpvWindowTarget::Embedded(42));
+    }
+
+    #[test]
+    fn explicit_surface_wins_over_registered_surface() {
+        let result = resolve_window_target(Some(7), Some(42), true);
+
+        assert_eq!(result.unwrap(), MpvWindowTarget::Embedded(7));
+    }
+
+    #[test]
+    fn external_window_allowed_only_when_embedding_not_required() {
+        let result = resolve_window_target(None, None, false);
+
+        assert_eq!(result.unwrap(), MpvWindowTarget::ExternalWindow);
+    }
 }
 
 #[allow(non_camel_case_types)]
