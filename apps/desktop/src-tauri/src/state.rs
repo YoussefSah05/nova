@@ -16,7 +16,7 @@ pub struct AppState {
     /// [`SessionRegistry::register`]; `stop_playback` calls `release`.
     pub hls_sessions: SessionRegistry,
     /// Native libmpv playback engine used for reliable IPTV playback.
-    pub mpv_engine: MpvEngine,
+    pub mpv_engine: Arc<MpvEngine>,
 }
 
 impl AppState {

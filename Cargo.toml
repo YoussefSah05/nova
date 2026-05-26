@@ -60,14 +60,14 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "NSColor",
     "NSGraphics",
-    "NSOpenGL",
-    "NSOpenGLView",
     "NSResponder",
     "NSView",
     "NSWindow",
+    "objc2-quartz-core",
 ] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
+    "NSGeometry",
     "NSKeyValueCoding",
     "NSObject",
     "NSString",
@@ -76,6 +76,12 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 objc2-web-kit = { version = "0.3", default-features = false, features = [
     "objc2-app-kit",
     "WKWebView",
+] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+    "std",
+    "CALayer",
+    "CAOpenGLLayer",
+    "objc2-core-foundation",
 ] }
 
 [profile.dev]

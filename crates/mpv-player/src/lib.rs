@@ -1,17 +1,26 @@
 //! Minimal libmpv playback engine wrapper.
 //!
-//! This is intentionally small: Nova owns UI, watch history, captions, and
-//! future transcription/translation; libmpv owns hostile media playback.
+//! Nova owns UI, watch history, captions, and future transcription/translation;
+//! libmpv owns hostile media playback. The crate exposes:
+//!
+//! - [`MpvEngine`]: holds the active session and dispatches commands.
+//! - [`MpvRenderContext`]: thin wrapper around `mpv_render_context`. The
+//!   embedding code (macOS `CAOpenGLLayer`) constructs one *inside its GL
+//!   thread* when the layer first draws, then calls [`MpvRenderContext::render`]
+//!   on each subsequent draw.
+//! - [`RenderLifecycleHandler`]: trait the host implements so the engine can
+//!   tell it "a session opened — attach your render context" / "session is
+//!   closing — detach it" *synchronously*. Detach must complete before the
+//!   handle is destroyed.
+//! - [`EventEmitter`]: trait the host implements to receive a wake-up whenever
+//!   libmpv has new events. The host snapshots state and forwards it to the
+//!   frontend.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_double, c_int, c_void};
 use std::ptr;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Condvar, Mutex,
-};
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde::Serialize;
 use thiserror::Error;
@@ -29,10 +38,10 @@ pub enum MpvError {
     NoSession,
     #[error("active native playback token does not match")]
     TokenMismatch,
-    #[error("native mpv embed surface is not available")]
-    EmbedSurfaceUnavailable,
-    #[error("native mpv render surface is not available")]
-    RenderSurfaceUnavailable,
+    #[error("native mpv render lifecycle handler is not registered")]
+    NoRenderHandler,
+    #[error("native mpv render attach failed: {0}")]
+    RenderAttach(String),
     #[error("native mpv render context failed: {0}")]
     RenderContext(String),
     #[error("native playback mutex poisoned")]
@@ -47,7 +56,7 @@ pub struct MpvOpenResult {
     pub embedded: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MpvPlaybackPhase {
     Opening,
@@ -77,113 +86,121 @@ pub struct MpvOpenOptions {
     pub url: String,
     pub title: String,
     pub user_agent: Option<String>,
-    pub embed_wid: Option<u64>,
-    pub embedded_required: bool,
-    pub render_surface_required: bool,
 }
 
+/// Opaque, `Copy` newtype around a raw `*mut mpv_handle`. Crossing the API
+/// boundary as a `usize` keeps the FFI declarations private to this crate
+/// while still letting the embedding code create a render context against the
+/// same handle the engine owns.
+///
+/// The handle is only valid for the lifetime of the session that issued it —
+/// the host must obtain it inside [`RenderLifecycleHandler::attach`] and stop
+/// using it once [`RenderLifecycleHandler::detach`] returns.
 #[derive(Debug, Clone, Copy)]
-pub struct MpvRenderSurface {
-    pub callback_ctx: usize,
-    pub make_current: unsafe extern "C" fn(usize) -> bool,
-    pub flush: unsafe extern "C" fn(usize),
-    pub size: unsafe extern "C" fn(usize, *mut c_int, *mut c_int) -> bool,
-    pub get_proc_address_ctx: usize,
-    pub get_proc_address: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
-}
+pub struct MpvRawHandle(usize);
 
-#[derive(Clone)]
-pub struct MpvRenderSurfaceRegistration {
-    surface: MpvRenderSurface,
-    _keepalive: Arc<dyn std::any::Any + Send + Sync>,
-}
+impl MpvRawHandle {
+    fn from_ptr(ptr: *mut mpv_handle) -> Self {
+        Self(ptr as usize)
+    }
 
-impl MpvRenderSurfaceRegistration {
-    pub fn new<T>(surface: MpvRenderSurface, keepalive: Arc<T>) -> Self
-    where
-        T: std::any::Any + Send + Sync + 'static,
-    {
-        Self {
-            surface,
-            _keepalive: keepalive,
-        }
+    fn as_ptr(self) -> *mut mpv_handle {
+        self.0 as *mut mpv_handle
     }
 }
 
-#[derive(Clone, Default)]
+/// Implemented by the host that owns a GL surface (on macOS, the
+/// `CAOpenGLLayer` subclass). The engine calls these in lockstep with the
+/// session lifecycle so the render context is always created *after* the
+/// handle exists and destroyed *before* the handle goes away.
+///
+/// Both methods are called synchronously from whichever thread opens/closes
+/// the session — implementations typically dispatch onto the GL thread
+/// internally (e.g. `dispatch_sync` to the main queue on macOS) so libmpv
+/// calls happen with a current GL context.
+pub trait RenderLifecycleHandler: Send + Sync {
+    /// Attach a render context to `handle`. Returning `Err` aborts the session
+    /// open.
+    fn attach(&self, handle: MpvRawHandle) -> Result<(), String>;
+
+    /// Detach and free the render context. Must complete before the function
+    /// returns — the engine destroys the handle immediately afterwards.
+    fn detach(&self);
+}
+
+/// Implemented by the host to receive a notification whenever libmpv signals
+/// "new events available." Typically wired to a Tauri event emitter; the host
+/// then snapshots [`MpvEngine::state`] and forwards it to the frontend.
+///
+/// Fired from libmpv's internal thread — implementations must not block.
+pub trait EventEmitter: Send + Sync {
+    fn wake(&self);
+}
+
+#[derive(Default)]
 pub struct MpvEngine {
-    inner: Arc<Mutex<Option<MpvSession>>>,
-    embed_wid: Arc<Mutex<Option<u64>>>,
-    render_surface: Arc<Mutex<Option<MpvRenderSurfaceRegistration>>>,
+    inner: Mutex<Option<MpvSession>>,
+    render_handler: Mutex<Option<Arc<dyn RenderLifecycleHandler>>>,
+    event_emitter: Mutex<Option<Arc<dyn EventEmitter>>>,
 }
 
 impl MpvEngine {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
     }
 
-    pub fn set_embed_wid(&self, wid: u64) -> Result<(), MpvError> {
-        let mut guard = self.embed_wid.lock().map_err(|_| MpvError::Poisoned)?;
-        *guard = Some(wid);
-        Ok(())
-    }
-
-    pub fn set_render_surface(
-        &self,
-        registration: MpvRenderSurfaceRegistration,
+    /// Register the render lifecycle handler. Called once at startup by the
+    /// host (e.g. the macOS layer installer).
+    pub fn set_render_handler(
+        self: &Arc<Self>,
+        handler: Arc<dyn RenderLifecycleHandler>,
     ) -> Result<(), MpvError> {
-        let mut guard = self.render_surface.lock().map_err(|_| MpvError::Poisoned)?;
-        *guard = Some(registration);
+        *self
+            .render_handler
+            .lock()
+            .map_err(|_| MpvError::Poisoned)? = Some(handler);
         Ok(())
     }
 
-    pub fn open(&self, options: MpvOpenOptions) -> Result<MpvOpenResult, MpvError> {
-        let render_surface = self
-            .render_surface
+    pub fn set_event_emitter(
+        self: &Arc<Self>,
+        emitter: Arc<dyn EventEmitter>,
+    ) -> Result<(), MpvError> {
+        *self.event_emitter.lock().map_err(|_| MpvError::Poisoned)? = Some(emitter);
+        Ok(())
+    }
+
+    pub fn open(self: &Arc<Self>, options: MpvOpenOptions) -> Result<MpvOpenResult, MpvError> {
+        let handler = self
+            .render_handler
+            .lock()
+            .map_err(|_| MpvError::Poisoned)?
+            .clone()
+            .ok_or(MpvError::NoRenderHandler)?;
+
+        let emitter = self
+            .event_emitter
             .lock()
             .map_err(|_| MpvError::Poisoned)?
             .clone();
-        let render_surface = render_surface.map(|registration| registration.surface);
-        if options.render_surface_required && render_surface.is_none() {
-            return Err(MpvError::RenderSurfaceUnavailable);
-        }
-
-        let embed_wid = *self.embed_wid.lock().map_err(|_| MpvError::Poisoned)?;
-        let window_target = resolve_window_target(
-            render_surface,
-            options.embed_wid,
-            embed_wid,
-            options.embedded_required,
-        )?;
 
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
-        if let Some(session) = guard.take() {
-            drop(session);
+        if let Some(prev) = guard.take() {
+            drop(prev);
         }
 
-        let (render_surface, embed_wid) = match window_target {
-            MpvWindowTarget::RenderApi(surface) => (Some(surface), None),
-            MpvWindowTarget::Embedded(wid) => (None, Some(wid)),
-            MpvWindowTarget::ExternalWindow => (None, None),
-        };
-        let options = MpvOpenOptions {
-            embed_wid,
-            render_surface_required: options.render_surface_required,
-            ..options
-        };
-        let session = MpvSession::open(options, render_surface)?;
+        let session = MpvSession::open(options, handler, emitter)?;
         let token = session.token.clone();
-        let embedded = session.is_embedded();
         *guard = Some(session);
 
         Ok(MpvOpenResult {
             token,
             engine: "mpv".to_string(),
-            embedded,
+            embedded: true,
         })
     }
 
-    pub fn close(&self, token: &str) -> Result<(), MpvError> {
+    pub fn close(self: &Arc<Self>, token: &str) -> Result<(), MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         let Some(session) = guard.as_ref() else {
             return Ok(());
@@ -195,7 +212,7 @@ impl MpvEngine {
         Ok(())
     }
 
-    pub fn state(&self, token: Option<&str>) -> Result<MpvPlayerState, MpvError> {
+    pub fn state(self: &Arc<Self>, token: Option<&str>) -> Result<MpvPlayerState, MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         let Some(session) = guard.as_mut() else {
             return Ok(MpvPlayerState {
@@ -216,14 +233,14 @@ impl MpvEngine {
         session.state()
     }
 
-    pub fn toggle_pause(&self, token: &str) -> Result<(), MpvError> {
+    pub fn toggle_pause(self: &Arc<Self>, token: &str) -> Result<(), MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         let session = active_session(&mut guard, token)?;
         let paused = session.property_bool("pause").unwrap_or(false);
         session.set_property("pause", if paused { "no" } else { "yes" })
     }
 
-    pub fn seek_relative(&self, token: &str, delta_sec: f64) -> Result<(), MpvError> {
+    pub fn seek_relative(self: &Arc<Self>, token: &str, delta_sec: f64) -> Result<(), MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         active_session(&mut guard, token)?.command(&[
             "seek",
@@ -233,7 +250,7 @@ impl MpvEngine {
         ])
     }
 
-    pub fn seek_absolute(&self, token: &str, position_sec: f64) -> Result<(), MpvError> {
+    pub fn seek_absolute(self: &Arc<Self>, token: &str, position_sec: f64) -> Result<(), MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         active_session(&mut guard, token)?.command(&[
             "seek",
@@ -243,18 +260,18 @@ impl MpvEngine {
         ])
     }
 
-    pub fn seek_live_edge(&self, token: &str) -> Result<(), MpvError> {
+    pub fn seek_live_edge(self: &Arc<Self>, token: &str) -> Result<(), MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         active_session(&mut guard, token)?.command(&["seek", "100", "absolute-percent"])
     }
 
-    pub fn set_volume(&self, token: &str, volume: f64) -> Result<(), MpvError> {
+    pub fn set_volume(self: &Arc<Self>, token: &str, volume: f64) -> Result<(), MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         let clamped = volume.clamp(0.0, 1.0) * 100.0;
         active_session(&mut guard, token)?.set_property("volume", &format!("{clamped:.1}"))
     }
 
-    pub fn set_mute(&self, token: &str, muted: bool) -> Result<(), MpvError> {
+    pub fn set_mute(self: &Arc<Self>, token: &str, muted: bool) -> Result<(), MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         active_session(&mut guard, token)?.set_property("mute", if muted { "yes" } else { "no" })
     }
@@ -269,33 +286,7 @@ fn active_session<'a>(
     Ok(session)
 }
 
-#[derive(Debug, Clone, Copy)]
-enum MpvWindowTarget {
-    RenderApi(MpvRenderSurface),
-    Embedded(u64),
-    ExternalWindow,
-}
-
-fn resolve_window_target(
-    render_surface: Option<MpvRenderSurface>,
-    requested_wid: Option<u64>,
-    registered_wid: Option<u64>,
-    embedded_required: bool,
-) -> Result<MpvWindowTarget, MpvError> {
-    if let Some(surface) = render_surface {
-        return Ok(MpvWindowTarget::RenderApi(surface));
-    }
-
-    if let Some(wid) = requested_wid.or(registered_wid) {
-        return Ok(MpvWindowTarget::Embedded(wid));
-    }
-
-    if embedded_required {
-        return Err(MpvError::EmbedSurfaceUnavailable);
-    }
-
-    Ok(MpvWindowTarget::ExternalWindow)
-}
+// -- Session -----------------------------------------------------------------
 
 struct MpvSession {
     handle: *mut mpv_handle,
@@ -303,51 +294,45 @@ struct MpvSession {
     last_phase: MpvPlaybackPhase,
     last_error: Option<String>,
     opened_at: Instant,
-    embed_wid: Option<u64>,
-    render: Option<MpvRenderSession>,
+    handler: Arc<dyn RenderLifecycleHandler>,
+    /// Boxed so the address stays stable; libmpv stores this raw pointer for
+    /// the lifetime of the handle as the wakeup-callback userdata.
+    wakeup_ctx: Option<Box<WakeupCtx>>,
 }
 
+// SAFETY: the raw `*mut mpv_handle` is only touched while holding the engine
+// mutex (single-threaded access from Rust's perspective). libmpv's own
+// internals are thread-safe.
 unsafe impl Send for MpvSession {}
 
 impl MpvSession {
     fn open(
         options: MpvOpenOptions,
-        render_surface: Option<MpvRenderSurface>,
+        handler: Arc<dyn RenderLifecycleHandler>,
+        emitter: Option<Arc<dyn EventEmitter>>,
     ) -> Result<Self, MpvError> {
-        if options.render_surface_required && render_surface.is_none() {
-            return Err(MpvError::RenderSurfaceUnavailable);
-        }
-        if options.embedded_required && options.embed_wid.is_none() && render_surface.is_none() {
-            return Err(MpvError::EmbedSurfaceUnavailable);
-        }
-
+        // SAFETY: `mpv_create` returns either a valid handle or null; we check
+        // for null below. No other unsafe state involved.
         let handle = unsafe { mpv_create() };
         if handle.is_null() {
             return Err(MpvError::NotAvailable);
         }
 
-        let session = Self {
+        let mut session = Self {
             handle,
             token: Uuid::new_v4().to_string(),
             last_phase: MpvPlaybackPhase::Opening,
             last_error: None,
             opened_at: Instant::now(),
-            embed_wid: options.embed_wid,
-            render: None,
+            handler,
+            wakeup_ctx: None,
         };
 
-        if render_surface.is_some() {
-            session.set_option("vo", "libmpv")?;
-            session.set_option("force-window", "no")?;
-        } else if let Some(wid) = options.embed_wid {
-            // `wid` is mpv's native-window embedding path. Forcing `vo=libmpv`
-            // here switches to render-context embedding, but Nova does not own
-            // a render context for this session.
-            session.set_option("wid", &wid.to_string())?;
-            session.set_option("force-window", "no")?;
-        } else {
-            session.set_option("force-window", "yes")?;
-        }
+        // Phase 5 architecture: we always render via the host's render context
+        // (CAOpenGLLayer on macOS). libmpv runs with `vo=libmpv` and never
+        // creates its own window. Render is driven by the layer's draw cycle.
+        session.set_option("vo", "libmpv")?;
+        session.set_option("force-window", "no")?;
         session.set_option("keep-open", "yes")?;
         session.set_option("idle", "yes")?;
         session.set_option("terminal", "no")?;
@@ -364,19 +349,57 @@ impl MpvSession {
             session.set_option("user-agent", agent)?;
         }
 
+        // SAFETY: `handle` is the just-created libmpv handle from
+        // `mpv_create`, owned by this `MpvSession` for the duration of the
+        // call. Init failure surfaces via the return code we check.
         let rc = unsafe { mpv_initialize(handle) };
         session.check(rc)?;
-        let mut session = session;
-        if let Some(surface) = render_surface {
-            session.render = Some(MpvRenderSession::new(handle, surface)?);
+
+        // Hand the layer a chance to set up its render context against the
+        // initialized handle. The contract requires this to be synchronous
+        // and to complete before `loadfile` (so the first frame can paint).
+        session
+            .handler
+            .attach(MpvRawHandle::from_ptr(handle))
+            .map_err(MpvError::RenderAttach)?;
+
+        // Observe the properties whose changes drive the frontend state.
+        // Each observe causes future changes to emit MPV_EVENT_PROPERTY_CHANGE,
+        // which wakes the host via the wakeup callback below.
+        for prop in [
+            "time-pos",
+            "duration",
+            "pause",
+            "paused-for-cache",
+            "idle-active",
+            "volume",
+            "mute",
+            "seekable",
+        ] {
+            session.observe_property(prop)?;
         }
+
+        // Wire the wakeup callback if the host registered an event emitter.
+        if let Some(emitter) = emitter {
+            let ctx = Box::new(WakeupCtx { emitter });
+            let ctx_ptr: *mut WakeupCtx = Box::into_raw(ctx);
+            // SAFETY: `ctx_ptr` outlives the handle — we store it back in
+            // `wakeup_ctx` as a `Box` that is dropped *after* we call
+            // `mpv_terminate_destroy` (see `Drop`). libmpv guarantees no more
+            // callbacks after `mpv_terminate_destroy` returns.
+            unsafe {
+                mpv_set_wakeup_callback(
+                    handle,
+                    Some(wakeup_trampoline),
+                    ctx_ptr.cast::<c_void>(),
+                );
+                session.wakeup_ctx = Some(Box::from_raw(ctx_ptr));
+            }
+        }
+
         let _ = session.set_property("force-media-title", &options.title);
         session.command(&["loadfile", &options.url, "replace"])?;
         Ok(session)
-    }
-
-    fn is_embedded(&self) -> bool {
-        self.render.is_some() || self.embed_wid.is_some()
     }
 
     fn require_token(&self, token: &str) -> Result<(), MpvError> {
@@ -435,10 +458,14 @@ impl MpvSession {
 
     fn drain_events(&mut self) {
         loop {
+            // SAFETY: `self.handle` is valid for the lifetime of `self`; a
+            // zero timeout makes `mpv_wait_event` non-blocking. The returned
+            // pointer is owned by libmpv and valid until the next call.
             let event = unsafe { mpv_wait_event(self.handle, 0.0) };
             if event.is_null() {
                 break;
             }
+            // SAFETY: see above — libmpv-owned, lives until our next call.
             let event = unsafe { &*event };
             match event.event_id {
                 MPV_EVENT_NONE => break,
@@ -447,6 +474,8 @@ impl MpvSession {
                     self.last_error = None;
                 }
                 MPV_EVENT_END_FILE if !event.data.is_null() => {
+                    // SAFETY: for an END_FILE event libmpv documents `data`
+                    // as a pointer to `mpv_event_end_file`.
                     let end = unsafe { &*(event.data as *const mpv_event_end_file) };
                     if end.reason == MPV_END_FILE_REASON_ERROR {
                         self.last_phase = MpvPlaybackPhase::Error;
@@ -464,9 +493,17 @@ impl MpvSession {
         }
     }
 
+    fn observe_property(&self, name: &str) -> Result<(), MpvError> {
+        let cname = CString::new(name).map_err(|_| MpvError::InvalidString)?;
+        // SAFETY: `self.handle` is valid; `cname` outlives the call.
+        let rc = unsafe { mpv_observe_property(self.handle, 0, cname.as_ptr(), MPV_FORMAT_NONE) };
+        self.check(rc)
+    }
+
     fn set_option(&self, name: &str, value: &str) -> Result<(), MpvError> {
         let name = CString::new(name).map_err(|_| MpvError::InvalidString)?;
         let value = CString::new(value).map_err(|_| MpvError::InvalidString)?;
+        // SAFETY: `self.handle` is valid; both CStrings outlive the call.
         let rc = unsafe { mpv_set_option_string(self.handle, name.as_ptr(), value.as_ptr()) };
         self.check(rc)
     }
@@ -474,6 +511,7 @@ impl MpvSession {
     fn set_property(&self, name: &str, value: &str) -> Result<(), MpvError> {
         let name = CString::new(name).map_err(|_| MpvError::InvalidString)?;
         let value = CString::new(value).map_err(|_| MpvError::InvalidString)?;
+        // SAFETY: `self.handle` is valid; both CStrings outlive the call.
         let rc = unsafe { mpv_set_property_string(self.handle, name.as_ptr(), value.as_ptr()) };
         self.check(rc)
     }
@@ -485,19 +523,26 @@ impl MpvSession {
             .collect::<Result<Vec<_>, _>>()?;
         let mut ptrs = cstrings.iter().map(|s| s.as_ptr()).collect::<Vec<_>>();
         ptrs.push(ptr::null());
+        // SAFETY: `self.handle` is valid; `ptrs` is a null-terminated array
+        // of pointers into `cstrings`, which outlives the call.
         let rc = unsafe { mpv_command(self.handle, ptrs.as_ptr()) };
         self.check(rc)
     }
 
     fn property_string(&self, name: &str) -> Option<String> {
         let name = CString::new(name).ok()?;
+        // SAFETY: `self.handle` is valid; `name` outlives the call. The
+        // returned pointer (if non-null) is libmpv-allocated and must be
+        // freed with `mpv_free`, which we do below.
         let raw = unsafe { mpv_get_property_string(self.handle, name.as_ptr()) };
         if raw.is_null() {
             return None;
         }
+        // SAFETY: `raw` is a valid, NUL-terminated string owned by libmpv.
         let value = unsafe { CStr::from_ptr(raw) }
             .to_string_lossy()
             .into_owned();
+        // SAFETY: `raw` was returned by libmpv; freeing returns the storage.
         unsafe { mpv_free(raw.cast::<c_void>()) };
         Some(value)
     }
@@ -528,37 +573,95 @@ impl MpvSession {
 
 impl Drop for MpvSession {
     fn drop(&mut self) {
-        if let Some(render) = self.render.take() {
-            drop(render);
-        }
+        tracing::debug!(token = %self.token, "MpvSession::drop begin");
+
+        // Unregister the wakeup callback FIRST. After this returns libmpv
+        // guarantees no further callback invocations, so it's safe to free
+        // the wakeup userdata Box later in this Drop.
         if !self.handle.is_null() {
-            unsafe { mpv_terminate_destroy(self.handle) };
+            // SAFETY: `self.handle` is non-null.
+            unsafe {
+                mpv_set_wakeup_callback(self.handle, None, ptr::null_mut());
+            }
+        }
+        tracing::debug!("MpvSession::drop wakeup callback cleared");
+
+        // Detach the render lifecycle handler. The host implementation must
+        // synchronously release any `mpv_render_context` it holds before
+        // returning — otherwise the upcoming `mpv_terminate_destroy` would
+        // race with the still-live render context.
+        self.handler.detach();
+        tracing::debug!("MpvSession::drop handler detached");
+
+        if !self.handle.is_null() {
+            // SAFETY: `self.handle` is non-null. `mpv_terminate_destroy`
+            // blocks until libmpv's internal threads exit.
+            unsafe {
+                mpv_terminate_destroy(self.handle);
+            }
             self.handle = ptr::null_mut();
         }
+        tracing::debug!("MpvSession::drop libmpv handle destroyed");
+
+        // Now safe to drop the wakeup userdata Box — no callback can still
+        // be in flight after `mpv_terminate_destroy` returns.
+        self.wakeup_ctx.take();
+        tracing::debug!(token = %self.token, "MpvSession::drop complete");
     }
 }
 
-struct MpvRenderSession {
-    ctx: *mut mpv_render_context,
-    stop: Arc<AtomicBool>,
-    wake: Arc<(Mutex<bool>, Condvar)>,
-    wake_raw: *const (Mutex<bool>, Condvar),
-    thread: Option<JoinHandle<()>>,
+// -- Wakeup callback ---------------------------------------------------------
+
+struct WakeupCtx {
+    emitter: Arc<dyn EventEmitter>,
 }
 
-unsafe impl Send for MpvRenderSession {}
+unsafe extern "C" fn wakeup_trampoline(ctx: *mut c_void) {
+    if ctx.is_null() {
+        return;
+    }
+    // SAFETY: `ctx` was set in `MpvSession::open` to a `Box::into_raw` of a
+    // `WakeupCtx`, and that Box is held alive in `MpvSession::wakeup_ctx`
+    // until after `mpv_terminate_destroy` returns. libmpv guarantees no
+    // wakeups happen after that point, so dereferencing here is sound.
+    let cb = unsafe { &*(ctx as *const WakeupCtx) };
+    cb.emitter.wake();
+}
 
-impl MpvRenderSession {
-    fn new(handle: *mut mpv_handle, surface: MpvRenderSurface) -> Result<Self, MpvError> {
-        if unsafe { !(surface.make_current)(surface.callback_ctx) } {
-            return Err(MpvError::RenderContext(
-                "OpenGL context could not be made current".to_string(),
-            ));
-        }
+// -- Render context ----------------------------------------------------------
 
+/// Wrapper around `mpv_render_context`. The embedding code (macOS
+/// `CAOpenGLLayer`) constructs one inside `copyCGLContextForPixelFormat:`
+/// (i.e. inside its GL thread, with the CGL context current) and calls
+/// [`render`] on each `drawInCGLContext:` invocation.
+///
+/// The render context is freed on Drop, which calls `mpv_render_context_free`.
+/// That call is safe to make from any thread but must happen *before* the
+/// corresponding `mpv_handle` is destroyed.
+///
+/// [`render`]: MpvRenderContext::render
+pub struct MpvRenderContext {
+    ctx: *mut mpv_render_context,
+}
+
+// SAFETY: libmpv documents `mpv_render_context_*` as thread-safe. The host is
+// responsible for making the right GL context current before calling `render`.
+unsafe impl Send for MpvRenderContext {}
+unsafe impl Sync for MpvRenderContext {}
+
+impl MpvRenderContext {
+    /// Create the render context against `handle`. `get_proc_address` is the
+    /// usual GL-loader callback; libmpv uses it to resolve GL entry points.
+    ///
+    /// Must be called with a GL context current on the calling thread.
+    pub fn new(
+        handle: MpvRawHandle,
+        get_proc_address_ctx: *mut c_void,
+        get_proc_address: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+    ) -> Result<Self, MpvError> {
         let mut init_params = mpv_opengl_init_params {
-            get_proc_address: Some(surface.get_proc_address),
-            get_proc_address_ctx: surface.get_proc_address_ctx as *mut c_void,
+            get_proc_address: Some(get_proc_address),
+            get_proc_address_ctx,
         };
         let api_type = CString::new(MPV_RENDER_API_TYPE_OPENGL)
             .map_err(|_| MpvError::RenderContext("invalid render API type".to_string()))?;
@@ -576,8 +679,13 @@ impl MpvRenderSession {
                 data: ptr::null_mut(),
             },
         ];
-        let mut ctx = ptr::null_mut();
-        let rc = unsafe { mpv_render_context_create(&mut ctx, handle, params.as_mut_ptr()) };
+        let mut ctx: *mut mpv_render_context = ptr::null_mut();
+        // SAFETY: `handle.as_ptr()` is a live mpv handle (invariant on
+        // `MpvRawHandle`'s API). `params` is fully initialized above and
+        // outlives the call; `init_params` likewise.
+        let rc = unsafe {
+            mpv_render_context_create(&mut ctx, handle.as_ptr(), params.as_mut_ptr())
+        };
         if rc < 0 {
             return Err(MpvError::RenderContext(mpv_error_to_string(rc)));
         }
@@ -586,230 +694,143 @@ impl MpvRenderSession {
                 "libmpv returned a null render context".to_string(),
             ));
         }
+        Ok(Self { ctx })
+    }
 
-        let stop = Arc::new(AtomicBool::new(false));
-        let wake = Arc::new((Mutex::new(false), Condvar::new()));
-        let wake_raw = Arc::into_raw(wake.clone());
+    /// Register a callback libmpv invokes when a new frame is ready to render.
+    /// The host should signal its GL surface to redraw (e.g. `setNeedsDisplay`
+    /// on the layer).
+    ///
+    /// `ctx` is opaque to libmpv — passed back to `callback` on each
+    /// invocation.
+    ///
+    /// # Safety
+    ///
+    /// `ctx` must remain valid (live, properly aligned, and unchanged in type)
+    /// until either this render context is dropped or this method is called
+    /// again with `None`.
+    pub unsafe fn set_update_callback(
+        &self,
+        callback: Option<unsafe extern "C" fn(*mut c_void)>,
+        ctx: *mut c_void,
+    ) {
+        // SAFETY: `self.ctx` is a valid render context owned by `self`. The
+        // caller's invariant ensures `ctx` outlives the callback.
+        unsafe { mpv_render_context_set_update_callback(self.ctx, callback, ctx) };
+    }
+
+    /// Render one frame into the bound framebuffer. Must be called with a GL
+    /// context current on the calling thread.
+    pub fn render(&self, fbo: i32, width: i32, height: i32, flip_y: bool) {
+        // SAFETY: `self.ctx` is valid; all params are fully populated below
+        // and outlive the call.
         unsafe {
-            mpv_render_context_set_update_callback(
-                ctx,
-                Some(render_update_callback),
-                wake_raw.cast::<c_void>().cast_mut(),
-            );
+            let update = mpv_render_context_update(self.ctx);
+            if update & MPV_RENDER_UPDATE_FRAME == 0 {
+                // No new frame — libmpv may still want a redraw of the last
+                // frame (e.g. for window-size changes), so render anyway.
+            }
+
+            let mut fbo = mpv_opengl_fbo {
+                fbo,
+                w: width,
+                h: height,
+                internal_format: 0,
+            };
+            let mut flip_y_c: c_int = if flip_y { 1 } else { 0 };
+            let mut params = [
+                mpv_render_param {
+                    param_type: MPV_RENDER_PARAM_OPENGL_FBO,
+                    data: (&mut fbo as *mut mpv_opengl_fbo).cast::<c_void>(),
+                },
+                mpv_render_param {
+                    param_type: MPV_RENDER_PARAM_FLIP_Y,
+                    data: (&mut flip_y_c as *mut c_int).cast::<c_void>(),
+                },
+                mpv_render_param {
+                    param_type: MPV_RENDER_PARAM_INVALID,
+                    data: ptr::null_mut(),
+                },
+            ];
+            let _ = mpv_render_context_render(self.ctx, params.as_mut_ptr());
         }
-
-        let thread_stop = stop.clone();
-        let thread_wake = wake.clone();
-        let thread_ctx = RenderContextPtr(ctx);
-        let thread = thread::spawn(move || {
-            render_loop(thread_ctx, surface, thread_stop, thread_wake);
-        });
-
-        Ok(Self {
-            ctx,
-            stop,
-            wake,
-            wake_raw,
-            thread: Some(thread),
-        })
     }
 }
 
-impl Drop for MpvRenderSession {
+impl Drop for MpvRenderContext {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        {
-            let (lock, cvar) = &*self.wake;
-            if let Ok(mut pending) = lock.lock() {
-                *pending = true;
-                cvar.notify_one();
-            }
-        }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
         if !self.ctx.is_null() {
+            // SAFETY: `self.ctx` is valid until dropped; libmpv's
+            // `mpv_render_context_free` is the documented teardown call.
             unsafe {
                 mpv_render_context_set_update_callback(self.ctx, None, ptr::null_mut());
                 mpv_render_context_free(self.ctx);
             }
             self.ctx = ptr::null_mut();
         }
-        if !self.wake_raw.is_null() {
-            unsafe {
-                drop(Arc::from_raw(self.wake_raw));
-            }
-            self.wake_raw = ptr::null();
-        }
     }
 }
 
-struct RenderContextPtr(*mut mpv_render_context);
-
-unsafe impl Send for RenderContextPtr {}
-
-unsafe extern "C" fn render_update_callback(callback_ctx: *mut c_void) {
-    if callback_ctx.is_null() {
-        return;
-    }
-    let wake = unsafe { &*(callback_ctx.cast::<(Mutex<bool>, Condvar)>()) };
-    let (lock, cvar) = wake;
-    if let Ok(mut pending) = lock.lock() {
-        *pending = true;
-        cvar.notify_one();
-    }
-}
-
-fn render_loop(
-    ctx: RenderContextPtr,
-    surface: MpvRenderSurface,
-    stop: Arc<AtomicBool>,
-    wake: Arc<(Mutex<bool>, Condvar)>,
-) {
-    while !stop.load(Ordering::SeqCst) {
-        let (lock, cvar) = &*wake;
-        if let Ok(mut pending) = lock.lock() {
-            if !*pending {
-                let (guard, _) = cvar
-                    .wait_timeout(pending, Duration::from_millis(16))
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                pending = guard;
-            }
-            *pending = false;
-        }
-        if stop.load(Ordering::SeqCst) {
-            break;
-        }
-        unsafe {
-            render_frame(ctx.0, surface);
-        }
-    }
-}
-
-unsafe fn render_frame(ctx: *mut mpv_render_context, surface: MpvRenderSurface) {
-    if ctx.is_null() || !(surface.make_current)(surface.callback_ctx) {
-        return;
-    }
-
-    let update = mpv_render_context_update(ctx);
-    if update & MPV_RENDER_UPDATE_FRAME == 0 {
-        return;
-    }
-
-    let mut width = 0;
-    let mut height = 0;
-    if !(surface.size)(surface.callback_ctx, &mut width, &mut height) {
-        return;
-    }
-    if width <= 0 || height <= 0 {
-        return;
-    }
-
-    let mut fbo = mpv_opengl_fbo {
-        fbo: 0,
-        w: width,
-        h: height,
-        internal_format: 0,
-    };
-    let mut flip_y: c_int = 1;
-    let mut params = [
-        mpv_render_param {
-            param_type: MPV_RENDER_PARAM_OPENGL_FBO,
-            data: (&mut fbo as *mut mpv_opengl_fbo).cast::<c_void>(),
-        },
-        mpv_render_param {
-            param_type: MPV_RENDER_PARAM_FLIP_Y,
-            data: (&mut flip_y as *mut c_int).cast::<c_void>(),
-        },
-        mpv_render_param {
-            param_type: MPV_RENDER_PARAM_INVALID,
-            data: ptr::null_mut(),
-        },
-    ];
-    let _ = mpv_render_context_render(ctx, params.as_mut_ptr());
-    (surface.flush)(surface.callback_ctx);
-}
+// -- Error helper ------------------------------------------------------------
 
 fn mpv_error_to_string(error: c_int) -> String {
+    // SAFETY: `mpv_error_string` returns a static C string or null.
     let raw = unsafe { mpv_error_string(error) };
     if raw.is_null() {
         return format!("unknown libmpv error {error}");
     }
+    // SAFETY: `raw` is a libmpv-owned, NUL-terminated static string.
     unsafe { CStr::from_ptr(raw) }
         .to_string_lossy()
         .into_owned()
 }
 
+// -- Tests -------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    #[test]
-    fn embedded_required_rejects_missing_surface() {
-        let result = resolve_window_target(None, None, None, true);
-
-        assert!(matches!(result, Err(MpvError::EmbedSurfaceUnavailable)));
+    struct StubHandler {
+        attached: AtomicBool,
     }
 
-    #[test]
-    fn embedded_required_uses_registered_surface() {
-        let result = resolve_window_target(None, None, Some(42), true);
-
-        assert!(matches!(result.unwrap(), MpvWindowTarget::Embedded(42)));
-    }
-
-    #[test]
-    fn render_api_wins_over_window_ids() {
-        let result = resolve_window_target(Some(test_surface()), Some(7), Some(42), true);
-
-        assert!(matches!(result.unwrap(), MpvWindowTarget::RenderApi(_)));
-    }
-
-    #[test]
-    fn explicit_surface_wins_over_registered_surface() {
-        let result = resolve_window_target(None, Some(7), Some(42), true);
-
-        assert!(matches!(result.unwrap(), MpvWindowTarget::Embedded(7)));
-    }
-
-    #[test]
-    fn external_window_allowed_only_when_embedding_not_required() {
-        let result = resolve_window_target(None, None, None, false);
-
-        assert!(matches!(result.unwrap(), MpvWindowTarget::ExternalWindow));
-    }
-
-    fn test_surface() -> MpvRenderSurface {
-        MpvRenderSurface {
-            callback_ctx: 0,
-            make_current: test_make_current,
-            flush: test_flush,
-            size: test_size,
-            get_proc_address_ctx: 0,
-            get_proc_address: test_get_proc_address,
+    impl RenderLifecycleHandler for StubHandler {
+        fn attach(&self, _handle: MpvRawHandle) -> Result<(), String> {
+            self.attached.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        fn detach(&self) {
+            self.attached.store(false, Ordering::SeqCst);
         }
     }
 
-    unsafe extern "C" fn test_make_current(_: usize) -> bool {
-        true
+    #[test]
+    fn open_without_handler_returns_no_render_handler() {
+        let engine = MpvEngine::new();
+        let result = engine.open(MpvOpenOptions {
+            url: "http://example.invalid/x".to_string(),
+            title: "x".to_string(),
+            user_agent: None,
+        });
+        assert!(matches!(result, Err(MpvError::NoRenderHandler)));
     }
 
-    unsafe extern "C" fn test_flush(_: usize) {}
-
-    unsafe extern "C" fn test_size(_: usize, width: *mut c_int, height: *mut c_int) -> bool {
-        if !width.is_null() {
-            unsafe { *width = 1 };
-        }
-        if !height.is_null() {
-            unsafe { *height = 1 };
-        }
-        true
-    }
-
-    unsafe extern "C" fn test_get_proc_address(_: *mut c_void, _: *const c_char) -> *mut c_void {
-        ptr::null_mut()
+    #[test]
+    fn engine_accepts_handler_registration() {
+        let engine = MpvEngine::new();
+        let handler = Arc::new(StubHandler {
+            attached: AtomicBool::new(false),
+        });
+        engine.set_render_handler(handler.clone()).unwrap();
+        // We don't actually open here — `mpv_create` requires libmpv to be
+        // linked. The registration itself shouldn't error.
+        assert!(!handler.attached.load(Ordering::SeqCst));
     }
 }
+
+// -- FFI ---------------------------------------------------------------------
 
 #[allow(non_camel_case_types)]
 enum mpv_handle {}
@@ -863,6 +884,8 @@ const MPV_EVENT_PLAYBACK_RESTART: c_int = 21;
 const MPV_END_FILE_REASON_EOF: c_int = 0;
 const MPV_END_FILE_REASON_ERROR: c_int = 4;
 
+const MPV_FORMAT_NONE: c_int = 0;
+
 const MPV_RENDER_API_TYPE_OPENGL: &str = "opengl";
 const MPV_RENDER_PARAM_INVALID: c_int = 0;
 const MPV_RENDER_PARAM_API_TYPE: c_int = 1;
@@ -890,6 +913,17 @@ unsafe extern "C" {
     fn mpv_wait_event(ctx: *mut mpv_handle, timeout: c_double) -> *mut mpv_event;
     fn mpv_error_string(error: c_int) -> *const c_char;
     fn mpv_free(data: *mut c_void);
+    fn mpv_observe_property(
+        ctx: *mut mpv_handle,
+        reply_userdata: u64,
+        name: *const c_char,
+        format: c_int,
+    ) -> c_int;
+    fn mpv_set_wakeup_callback(
+        ctx: *mut mpv_handle,
+        callback: Option<unsafe extern "C" fn(*mut c_void)>,
+        ctx_data: *mut c_void,
+    );
     fn mpv_render_context_create(
         res: *mut *mut mpv_render_context,
         mpv: *mut mpv_handle,

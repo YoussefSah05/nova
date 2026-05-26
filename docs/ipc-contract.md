@@ -82,6 +82,7 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | `live:caption:translated` | `{ channel_id: number, target_lang: string, cue: VttCue }` | 10 |
 | `jobs:queue:changed` | `{ jobs: JobSummary[] }` | 2 |
 | `epg:refresh:progress` | `{ source_id: number, pct: number }` | 4 |
+| `mpv:state` | `MpvPlayerState` | 5 |
 
 ## Playback (Phase 5)
 
@@ -89,14 +90,13 @@ Nova now defaults to the native `libmpv` engine for viewing. The Rust backend
 looks the upstream URL up from the profile DB and opens it in libmpv; React owns
 controls, watch history, and the caption overlay. The older WebKit/hls.js
 `resolve_stream` path remains as a fallback and for proxy/transcription work.
-On macOS, Nova installs a native OpenGL player surface beneath the Tauri webview
-and drives it through libmpv's render API (`vo=libmpv`). Playback renders into
-Nova's app window instead of a detached mpv window, while React remains
-responsible for controls and overlays. Native playback requires this render
-surface; if it is unavailable, `mpv_open_stream` returns an in-app error instead
-of opening a standalone mpv window. The older `wid` path remains inside the Rust
-wrapper only as a lower-priority fallback for platforms that can provide a
-reliable embedded native window.
+On macOS, Nova installs a `CAOpenGLLayer` subclass as a sublayer of the
+WKWebView's own layer tree and drives it through libmpv's render API
+(`vo=libmpv`). Because the layer lives inside the webview's layer tree, AppKit
+handles z-order, live resize, fullscreen, and PiP transitions natively — no
+sibling-view layout fight. Native playback requires this render surface; if it
+is unavailable, `mpv_open_stream` returns an in-app error instead of opening a
+standalone mpv window.
 
 ```ts
 type PlaybackKind = "hls" | "file";
@@ -157,7 +157,10 @@ type ResolvedStream = {
 Player flow:
 
 1. `invoke("mpv_open_stream", { profileId, mediaKind, mediaId, title })` opens native playback.
-2. Poll `mpv_player_state` for time, duration, volume, mute, and phase.
+2. Subscribe to `mpv:state` events for time, duration, volume, mute, and phase updates. The
+   backend emits these whenever libmpv signals new events (driven by a wakeup callback). Call
+   `mpv_player_state` once on mount for the initial snapshot, and keep a long-interval (~2.5s)
+   poll as a fallback in case an event is dropped.
 3. Use `mpv_*` control commands for play/pause, seeking, volume, mute, and live edge.
 4. Every 5s while playing, `invoke("record_watch_progress", { ..., captionMode: "off" })`.
 5. On modal close / unmount: `invoke("mpv_close", { token })`.

@@ -49,9 +49,6 @@ pub async fn mpv_open_stream(
             url: resolved.upstream_url,
             title,
             user_agent: Some("Mozilla/5.0 (compatible; nova-iptv/1.0)".to_string()),
-            embed_wid: None,
-            embedded_required: true,
-            render_surface_required: true,
         })
         .map_err(|e| ApiError::Internal(format!("native player failed: {e}")))
 }

@@ -8,6 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import Hls, { type ErrorData } from "hls.js";
 import {
   Maximize,
@@ -264,49 +265,72 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     if (!USE_MPV_ENGINE || !nativeToken) return;
 
     let cancelled = false;
-    const syncState = async () => {
+
+    const applyState = (state: NativePlayerState) => {
+      if (cancelled) return;
+      // The emitter on the Rust side fires on every libmpv wakeup; events
+      // sometimes arrive for a stale token between sessions. Ignore those.
+      if (state.token && state.token !== nativeToken) return;
+
+      setCurrentTime(state.positionSec);
+      setDuration(state.durationSec ?? 0);
+      setVolume(state.volume);
+      setMuted(state.muted);
+
+      if (state.phase === "error") {
+        setReady(false);
+        setBuffering(false);
+        setPlaying(false);
+        setError(state.error ?? "Native playback failed.");
+        return;
+      }
+
+      setError(null);
+      setPlaying(state.phase === "playing" || state.phase === "buffering");
+      setReady(state.phase === "playing" || state.phase === "paused" || state.phase === "ended");
+      setBuffering(state.phase === "opening" || state.phase === "buffering");
+
+      if (state.phase === "opening") {
+        setLoadingPhase("resolving");
+        setLoadingProgress((p) => Math.max(p, 28));
+      } else if (state.phase === "buffering") {
+        setLoadingPhase("buffering");
+        setLoadingProgress((p) => Math.min(Math.max(p, 68), 88));
+      } else {
+        setLoadingPhase("ready");
+        setLoadingProgress(100);
+      }
+    };
+
+    const snapshot = async () => {
       try {
         const state = await invoke<NativePlayerState>("mpv_player_state", { token: nativeToken });
-        if (cancelled) return;
-
-        setCurrentTime(state.positionSec);
-        setDuration(state.durationSec ?? 0);
-        setVolume(state.volume);
-        setMuted(state.muted);
-
-        if (state.phase === "error") {
-          setReady(false);
-          setBuffering(false);
-          setPlaying(false);
-          setError(state.error ?? "Native playback failed.");
-          return;
-        }
-
-        setError(null);
-        setPlaying(state.phase === "playing" || state.phase === "buffering");
-        setReady(state.phase === "playing" || state.phase === "paused" || state.phase === "ended");
-        setBuffering(state.phase === "opening" || state.phase === "buffering");
-
-        if (state.phase === "opening") {
-          setLoadingPhase("resolving");
-          setLoadingProgress((p) => Math.max(p, 28));
-        } else if (state.phase === "buffering") {
-          setLoadingPhase("buffering");
-          setLoadingProgress((p) => Math.min(Math.max(p, 68), 88));
-        } else {
-          setLoadingPhase("ready");
-          setLoadingProgress(100);
-        }
+        applyState(state);
       } catch (e) {
         if (!cancelled) setError(errorMessage(e));
       }
     };
 
-    void syncState();
-    const interval = window.setInterval(syncState, 500);
+    // Initial snapshot so the UI has correct state immediately after open.
+    void snapshot();
+
+    // Event-driven updates from the libmpv wakeup callback — replaces the
+    // 500ms poll. The Rust side emits `mpv:state` whenever libmpv signals
+    // new events.
+    const unlistenPromise = listen<NativePlayerState>("mpv:state", (event) => {
+      applyState(event.payload);
+    });
+
+    // Fallback heartbeat (long interval) in case an event is ever dropped.
+    // Pure insurance — the event path is the primary signal now.
+    const heartbeat = window.setInterval(() => {
+      void snapshot();
+    }, 2500);
+
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      window.clearInterval(heartbeat);
+      void unlistenPromise.then((unlisten) => unlisten());
     };
   }, [nativeToken]);
 

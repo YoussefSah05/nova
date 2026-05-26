@@ -1,10 +1,16 @@
 pub mod commands;
 pub mod ipc;
+#[cfg(target_os = "macos")]
+pub mod mpv_layer;
+#[cfg(target_os = "macos")]
 pub mod native_player_view;
 pub mod state;
 
+use std::sync::Arc;
+
+use nova_mpv_player::{EventEmitter, MpvEngine};
 use nova_storage::init_app_db;
-use tauri::Manager;
+use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -39,9 +45,17 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(state::AppState::new(pool, proxy_port, proxy_sessions))
         .setup(|app| {
+            let engine = app.state::<state::AppState>().mpv_engine.clone();
+
+            // Wire the wakeup callback → "mpv:state" Tauri event. The
+            // frontend `PlayerModal` listens for this instead of polling.
+            let emitter = AppEventEmitter::new(app.handle().clone(), engine.clone());
+            if let Err(e) = engine.set_event_emitter(Arc::new(emitter)) {
+                tracing::warn!(error = %e, "failed to register mpv event emitter");
+            }
+
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
-                let engine = app.state::<state::AppState>().mpv_engine.clone();
                 native_player_view::install_mpv_render_view(&window, engine)?;
             }
             Ok(())
@@ -97,4 +111,41 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nova");
+}
+
+/// libmpv wakeup callback adapter. Fires on libmpv's internal thread, so we
+/// schedule the actual state snapshot + event emission onto the Tauri async
+/// runtime to avoid blocking the wakeup thread.
+struct AppEventEmitter {
+    app: AppHandle,
+    engine: Arc<MpvEngine>,
+}
+
+impl AppEventEmitter {
+    fn new(app: AppHandle, engine: Arc<MpvEngine>) -> Self {
+        Self { app, engine }
+    }
+}
+
+impl EventEmitter for AppEventEmitter {
+    fn wake(&self) {
+        let app = self.app.clone();
+        let engine = self.engine.clone();
+        // The wakeup callback must return immediately. Snapshot + emit on a
+        // background tokio task. We accept that a flurry of wakeups produces
+        // a flurry of events — Tauri's IPC channel coalesces sensibly and
+        // the frontend's React state setters are idempotent.
+        tauri::async_runtime::spawn(async move {
+            match engine.state(None) {
+                Ok(state) => {
+                    if let Err(e) = app.emit("mpv:state", state) {
+                        tracing::debug!(error = %e, "failed to emit mpv:state");
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "failed to snapshot mpv state");
+                }
+            }
+        });
+    }
 }
