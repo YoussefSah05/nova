@@ -371,11 +371,15 @@ export function PlayerModal({
     };
 
     const snapshot = async () => {
+      // The heartbeat snapshot is only a fallback for the `mpv:state` event
+      // stream. A transient failure here (e.g. a poll racing a content switch)
+      // must NOT blank the player — real playback errors arrive via the event
+      // stream as `phase === "error"`. Ignore failures.
       try {
         const state = await invoke<NativePlayerState>("mpv_player_state", { token: nativeToken });
         applyState(state);
-      } catch (e) {
-        if (!cancelled) setError(errorMessage(e));
+      } catch {
+        /* non-fatal: event stream is the source of truth for errors */
       }
     };
 

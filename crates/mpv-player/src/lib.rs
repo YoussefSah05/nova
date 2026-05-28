@@ -260,7 +260,13 @@ impl MpvEngine {
         Ok(())
     }
 
-    pub fn state(self: &Arc<Self>, token: Option<&str>) -> Result<MpvPlayerState, MpvError> {
+    /// Snapshot the current session's state. `token` is ignored for matching:
+    /// a state *read* should never fail just because the caller is still using
+    /// the previous load's token (e.g. a stale heartbeat fired mid-switch). The
+    /// returned `MpvPlayerState.token` carries the live token so the caller can
+    /// decide whether the snapshot is relevant. Control commands still enforce
+    /// the token via [`active_session`].
+    pub fn state(self: &Arc<Self>, _token: Option<&str>) -> Result<MpvPlayerState, MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         let Some(session) = guard.as_mut() else {
             return Ok(MpvPlayerState {
@@ -280,9 +286,6 @@ impl MpvEngine {
                 error: None,
             });
         };
-        if let Some(token) = token {
-            session.require_token(token)?;
-        }
         session.state()
     }
 
