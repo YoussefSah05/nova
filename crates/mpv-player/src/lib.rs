@@ -22,7 +22,7 @@ use std::ptr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -69,6 +69,17 @@ pub enum MpvPlaybackPhase {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MpvTrack {
+    pub id: i64,
+    /// "audio" | "video" | "sub"
+    pub kind: String,
+    pub title: Option<String>,
+    pub lang: Option<String>,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MpvPlayerState {
     pub token: Option<String>,
     pub engine: String,
@@ -78,6 +89,11 @@ pub struct MpvPlayerState {
     pub volume: f64,
     pub muted: bool,
     pub seekable: bool,
+    pub speed: f64,
+    pub audio_track_id: Option<i64>,
+    pub sub_track_id: Option<i64>,
+    pub video_track_id: Option<i64>,
+    pub tracks: Vec<MpvTrack>,
     pub error: Option<String>,
 }
 
@@ -86,6 +102,18 @@ pub struct MpvOpenOptions {
     pub url: String,
     pub title: String,
     pub user_agent: Option<String>,
+}
+
+/// Target rectangle for the video surface, in CSS pixels relative to the
+/// window's top-left. Used by cinema mode to shrink the video into a sub-region
+/// (the host converts to its own layer coordinate space). `None` = fill.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 /// Opaque, `Copy` newtype around a raw `*mut mpv_handle`. Crossing the API
@@ -126,6 +154,15 @@ pub trait RenderLifecycleHandler: Send + Sync {
     /// Detach and free the render context. Must complete before the function
     /// returns — the engine destroys the handle immediately afterwards.
     fn detach(&self);
+
+    /// Ask the host to repaint the video surface. Used after a window resize /
+    /// fullscreen toggle so a paused frame follows the new bounds. No-op by
+    /// default for hosts that don't need it.
+    fn request_redraw(&self) {}
+
+    /// Constrain the video surface to `rect` (CSS px, window-relative), or
+    /// `None` to fill the window. Used by cinema mode. No-op by default.
+    fn set_video_rect(&self, _rect: Option<VideoRect>) {}
 }
 
 /// Implemented by the host to receive a notification whenever libmpv signals
@@ -185,8 +222,19 @@ impl MpvEngine {
             .clone();
 
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
-        if let Some(prev) = guard.take() {
-            drop(prev);
+
+        // Reuse the live session for content switches: keep the same libmpv
+        // handle and attached render context, and swap files with `loadfile
+        // replace`. This avoids the destroy/re-attach churn (and stale-frame
+        // bleed) that a full teardown-per-switch caused; libmpv flushes the
+        // previous file's demuxer/cache and loads the new one cleanly.
+        if let Some(session) = guard.as_mut() {
+            let token = session.load(&options.url, &options.title)?;
+            return Ok(MpvOpenResult {
+                token,
+                engine: "mpv".to_string(),
+                embedded: true,
+            });
         }
 
         let session = MpvSession::open(options, handler, emitter)?;
@@ -224,6 +272,11 @@ impl MpvEngine {
                 volume: 1.0,
                 muted: false,
                 seekable: false,
+                speed: 1.0,
+                audio_track_id: None,
+                sub_track_id: None,
+                video_track_id: None,
+                tracks: Vec::new(),
                 error: None,
             });
         };
@@ -274,6 +327,51 @@ impl MpvEngine {
     pub fn set_mute(self: &Arc<Self>, token: &str, muted: bool) -> Result<(), MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
         active_session(&mut guard, token)?.set_property("mute", if muted { "yes" } else { "no" })
+    }
+
+    pub fn set_audio_track(self: &Arc<Self>, token: &str, id: &str) -> Result<(), MpvError> {
+        let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
+        active_session(&mut guard, token)?.set_property("aid", id)
+    }
+
+    pub fn set_subtitle_track(self: &Arc<Self>, token: &str, id: &str) -> Result<(), MpvError> {
+        let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
+        active_session(&mut guard, token)?.set_property("sid", id)
+    }
+
+    pub fn set_video_track(self: &Arc<Self>, token: &str, id: &str) -> Result<(), MpvError> {
+        let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
+        active_session(&mut guard, token)?.set_property("vid", id)
+    }
+
+    pub fn set_speed(self: &Arc<Self>, token: &str, speed: f64) -> Result<(), MpvError> {
+        let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
+        let clamped = speed.clamp(0.25, 4.0);
+        active_session(&mut guard, token)?.set_property("speed", &format!("{clamped}"))
+    }
+
+    pub fn frame_step(self: &Arc<Self>, token: &str, forward: bool) -> Result<(), MpvError> {
+        let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
+        let cmd = if forward { "frame-step" } else { "frame-back-step" };
+        active_session(&mut guard, token)?.command(&[cmd])
+    }
+
+    /// Ask the render host to repaint (e.g. after a window resize/fullscreen
+    /// toggle). No-op if no handler is registered.
+    pub fn request_redraw(self: &Arc<Self>) -> Result<(), MpvError> {
+        if let Some(handler) = self.render_handler.lock().map_err(|_| MpvError::Poisoned)?.as_ref() {
+            handler.request_redraw();
+        }
+        Ok(())
+    }
+
+    /// Constrain the video surface to `rect` (CSS px, window-relative), or
+    /// `None` to fill the window. No-op if no handler is registered.
+    pub fn set_video_rect(self: &Arc<Self>, rect: Option<VideoRect>) -> Result<(), MpvError> {
+        if let Some(handler) = self.render_handler.lock().map_err(|_| MpvError::Poisoned)?.as_ref() {
+            handler.set_video_rect(rect);
+        }
+        Ok(())
     }
 }
 
@@ -375,6 +473,11 @@ impl MpvSession {
             "volume",
             "mute",
             "seekable",
+            "speed",
+            "aid",
+            "sid",
+            "vid",
+            "track-list",
         ] {
             session.observe_property(prop)?;
         }
@@ -402,6 +505,21 @@ impl MpvSession {
         Ok(session)
     }
 
+    /// Swap the playing file on the live session without tearing down the
+    /// libmpv handle or render context. Mints a fresh token so the frontend
+    /// drops any `mpv:state` still draining from the previous file, and resets
+    /// the per-file phase tracking so the new load reports `Opening` first.
+    fn load(&mut self, url: &str, title: &str) -> Result<String, MpvError> {
+        let token = Uuid::new_v4().to_string();
+        self.token = token.clone();
+        self.last_phase = MpvPlaybackPhase::Opening;
+        self.last_error = None;
+        self.opened_at = Instant::now();
+        let _ = self.set_property("force-media-title", title);
+        self.command(&["loadfile", url, "replace"])?;
+        Ok(token)
+    }
+
     fn require_token(&self, token: &str) -> Result<(), MpvError> {
         if self.token == token {
             Ok(())
@@ -427,6 +545,11 @@ impl MpvSession {
         let paused_for_cache = self.property_bool("paused-for-cache").unwrap_or(false);
         let idle = self.property_bool("idle-active").unwrap_or(false);
         let seekable = self.property_bool("seekable").unwrap_or(duration.is_some());
+        let speed = self.property_f64("speed").unwrap_or(1.0);
+        let audio_track_id = self.property_track_id("aid");
+        let sub_track_id = self.property_track_id("sid");
+        let video_track_id = self.property_track_id("vid");
+        let tracks = self.track_list();
 
         let phase = if self.last_error.is_some() {
             MpvPlaybackPhase::Error
@@ -452,8 +575,55 @@ impl MpvSession {
             volume,
             muted,
             seekable,
+            speed,
+            audio_track_id,
+            sub_track_id,
+            video_track_id,
+            tracks,
             error: self.last_error.clone(),
         })
+    }
+
+    /// Read a track-selection property (`aid`/`sid`/`vid`). libmpv returns the
+    /// selected track number, or `"no"`/`"auto"` when nothing is selected.
+    fn property_track_id(&self, name: &str) -> Option<i64> {
+        self.property_string(name)
+            .and_then(|value| value.parse::<i64>().ok())
+    }
+
+    /// Build the current track list from libmpv's `track-list` sub-properties.
+    /// Reading scalar sub-properties avoids parsing the JSON blob and matches
+    /// the existing string-property helpers.
+    fn track_list(&self) -> Vec<MpvTrack> {
+        let count = self
+            .property_string("track-list/count")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut tracks = Vec::with_capacity(count);
+        for i in 0..count {
+            let Some(id) = self
+                .property_string(&format!("track-list/{i}/id"))
+                .and_then(|v| v.parse::<i64>().ok())
+            else {
+                continue;
+            };
+            let kind = self
+                .property_string(&format!("track-list/{i}/type"))
+                .unwrap_or_else(|| "unknown".to_string());
+            let title = self.property_string(&format!("track-list/{i}/title"));
+            let lang = self.property_string(&format!("track-list/{i}/lang"));
+            let selected = self
+                .property_bool(&format!("track-list/{i}/selected"))
+                .unwrap_or(false);
+            tracks.push(MpvTrack {
+                id,
+                kind,
+                title,
+                lang,
+                selected,
+            });
+        }
+        tracks
     }
 
     fn drain_events(&mut self) {

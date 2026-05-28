@@ -106,6 +106,13 @@ pub fn run() {
             commands::playback::mpv_seek_live_edge,
             commands::playback::mpv_set_volume,
             commands::playback::mpv_set_mute,
+            commands::playback::mpv_set_audio_track,
+            commands::playback::mpv_set_subtitle_track,
+            commands::playback::mpv_set_video_track,
+            commands::playback::mpv_set_speed,
+            commands::playback::mpv_frame_step,
+            commands::playback::mpv_request_redraw,
+            commands::playback::mpv_set_video_rect,
             commands::playback::record_watch_progress,
             commands::playback::get_resume_position,
         ])

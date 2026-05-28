@@ -29,12 +29,12 @@ use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nova_mpv_player::{MpvRawHandle, MpvRenderContext, RenderLifecycleHandler};
+use nova_mpv_player::{MpvRawHandle, MpvRenderContext, RenderLifecycleHandler, VideoRect};
 
 use objc2::rc::Retained;
 use objc2::runtime::Bool;
 use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
-use objc2_foundation::NSRect;
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use objc2_quartz_core::{CAOpenGLLayer, CALayer};
 
 // -- libdispatch FFI ---------------------------------------------------------
@@ -106,6 +106,22 @@ fn current_framebuffer(opengl_lib: *mut c_void) -> i32 {
     fbo
 }
 
+/// Convert a CSS-pixel rect (window-relative, y-down from the top-left) into a
+/// frame in the superlayer's coordinate space. CSS px map 1:1 to layer points.
+/// When the superlayer's geometry is not flipped (origin bottom-left), the
+/// y-axis must be inverted against the parent height.
+fn css_rect_to_layer_frame(rect: VideoRect, parent: NSRect, flipped: bool) -> NSRect {
+    let origin_y = if flipped {
+        rect.y
+    } else {
+        parent.size.height - rect.y - rect.height
+    };
+    NSRect::new(
+        NSPoint::new(rect.x, origin_y),
+        NSSize::new(rect.width, rect.height),
+    )
+}
+
 // -- Layer ivars -------------------------------------------------------------
 
 pub struct MpvLayerIvars {
@@ -123,6 +139,9 @@ struct MpvLayerInner {
     render_ctx: Option<MpvRenderContext>,
     /// `Some` after a failed lazy attach; surfaced to logs only.
     attach_error: Option<String>,
+    /// Cinema mode: constrain the video to this CSS-px (window-relative) rect.
+    /// `None` = fill the superlayer. Applied each draw so it tracks resizes.
+    target_rect: Option<VideoRect>,
 }
 
 impl MpvLayerIvars {
@@ -132,6 +151,7 @@ impl MpvLayerIvars {
                 pending_handle: None,
                 render_ctx: None,
                 attach_error: None,
+                target_rect: None,
             }),
             opengl_lib: AtomicPtr::new(ptr::null_mut()),
         }
@@ -211,23 +231,6 @@ impl MpvLayer {
     }
 
     fn draw_mpv_frame(&self) {
-        // Pin the layer to its superlayer's bounds. CALayer has no built-in
-        // autoresize for sublayers without a `layoutManager`, so the frame
-        // we set at install time (often 0×0 before the window has laid out)
-        // never grows. Sync each draw — cheap, and CA's no-op when bounds
-        // match.
-        let parent_bounds_opt = self.superlayer().map(|p| p.bounds());
-        if let Some(parent_bounds) = parent_bounds_opt {
-            let my_frame = self.frame();
-            if (parent_bounds.size.width - my_frame.size.width).abs() > 0.5
-                || (parent_bounds.size.height - my_frame.size.height).abs() > 0.5
-                || (parent_bounds.origin.x - my_frame.origin.x).abs() > 0.5
-                || (parent_bounds.origin.y - my_frame.origin.y).abs() > 0.5
-            {
-                self.setFrame(parent_bounds);
-            }
-        }
-
         // CGL is current on this thread because CoreAnimation called us
         // inside `drawInCGLContext:`. That's a hard requirement for both
         // `mpv_render_context_create` and `mpv_render_context_render`.
@@ -235,6 +238,33 @@ impl MpvLayer {
             Ok(g) => g,
             Err(_) => return,
         };
+
+        // Pin the layer to the desired frame. CALayer has no built-in
+        // autoresize for sublayers without a `layoutManager`, so the frame we
+        // set at install time (often 0×0 before the window has laid out) never
+        // grows. Sync each draw — cheap, and CA no-ops when bounds match. In
+        // cinema mode `target_rect` constrains the video to a sub-region; else
+        // we fill the superlayer.
+        if let Some(parent) = self.superlayer() {
+            let parent_bounds = parent.bounds();
+            let desired = match inner.target_rect {
+                Some(rect) => {
+                    // SAFETY: `parent` is a live CALayer; `isGeometryFlipped`
+                    // is a standard CALayer accessor returning a BOOL.
+                    let flipped: Bool = unsafe { msg_send![&*parent, isGeometryFlipped] };
+                    css_rect_to_layer_frame(rect, parent_bounds, flipped.as_bool())
+                }
+                None => parent_bounds,
+            };
+            let my_frame = self.frame();
+            if (desired.size.width - my_frame.size.width).abs() > 0.5
+                || (desired.size.height - my_frame.size.height).abs() > 0.5
+                || (desired.origin.x - my_frame.origin.x).abs() > 0.5
+                || (desired.origin.y - my_frame.origin.y).abs() > 0.5
+            {
+                self.setFrame(desired);
+            }
+        }
 
         // Lazy attach: turn the pending handle into a render context now
         // that GL is current. On failure we drop the handle and stash the
@@ -398,6 +428,19 @@ impl RenderLifecycleHandler for MpvLayerHandler {
                 drop_render_ctx_on_main,
             );
         }
+    }
+
+    fn request_redraw(&self) {
+        request_redraw_main(&self.layer);
+    }
+
+    fn set_video_rect(&self, rect: Option<VideoRect>) {
+        if let Ok(mut inner) = self.layer.ivars().inner.lock() {
+            inner.target_rect = rect;
+        }
+        // Repaint so the new frame applies immediately (also covers the paused
+        // case where libmpv wouldn't otherwise produce a frame).
+        request_redraw_main(&self.layer);
     }
 }
 

@@ -136,6 +136,85 @@ pub async fn mpv_set_mute(
         .map_err(|e| ApiError::Internal(format!("native player mute failed: {e}")))
 }
 
+#[tauri::command]
+pub async fn mpv_set_audio_track(
+    token: String,
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .set_audio_track(&token, &id)
+        .map_err(|e| ApiError::Internal(format!("native player audio track failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_set_subtitle_track(
+    token: String,
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .set_subtitle_track(&token, &id)
+        .map_err(|e| ApiError::Internal(format!("native player subtitle track failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_set_video_track(
+    token: String,
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .set_video_track(&token, &id)
+        .map_err(|e| ApiError::Internal(format!("native player video track failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_set_speed(
+    token: String,
+    speed: f64,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .set_speed(&token, speed)
+        .map_err(|e| ApiError::Internal(format!("native player speed failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_frame_step(
+    token: String,
+    forward: bool,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .frame_step(&token, forward)
+        .map_err(|e| ApiError::Internal(format!("native player frame step failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_request_redraw(state: State<'_, AppState>) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .request_redraw()
+        .map_err(|e| ApiError::Internal(format!("native player redraw failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn mpv_set_video_rect(
+    rect: Option<nova_mpv_player::VideoRect>,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .mpv_engine
+        .set_video_rect(rect)
+        .map_err(|e| ApiError::Internal(format!("native player video rect failed: {e}")))
+}
+
 /// Response from [`resolve_stream`]. `kind` tells the player whether to
 /// attach hls.js (`"hls"`) or use the native `<video>` element (`"file"`).
 #[derive(Debug, Clone, Serialize)]

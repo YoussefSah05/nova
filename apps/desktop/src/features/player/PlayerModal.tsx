@@ -9,9 +9,14 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import Hls, { type ErrorData } from "hls.js";
 import {
+  AudioLines,
+  Clapperboard,
+  Gauge,
   Maximize,
+  MonitorCog,
   Minimize,
   Pause,
   PictureInPicture,
@@ -26,6 +31,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import type { Channel } from "@/types";
 
 import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
 import { CaptionButton } from "./CaptionPicker";
@@ -46,6 +52,10 @@ interface PlayerModalProps {
   profileId: string;
   media: PlayMedia;
   onClose: () => void;
+  /// Active source — enables the cinema-mode live channel strip.
+  sourceId?: number | null;
+  /// Switch the player to other media (used by the cinema live channel strip).
+  onPlayMedia?: (media: PlayMedia) => void;
 }
 
 interface ResumeInfo {
@@ -84,6 +94,14 @@ interface NativeOpenResult {
 
 type NativePlayerPhase = "opening" | "buffering" | "playing" | "paused" | "ended" | "error";
 
+interface NativeTrack {
+  id: number;
+  kind: "audio" | "video" | "sub" | string;
+  title: string | null;
+  lang: string | null;
+  selected: boolean;
+}
+
 interface NativePlayerState {
   token: string | null;
   engine: "mpv";
@@ -93,6 +111,11 @@ interface NativePlayerState {
   volume: number;
   muted: boolean;
   seekable: boolean;
+  speed: number;
+  audioTrackId: number | null;
+  subTrackId: number | null;
+  videoTrackId: number | null;
+  tracks: NativeTrack[];
   error: string | null;
 }
 
@@ -117,6 +140,7 @@ const ARROW_SECONDS = 5;
 const VOLUME_STEP = 0.1;
 const BUFFER_TARGET_SECONDS = 8;
 const USE_MPV_ENGINE = true;
+const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 // hls.js tuning notes:
 //  * `lowLatencyMode: false` - IPTV providers rarely ship LL-HLS playlists
@@ -156,8 +180,15 @@ type PiPDocument = Document & {
   exitPictureInPicture?: () => Promise<unknown>;
 };
 
-export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
+export function PlayerModal({
+  profileId,
+  media,
+  onClose,
+  sourceId,
+  onPlayMedia,
+}: PlayerModalProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const videoRegionRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
 
@@ -177,13 +208,21 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [cinema, setCinema] = useState(false);
   const [pipActive, setPipActive] = useState(false);
   const [pipSupported, setPipSupported] = useState(false);
   const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>("resolving");
   const [loadingProgress, setLoadingProgress] = useState(8);
   const [forceHlsJs, setForceHlsJs] = useState(false);
   const [nativeToken, setNativeToken] = useState<string | null>(null);
+  // Mirrors `nativeToken` so the stale-event guard and the unmount-only close
+  // always see the latest token, even during the async open window.
+  const nativeTokenRef = useRef<string | null>(null);
   const [nativeEmbedded, setNativeEmbedded] = useState(false);
+  // False until the current load paints its first frame. Drives an opaque
+  // cover so the previous file's frame can't show during a switch, while still
+  // keeping the last frame visible during mid-stream rebuffering.
+  const [hasPainted, setHasPainted] = useState(false);
   const mediaKey = `${profileId}:${media.kind}:${media.id}`;
   const [routeOverride, setRouteOverride] = useState<{
     mediaKey: string;
@@ -200,6 +239,17 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   // -- caption state (Phase 5: inert; Phase 6/7 will populate the cue arrays) --
   const [captionMode, setCaptionMode] = useState<CaptionMode>("off");
   const [captionMenuOpen, setCaptionMenuOpen] = useState(false);
+
+  // -- track / speed state (driven by mpv:state) -------------------------
+  const [tracks, setTracks] = useState<NativeTrack[]>([]);
+  const [audioTrackId, setAudioTrackId] = useState<number | null>(null);
+  const [videoTrackId, setVideoTrackId] = useState<number | null>(null);
+  const [speed, setSpeed] = useState(1);
+  const [audioMenuOpen, setAudioMenuOpen] = useState(false);
+  const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
+  const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
+  const audioTracks = tracks.filter((t) => t.kind === "audio");
+  const videoTracks = tracks.filter((t) => t.kind === "video");
   const sourceCues: Cue[] = [];
   const translatedCues: Cue[] = [];
   const latestPlaybackRef = useRef({ currentTime: 0, duration: 0, playing: false });
@@ -213,9 +263,9 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     if (!USE_MPV_ENGINE) return;
 
     let cancelled = false;
-    let token: string | null = null;
     setNativeToken(null);
     setNativeEmbedded(false);
+    setHasPainted(false);
     setResolved(null);
     setReady(false);
     setBuffering(true);
@@ -225,17 +275,16 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
 
     void (async () => {
       try {
+        // The engine reuses the live session and swaps files via `loadfile
+        // replace`, so switching content is one call — no close/teardown here.
         const result = await invoke<NativeOpenResult>("mpv_open_stream", {
           profileId,
           mediaKind: media.kind,
           mediaId: media.id,
           title: media.title,
         });
-        if (cancelled) {
-          void invoke("mpv_close", { token: result.token }).catch(() => undefined);
-          return;
-        }
-        token = result.token;
+        if (cancelled) return;
+        nativeTokenRef.current = result.token;
         setNativeToken(result.token);
         setNativeEmbedded(result.embedded);
         setLoadingPhase("connecting");
@@ -247,11 +296,22 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
 
     return () => {
       cancelled = true;
-      if (token) {
-        void invoke("mpv_close", { token }).catch(() => undefined);
-      }
     };
   }, [profileId, media.kind, media.id, media.title]);
+
+  // Tear the libmpv session down only when the player actually closes — not on
+  // every content switch (those reuse the session). Uses the ref so the latest
+  // token is closed regardless of which media was loaded last.
+  useEffect(() => {
+    if (!USE_MPV_ENGINE) return;
+    return () => {
+      const token = nativeTokenRef.current;
+      if (token) {
+        void invoke("mpv_close", { token }).catch(() => undefined);
+        nativeTokenRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!USE_MPV_ENGINE || !nativeEmbedded) return;
@@ -269,13 +329,18 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     const applyState = (state: NativePlayerState) => {
       if (cancelled) return;
       // The emitter on the Rust side fires on every libmpv wakeup; events
-      // sometimes arrive for a stale token between sessions. Ignore those.
-      if (state.token && state.token !== nativeToken) return;
+      // sometimes arrive for a stale token between loads. Ignore those — the
+      // ref tracks the newest token even mid-switch.
+      if (state.token && state.token !== nativeTokenRef.current) return;
 
       setCurrentTime(state.positionSec);
       setDuration(state.durationSec ?? 0);
       setVolume(state.volume);
       setMuted(state.muted);
+      setSpeed(state.speed);
+      setTracks(state.tracks);
+      setAudioTrackId(state.audioTrackId);
+      setVideoTrackId(state.videoTrackId);
 
       if (state.phase === "error") {
         setReady(false);
@@ -289,6 +354,9 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
       setPlaying(state.phase === "playing" || state.phase === "buffering");
       setReady(state.phase === "playing" || state.phase === "paused" || state.phase === "ended");
       setBuffering(state.phase === "opening" || state.phase === "buffering");
+      // A real frame exists once libmpv reports playing/paused — reveal the
+      // GL surface and keep it revealed for the rest of this load.
+      if (state.phase === "playing" || state.phase === "paused") setHasPainted(true);
 
       if (state.phase === "opening") {
         setLoadingPhase("resolving");
@@ -771,11 +839,55 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   }, [nativeToken, ready, profileId, media.kind, media.id]);
 
   // -- 7. Fullscreen sync -------------------------------------------------
+  // True fullscreen resizes the OS window via Tauri (the DOM Fullscreen API
+  // can't resize the native mpv layer, which tracks the WKWebView bounds).
+  // Seed state from the window, and nudge a layer redraw on resize so a paused
+  // frame follows the new size.
   useEffect(() => {
-    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
-    document.addEventListener("fullscreenchange", onChange);
-    return () => document.removeEventListener("fullscreenchange", onChange);
+    const win = getCurrentWindow();
+    let unlisten: (() => void) | undefined;
+    void win.isFullscreen().then((fs) => setIsFullscreen(fs));
+    void win
+      .onResized(() => {
+        if (USE_MPV_ENGINE) void invoke("mpv_request_redraw").catch(() => undefined);
+      })
+      .then((un) => {
+        unlisten = un;
+      });
+    return () => unlisten?.();
   }, []);
+
+  // -- Cinema mode: constrain the native video to the top region ----------
+  // The mpv layer normally fills the window; in cinema mode we measure the
+  // video region (CSS px, window-relative) and tell the native layer to shrink
+  // into it, leaving the bottom panel visible. Re-pushed on layout/resize.
+  useEffect(() => {
+    if (!USE_MPV_ENGINE) return;
+    const el = videoRegionRef.current;
+    const pushRect = () => {
+      if (!cinema || !el) {
+        void invoke("mpv_set_video_rect", { rect: null }).catch(() => undefined);
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      void invoke("mpv_set_video_rect", {
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+      }).catch(() => undefined);
+    };
+
+    pushRect();
+    if (!cinema || !el) return;
+
+    const ro = new ResizeObserver(pushRect);
+    ro.observe(el);
+    window.addEventListener("resize", pushRect);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", pushRect);
+      // Restore full-window video when leaving cinema or unmounting.
+      void invoke("mpv_set_video_rect", { rect: null }).catch(() => undefined);
+    };
+  }, [cinema, nativeEmbedded]);
 
   // -- Imperative actions -------------------------------------------------
   const togglePlay = useCallback(() => {
@@ -886,11 +998,34 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
   }, [muted, nativeToken]);
 
   const toggleFullscreen = useCallback(() => {
-    if (document.fullscreenElement) {
-      void document.exitFullscreen().catch(() => undefined);
-    } else if (containerRef.current?.requestFullscreen) {
-      void containerRef.current.requestFullscreen().catch(() => undefined);
+    const win = getCurrentWindow();
+    void (async () => {
+      try {
+        const next = !(await win.isFullscreen());
+        await win.setFullscreen(next);
+        setIsFullscreen(next);
+        // The window resize repositions the WKWebView; nudge libmpv to repaint
+        // so the video follows even while paused.
+        if (USE_MPV_ENGINE) void invoke("mpv_request_redraw").catch(() => undefined);
+      } catch {
+        /* window control is best-effort */
+      }
+    })();
+  }, []);
+
+  const exitFullscreenIfActive = useCallback(async (): Promise<boolean> => {
+    const win = getCurrentWindow();
+    try {
+      if (await win.isFullscreen()) {
+        await win.setFullscreen(false);
+        setIsFullscreen(false);
+        if (USE_MPV_ENGINE) void invoke("mpv_request_redraw").catch(() => undefined);
+        return true;
+      }
+    } catch {
+      /* best-effort */
     }
+    return false;
   }, []);
 
   const togglePip = useCallback(() => {
@@ -903,6 +1038,45 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
       void video.requestPictureInPicture?.().catch(() => undefined);
     }
   }, [pipSupported]);
+
+  const selectAudioTrack = useCallback(
+    (id: number | "no") => {
+      setAudioTrackId(id === "no" ? null : id);
+      if (nativeToken)
+        void invoke("mpv_set_audio_track", { token: nativeToken, id: String(id) }).catch(
+          () => undefined
+        );
+    },
+    [nativeToken]
+  );
+
+  const selectVideoTrack = useCallback(
+    (id: number) => {
+      setVideoTrackId(id);
+      if (nativeToken)
+        void invoke("mpv_set_video_track", { token: nativeToken, id: String(id) }).catch(
+          () => undefined
+        );
+    },
+    [nativeToken]
+  );
+
+  const changeSpeed = useCallback(
+    (next: number) => {
+      setSpeed(next);
+      if (nativeToken)
+        void invoke("mpv_set_speed", { token: nativeToken, speed: next }).catch(() => undefined);
+    },
+    [nativeToken]
+  );
+
+  const stepFrame = useCallback(
+    (forward: boolean) => {
+      if (nativeToken)
+        void invoke("mpv_frame_step", { token: nativeToken, forward }).catch(() => undefined);
+    },
+    [nativeToken]
+  );
 
   const flashSkip = useCallback((dir: -1 | 1) => {
     setSkipIndicator({ dir, key: Date.now() });
@@ -951,7 +1125,14 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
 
       switch (e.key) {
         case "Escape":
-          if (!document.fullscreenElement) onClose();
+          if (cinema) {
+            setCinema(false);
+            return;
+          }
+          void (async () => {
+            const exited = await exitFullscreenIfActive();
+            if (!exited) onClose();
+          })();
           return;
         case " ":
         case "k":
@@ -1003,9 +1184,28 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
         case "F":
           toggleFullscreen();
           return;
+        case "t":
+        case "T":
+          setCinema((v) => !v);
+          revealControls();
+          return;
         case "p":
         case "P":
           togglePip();
+          return;
+        case ",":
+          if (USE_MPV_ENGINE && !isLive && !playing) {
+            e.preventDefault();
+            stepFrame(false);
+            revealControls();
+          }
+          return;
+        case ".":
+          if (USE_MPV_ENGINE && !isLive && !playing) {
+            e.preventDefault();
+            stepFrame(true);
+            revealControls();
+          }
           return;
         default:
           // 0-9 -> jump to that decile (VOD only).
@@ -1028,12 +1228,16 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
     setVol,
     toggleMute,
     toggleFullscreen,
+    exitFullscreenIfActive,
+    cinema,
     togglePip,
+    stepFrame,
     flashSkip,
     revealControls,
     isLive,
     duration,
     volume,
+    playing,
   ]);
 
   // -- Surface interactions: single tap = play/pause, double tap = skip --
@@ -1130,7 +1334,11 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
       )}
       onPointerMove={revealControls}
     >
-      <div className="relative flex-1 overflow-hidden" onPointerDown={onSurfacePointerDown}>
+      <div
+        ref={videoRegionRef}
+        className="relative flex-1 overflow-hidden"
+        onPointerDown={onSurfacePointerDown}
+      >
         {USE_MPV_ENGINE ? (
           <NativePlaybackBackdrop
             posterUrl={media.posterUrl}
@@ -1138,6 +1346,7 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
             playing={playing}
             buffering={buffering}
             embedded={nativeEmbedded}
+            cover={!hasPainted}
           />
         ) : (
           <video
@@ -1314,6 +1523,60 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
 
             <div className="flex-1" />
 
+            {audioTracks.length >= 2 && (
+              <ChromeMenu
+                icon={<AudioLines className="h-5 w-5" />}
+                label="Audio track"
+                heading="Audio"
+                active={audioMenuOpen}
+                open={audioMenuOpen}
+                onToggle={() => setAudioMenuOpen((v) => !v)}
+                onClose={() => setAudioMenuOpen(false)}
+                options={audioTracks.map((t) => ({
+                  key: String(t.id),
+                  label: trackLabel(t),
+                  active: audioTrackId === t.id,
+                }))}
+                onSelect={(key) => selectAudioTrack(Number(key))}
+              />
+            )}
+
+            {videoTracks.length >= 2 && (
+              <ChromeMenu
+                icon={<MonitorCog className="h-5 w-5" />}
+                label="Quality"
+                heading="Quality"
+                active={qualityMenuOpen}
+                open={qualityMenuOpen}
+                onToggle={() => setQualityMenuOpen((v) => !v)}
+                onClose={() => setQualityMenuOpen(false)}
+                options={videoTracks.map((t) => ({
+                  key: String(t.id),
+                  label: trackLabel(t),
+                  active: videoTrackId === t.id,
+                }))}
+                onSelect={(key) => selectVideoTrack(Number(key))}
+              />
+            )}
+
+            {!isLive && (
+              <ChromeMenu
+                icon={<Gauge className="h-5 w-5" />}
+                label="Playback speed"
+                heading="Speed"
+                active={speedMenuOpen || Math.abs(speed - 1) > 0.01}
+                open={speedMenuOpen}
+                onToggle={() => setSpeedMenuOpen((v) => !v)}
+                onClose={() => setSpeedMenuOpen(false)}
+                options={SPEED_OPTIONS.map((rate) => ({
+                  key: String(rate),
+                  label: rate === 1 ? "Normal" : `${rate}×`,
+                  active: Math.abs(speed - rate) < 0.01,
+                }))}
+                onSelect={(key) => changeSpeed(Number(key))}
+              />
+            )}
+
             <CaptionButton
               mode={captionMode}
               onChange={setCaptionMode}
@@ -1321,6 +1584,14 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
               onToggle={() => setCaptionMenuOpen((v) => !v)}
               onClose={() => setCaptionMenuOpen(false)}
             />
+
+            <IconButton
+              onClick={() => setCinema((v) => !v)}
+              label={cinema ? "Exit cinema mode" : "Cinema mode"}
+              active={cinema}
+            >
+              <Clapperboard className="h-5 w-5" />
+            </IconButton>
 
             {pipSupported && (
               <IconButton onClick={togglePip} label="Picture in Picture" active={pipActive}>
@@ -1336,6 +1607,17 @@ export function PlayerModal({ profileId, media, onClose }: PlayerModalProps) {
           </div>
         </div>
       </div>
+
+      {cinema && (
+        <CinemaPanel
+          media={media}
+          isLive={isLive}
+          profileId={profileId}
+          sourceId={sourceId ?? null}
+          currentMediaId={media.id}
+          onSelectMedia={(m) => onPlayMedia?.(m)}
+        />
+      )}
 
       <style>{`
         @keyframes skip-pop {
@@ -1379,21 +1661,265 @@ function IconButton({
   );
 }
 
+// YouTube-style cinema panel below the (shrunk) video. Live shows a channel
+// strip for in-player switching; VOD/episodes show an info card. The panel is
+// opaque so the non-video area never shows the desktop through the transparent
+// window.
+function CinemaPanel({
+  media,
+  isLive,
+  profileId,
+  sourceId,
+  currentMediaId,
+  onSelectMedia,
+}: {
+  media: PlayMedia;
+  isLive: boolean;
+  profileId: string;
+  sourceId: number | null;
+  currentMediaId: number;
+  onSelectMedia: (m: PlayMedia) => void;
+}) {
+  return (
+    <div className="h-56 shrink-0 overflow-hidden border-t border-white/10 bg-neutral-950">
+      {isLive ? (
+        <CinemaChannelStrip
+          profileId={profileId}
+          sourceId={sourceId}
+          currentChannelId={currentMediaId}
+          onSelectChannel={onSelectMedia}
+        />
+      ) : (
+        <div className="flex h-full items-center gap-5 px-8">
+          <div className="aspect-[2/3] h-40 shrink-0 overflow-hidden rounded-lg bg-neutral-800">
+            {media.posterUrl && (
+              <img
+                src={media.posterUrl}
+                alt=""
+                className="h-full w-full object-cover"
+                loading="lazy"
+              />
+            )}
+          </div>
+          <div className="min-w-0">
+            <p className="text-lg font-semibold text-white">{media.title}</p>
+            {media.subtitle && <p className="mt-1 text-sm text-white/55">{media.subtitle}</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CinemaChannelStrip({
+  profileId,
+  sourceId,
+  currentChannelId,
+  onSelectChannel,
+}: {
+  profileId: string;
+  sourceId: number | null;
+  currentChannelId: number;
+  onSelectChannel: (m: PlayMedia) => void;
+}) {
+  const [channels, setChannels] = useState<Channel[]>([]);
+
+  useEffect(() => {
+    if (sourceId == null) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const items = await invoke<Channel[]>("list_channels", {
+          profileId,
+          sourceId,
+          limit: 100,
+          offset: 0,
+          filters: {},
+        });
+        if (!cancelled) setChannels(items);
+      } catch {
+        if (!cancelled) setChannels([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId, sourceId]);
+
+  return (
+    <div className="flex h-full flex-col gap-2 px-6 py-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-white/45">Channels</p>
+      <div className="-mx-1 flex flex-1 gap-3 overflow-x-auto px-1 [scrollbar-width:thin]">
+        {channels.map((c) => {
+          const active = c.id === currentChannelId;
+          return (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() =>
+                onSelectChannel({
+                  kind: "live",
+                  id: c.id,
+                  title: c.name,
+                  subtitle: [c.country, c.category].filter(Boolean).join(" / ") || null,
+                  posterUrl: c.logoUrl,
+                })
+              }
+              className={cn(
+                "flex w-28 flex-shrink-0 flex-col items-center gap-1.5 rounded-lg p-2 text-center transition-colors",
+                "focus:outline-none focus:ring-2 focus:ring-indigo-400",
+                active ? "bg-white/15" : "hover:bg-white/10"
+              )}
+            >
+              <div className="flex h-16 w-full items-center justify-center overflow-hidden rounded bg-neutral-800">
+                {c.logoUrl ? (
+                  <img src={c.logoUrl} alt="" loading="lazy" className="max-h-full max-w-full object-contain" />
+                ) : (
+                  <Radio className="h-5 w-5 text-white/40" />
+                )}
+              </div>
+              <span className="line-clamp-2 text-[11px] font-medium text-white/85">{c.name}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function trackLabel(t: NativeTrack): string {
+  const lang = t.lang ? t.lang.toUpperCase() : null;
+  if (t.title && lang) return `${t.title} (${lang})`;
+  if (t.title) return t.title;
+  if (lang) return lang;
+  return `Track ${t.id}`;
+}
+
+interface ChromeMenuOption {
+  key: string;
+  label: string;
+  detail?: string;
+  active: boolean;
+}
+
+/// Toolbar button + popover used by the audio-track, speed, and quality
+/// menus. Mirrors the click-outside / radio-list pattern of `CaptionButton`.
+function ChromeMenu({
+  icon,
+  label,
+  heading,
+  options,
+  onSelect,
+  open,
+  onToggle,
+  onClose,
+  active = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  heading: string;
+  options: ChromeMenuOption[];
+  onSelect: (key: string) => void;
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  active?: boolean;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
+    window.addEventListener("mousedown", onDoc);
+    return () => window.removeEventListener("mousedown", onDoc);
+  }, [open, onClose]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={onToggle}
+        aria-label={label}
+        title={label}
+        className={cn(
+          "flex h-9 w-9 items-center justify-center rounded-full text-white/85",
+          "transition-all hover:bg-white/15 hover:text-white hover:scale-105 active:scale-95",
+          active && "bg-white/15 text-white"
+        )}
+      >
+        {icon}
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className={cn(
+            "absolute bottom-12 right-0 z-30 w-56 overflow-hidden rounded-lg",
+            "bg-black/85 backdrop-blur-md border border-white/10 shadow-xl",
+            "text-sm text-white"
+          )}
+        >
+          <p className="px-3 py-2 text-[11px] uppercase tracking-wider text-white/55">{heading}</p>
+          <ul className="max-h-72 overflow-auto pb-1">
+            {options.map((opt) => (
+              <li key={opt.key}>
+                <button
+                  role="menuitemradio"
+                  aria-checked={opt.active}
+                  onClick={() => {
+                    onSelect(opt.key);
+                    onClose();
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors",
+                    "hover:bg-white/10",
+                    opt.active && "bg-white/10 text-white"
+                  )}
+                >
+                  <span>{opt.label}</span>
+                  {opt.detail ? (
+                    <span className="text-[11px] text-white/40">{opt.detail}</span>
+                  ) : opt.active ? (
+                    <span className="text-[11px] text-[var(--color-accent)]">Selected</span>
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NativePlaybackBackdrop({
   posterUrl,
   title,
   playing,
   buffering,
   embedded,
+  cover,
 }: {
   posterUrl?: string | null;
   title: string;
   playing: boolean;
   buffering: boolean;
   embedded: boolean;
+  cover: boolean;
 }) {
   if (embedded) {
-    return <div className="pointer-events-none absolute inset-0 bg-transparent" />;
+    // Until the current load paints its first frame, cover the GL surface with
+    // opaque black so the previous file's last frame can't bleed through on a
+    // switch. Once painted, stay transparent — even across mid-stream
+    // rebuffering — so the last frame remains visible behind the spinner.
+    return (
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-0 transition-colors duration-150",
+          cover ? "bg-black" : "bg-transparent"
+        )}
+      />
+    );
   }
 
   return (
