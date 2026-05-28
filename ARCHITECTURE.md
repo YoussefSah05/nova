@@ -42,8 +42,8 @@ A local-first desktop IPTV streaming platform with on-device AI transcription **
 | Build tool | Vite | 6.x |
 | UI styling | Tailwind CSS | 4.x |
 | Component primitives | shadcn/ui | latest |
-| Video player core | Vidstack (with hls.js backend) | latest stable |
-| HLS engine | hls.js | latest stable |
+| Video player core | **libmpv** (embedded, macOS via CAOpenGLLayer) — superseded Vidstack in Phase 5 | latest stable |
+| HLS engine | local Axum proxy + libmpv demuxer; hls.js only on the WebKit fallback path | latest stable |
 | Database | SQLite via `sqlx` | 0.8+, `sqlite` feature |
 | Search index | SQLite FTS5 (built-in) | — |
 | Async runtime | Tokio | 1.x latest |
@@ -252,7 +252,7 @@ clean:
 │  │  • Profile picker        │    └──────────┬──────────────────────┘   │
 │  │  • Transcript panel      │               │                          │
 │  └──────────────────────────┘               │                          │
-│           │ Vidstack/hls.js                 ▼                          │
+│           │ libmpv / proxy                  ▼                          │
 │           ▼                       ┌─────────────────────────┐          │
 │  ┌────────────────────┐           │  hls-proxy crate (Axum) │          │
 │  │  localhost HLS     │◄──────────┤  • Manifest rewriting   │          │
@@ -658,10 +658,20 @@ Captures backend selection logic, batching rules, language-pair-specific notes (
 
 ## 10. Video player — premium-quality UI
 
-### Foundation: Vidstack + hls.js
-- Vidstack: headless primitives (media state, gestures, fullscreen, PiP, AirPlay, keyboard).
-- hls.js: manifest parsing, ABR, segment fetching.
-- Native `<video>`: decode via VideoToolbox.
+### Foundation: embedded libmpv (revised in Phase 5)
+
+> **Decision update (Phase 5):** the original Vidstack + hls.js foundation was replaced with an
+> embedded **libmpv** engine. Vidstack/`<video>` could not robustly play the hostile, codec-diverse
+> streams typical of IPTV; libmpv (the engine IINA uses) handles them natively. On macOS it renders
+> into a `CAOpenGLLayer` sublayer of the WKWebView's layer tree (`crates/mpv-player/`,
+> `apps/desktop/src-tauri/src/mpv_layer.rs`). The React control bar drives it through `mpv_*` Tauri
+> commands and an event-driven `mpv:state` stream. The UX spec below (controls, keyboard, caption
+> modes) is engine-agnostic and still applies. **AirPlay** is the one item the switch regressed —
+> there is no `AVPlayer` to surface a route picker — so it needs a parallel AVPlayer route (deferred).
+
+- libmpv: demux, decode (hardware via VideoToolbox `hwdec=auto-safe`), and render.
+- Local Axum proxy: classifies the upstream and, when needed, remuxes/transcodes via FFmpeg.
+- hls.js + native `<video>`: retained only on the WebKit fallback path.
 
 ### Performance budget (mandatory)
 - Time-to-first-frame on channel switch: <800ms target, <1200ms ceiling.
@@ -765,7 +775,10 @@ Per content (channel, VOD, episode), the chosen mode is persisted to `caption_pr
 - Captions in PiP: Mode A or Mode B available; Mode B is auto-tightened (smaller padding, smaller text) because PiP is small.
 
 ### AirPlay
-- Vidstack surfaces button when devices are detected.
+- **Deferred (Phase 5 deviation):** the libmpv embed has no `AVPlayer`, so there is no native
+  route picker. AirPlay needs a parallel `AVPlayer` path that takes over the proxy HLS URL when an
+  external route is selected — tracked as a scoped follow-up, not part of the initial Phase 5 chrome.
+- When implemented: surface the button when devices are detected.
 - AirPlay'd captions burn-in the source-language VTT only (AirPlay subtitle track support is inconsistent across receivers). When in translation mode and user AirPlays, show a one-time toast: "Captions will display in source language on AirPlay devices."
 
 ### Transcript companion panel
@@ -904,11 +917,12 @@ Each step ends with something runnable.
 4. Background refresh.
 
 **Phase 5 — Playback (standard captions only)**
-1. `hls-proxy` crate (Axum) passthrough.
-2. Vidstack integration.
-3. All keyboard shortcuts, control chrome.
+1. `hls-proxy` crate (Axum) passthrough + route-aware remux/transcode.
+2. Embedded libmpv engine (`crates/mpv-player/`, CAOpenGLLayer on macOS) — replaced Vidstack.
+3. All keyboard shortcuts, control chrome (incl. audio-track / quality / speed menus, frame-step).
 4. Mode A caption renderer (standard subtitles).
 5. Watch history.
+   (Deferred: AirPlay, cross-platform render handlers, manual real-stream verification.)
 
 **Phase 6 — Transcription (VOD)**
 1. Bundle FFmpeg.

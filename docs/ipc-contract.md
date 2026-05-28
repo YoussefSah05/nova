@@ -39,6 +39,11 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `mpv_seek_live_edge` | `{ token }` | `void` | 5 |
 | `mpv_set_volume` | `{ token, volume }` | `void` | 5 |
 | `mpv_set_mute` | `{ token, muted }` | `void` | 5 |
+| `mpv_set_audio_track` | `{ token, id }` | `void` | 5 |
+| `mpv_set_subtitle_track` | `{ token, id }` | `void` | 5 |
+| `mpv_set_video_track` | `{ token, id }` | `void` | 5 |
+| `mpv_set_speed` | `{ token, speed }` | `void` | 5 |
+| `mpv_frame_step` | `{ token, forward }` | `void` | 5 |
 | `record_watch_progress` | `{ profileId, mediaKind, mediaId, positionSec, durationSec?, completed, captionMode? }` | `void` | 5 |
 | `get_resume_position` | `{ profileId, mediaKind, mediaId }` | `ResumeInfo \| null` | 5 |
 | `get_proxy_port` | `{}` | `number` (deprecated - use `resolve_stream`) | 5 |
@@ -110,6 +115,15 @@ type MpvOpenResult = {
   embedded: boolean;
 };
 
+type MpvTrack = {
+  id: number;
+  /// "audio" | "video" | "sub"
+  kind: string;
+  title: string | null;
+  lang: string | null;
+  selected: boolean;
+};
+
 type MpvPlayerState = {
   token: string | null;
   engine: "mpv";
@@ -119,6 +133,15 @@ type MpvPlayerState = {
   volume: number;
   muted: boolean;
   seekable: boolean;
+  /// Playback rate (1.0 = normal). Set via `mpv_set_speed`.
+  speed: number;
+  /// Currently selected track ids, or null when none/disabled. The
+  /// `mpv_set_*_track` commands take the id as a string ("no" disables).
+  audioTrackId: number | null;
+  subTrackId: number | null;
+  videoTrackId: number | null;
+  /// Audio/video/sub tracks reported by libmpv for the current file.
+  tracks: MpvTrack[];
   error: string | null;
 };
 
@@ -161,7 +184,9 @@ Player flow:
    backend emits these whenever libmpv signals new events (driven by a wakeup callback). Call
    `mpv_player_state` once on mount for the initial snapshot, and keep a long-interval (~2.5s)
    poll as a fallback in case an event is dropped.
-3. Use `mpv_*` control commands for play/pause, seeking, volume, mute, and live edge.
+3. Use `mpv_*` control commands for play/pause, seeking, volume, mute, live edge, audio/video/
+   subtitle track selection, playback speed, and frame-step. `MpvPlayerState.tracks` drives the
+   audio-track and quality (video-track) menus; menus show only when ≥2 tracks of that kind exist.
 4. Every 5s while playing, `invoke("record_watch_progress", { ..., captionMode: "off" })`.
 5. On modal close / unmount: `invoke("mpv_close", { token })`.
 
