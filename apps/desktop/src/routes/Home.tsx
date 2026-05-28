@@ -642,6 +642,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             profileId={profile.id}
             media={playingMedia}
             onClose={() => setPlayingMedia(null)}
+            sourceId={activeSourceId}
+            onPlayMedia={setPlayingMedia}
           />
         )}
       </>
@@ -727,6 +729,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               tab={tab}
               refreshKey={shelvesKey}
               onSelectSeries={setSelectedSeries}
+              onPlay={setPlayingMedia}
             />
           )}
 
@@ -915,6 +918,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           profileId={profile.id}
           media={playingMedia}
           onClose={() => setPlayingMedia(null)}
+          sourceId={activeSourceId}
+          onPlayMedia={setPlayingMedia}
         />
       )}
     </div>
