@@ -7,7 +7,7 @@
 //! Each endpoint is streamed via `chunk()` → blocking `serde_json::Deserializer`
 //! so entries are emitted as bytes arrive — no buffering of the full response.
 
-use nova_core::{MediaKind, ParsedEntry};
+use nova_core::{normalize_category, MediaKind, ParsedEntry};
 use serde::de::{DeserializeOwned, SeqAccess, Visitor};
 use serde::Deserialize;
 use serde_json::Value;
@@ -548,7 +548,7 @@ fn to_live_entry(s: LiveStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
         .filter(|u| has_image_extension(u))
         .map(str::to_owned);
     let group_title = s.category_name.unwrap_or_default();
-    let category = extract_category(&group_title);
+    let category = normalize_category(&group_title);
     ParsedEntry {
         kind: MediaKind::Live,
         name: s.name,
@@ -576,7 +576,7 @@ fn to_vod_entry(s: VodStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
         .map(str::to_owned);
     let ext = s.container_extension.as_deref().unwrap_or("mp4");
     let group_title = s.category_name.unwrap_or_default();
-    let category = extract_category(&group_title);
+    let category = normalize_category(&group_title);
     ParsedEntry {
         kind: MediaKind::Movie,
         name: s.name,
@@ -602,7 +602,7 @@ fn to_series_entry(s: SeriesJson, _creds: &XtreamCredentials) -> ParsedEntry {
         .filter(|u| has_image_extension(u))
         .map(str::to_owned);
     let group_title = s.category_name.unwrap_or_default();
-    let category = extract_category(&group_title);
+    let category = normalize_category(&group_title);
     // Catalog sentinel: one row per series carrying the series_id in its URL.
     // Real seasons/episodes are fetched lazily via `get_series_info` the first
     // time the user opens the series (see `list_series_episodes`). season/episode
@@ -658,14 +658,6 @@ fn extract_year(title: &str) -> (String, Option<u16>) {
         }
     }
     (title.to_string(), None)
-}
-
-fn extract_category(group_title: &str) -> String {
-    if let Some(pipe_pos) = group_title.find("| ") {
-        group_title[pipe_pos + 2..].trim().to_string()
-    } else {
-        group_title.trim().to_string()
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -753,7 +745,8 @@ mod tests {
         let e = to_live_entry(s, &creds);
         assert_eq!(e.kind, MediaKind::Live);
         assert_eq!(e.stream_url, "http://h:80/live/u/p/1.m3u8");
-        assert_eq!(e.category.as_deref(), Some("FRANCE GENERAL"));
+        // "FRANCE GENERAL" normalizes to the canonical Entertainment genre.
+        assert_eq!(e.category.as_deref(), Some("Entertainment"));
     }
 
     #[test]
