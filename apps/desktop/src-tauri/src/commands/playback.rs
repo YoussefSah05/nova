@@ -18,8 +18,9 @@ use nova_hls_proxy::{PlaybackKind, PlaybackRoute, SessionInfo};
 use nova_mpv_player::{MpvOpenOptions, MpvOpenResult, MpvPlayerState};
 use nova_storage::{PlaybackRepository, ResumePosition, WatchHistoryRepository};
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
+use crate::airplay::AirPlayStatus;
 use crate::ipc::ApiError;
 use crate::state::AppState;
 
@@ -386,6 +387,133 @@ pub async fn get_resume_position(
         .map_err(ApiError::from)?
         .map(ResumeInfo::from);
     Ok(info)
+}
+
+// -- AirPlay (parallel AVPlayer route) ---------------------------------------
+
+/// Returned by [`airplay_engage`]. `proxy_token` lets the frontend release the
+/// proxy session (via [`airplay_disengage`]) when AirPlay ends.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AirPlayEngageResult {
+    pub proxy_token: String,
+}
+
+/// Position (or hide, with `None`) the native AirPlay route-picker overlay so
+/// it sits over the HTML AirPlay button. Coordinates are CSS px, window-relative.
+#[tauri::command]
+pub async fn airplay_set_picker_rect(
+    rect: Option<nova_mpv_player::VideoRect>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state.airplay.set_picker_rect(&app, rect);
+    Ok(())
+}
+
+/// Begin AirPlay for the given media at `position_sec`. Resolves the upstream
+/// URL, registers a proxy session (so hostile IPTV becomes Apple-TV-friendly
+/// HLS), and hands the proxy URL to the AVFoundation engine. The player starts
+/// muted; the frontend unmutes (and pauses mpv) once `airplay:status.engaged`
+/// confirms the external route activated.
+#[tauri::command]
+pub async fn airplay_engage(
+    profile_id: String,
+    media_kind: String,
+    media_id: i64,
+    position_sec: f64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AirPlayEngageResult, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let resolved = PlaybackRepository::new(&pool)
+        .resolve_stream_url(&media_kind, media_id)
+        .await?;
+
+    let is_live = media_kind == "live";
+    let info = state
+        .hls_sessions
+        .register(resolved.upstream_url.clone(), is_live, None)
+        .await
+        .map_err(|e| ApiError::Internal(format!("airplay session failed: {e}")))?;
+
+    let url = match info.kind {
+        PlaybackKind::Hls => format!(
+            "http://127.0.0.1:{}/stream/{}/master.m3u8",
+            state.hls_proxy_port, info.token,
+        ),
+        PlaybackKind::File => format!(
+            "http://127.0.0.1:{}/proxy?url={}",
+            state.hls_proxy_port,
+            urlencode(&resolved.upstream_url),
+        ),
+    };
+
+    state.airplay.engage(&app, url, position_sec.max(0.0));
+    Ok(AirPlayEngageResult {
+        proxy_token: info.token,
+    })
+}
+
+/// End AirPlay: clear the AVFoundation item and release the proxy session.
+#[tauri::command]
+pub async fn airplay_disengage(
+    proxy_token: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state.airplay.disengage(&app);
+    if let Some(token) = proxy_token {
+        state.hls_sessions.release(&token).await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn airplay_toggle_pause(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state.airplay.toggle_pause(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn airplay_seek_absolute(
+    position_sec: f64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state.airplay.seek_absolute(&app, position_sec);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn airplay_set_volume(
+    volume: f64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state.airplay.set_volume(&app, volume);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn airplay_set_mute(
+    muted: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state.airplay.set_muted(&app, muted);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn airplay_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AirPlayStatus, ApiError> {
+    Ok(state.airplay.status(&app))
 }
 
 fn urlencode(s: &str) -> String {

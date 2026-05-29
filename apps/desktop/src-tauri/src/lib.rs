@@ -1,3 +1,4 @@
+pub mod airplay;
 pub mod commands;
 pub mod ipc;
 #[cfg(target_os = "macos")]
@@ -57,6 +58,10 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
                 native_player_view::install_mpv_render_view(&window, engine)?;
+
+                // Parallel AVFoundation engine + AirPlay route picker overlay.
+                let airplay = app.state::<state::AppState>().airplay.clone();
+                airplay::install_picker(&window, &airplay, app.handle());
             }
             Ok(())
         })
@@ -115,6 +120,15 @@ pub fn run() {
             commands::playback::mpv_set_video_rect,
             commands::playback::record_watch_progress,
             commands::playback::get_resume_position,
+            // Phase 5 — AirPlay (parallel AVPlayer route)
+            commands::playback::airplay_set_picker_rect,
+            commands::playback::airplay_engage,
+            commands::playback::airplay_disengage,
+            commands::playback::airplay_toggle_pause,
+            commands::playback::airplay_seek_absolute,
+            commands::playback::airplay_set_volume,
+            commands::playback::airplay_set_mute,
+            commands::playback::airplay_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nova");

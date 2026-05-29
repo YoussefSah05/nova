@@ -44,6 +44,14 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `mpv_set_video_track` | `{ token, id }` | `void` | 5 |
 | `mpv_set_speed` | `{ token, speed }` | `void` | 5 |
 | `mpv_frame_step` | `{ token, forward }` | `void` | 5 |
+| `airplay_set_picker_rect` | `{ rect: { x, y, width, height } \| null }` | `void` | 5 |
+| `airplay_engage` | `{ profileId, mediaKind, mediaId, positionSec }` | `{ proxyToken }` | 5 |
+| `airplay_disengage` | `{ proxyToken? }` | `void` | 5 |
+| `airplay_toggle_pause` | `{}` | `void` | 5 |
+| `airplay_seek_absolute` | `{ positionSec }` | `void` | 5 |
+| `airplay_set_volume` | `{ volume }` | `void` | 5 |
+| `airplay_set_mute` | `{ muted }` | `void` | 5 |
+| `airplay_status` | `{}` | `AirPlayStatus` | 5 |
 | `record_watch_progress` | `{ profileId, mediaKind, mediaId, positionSec, durationSec?, completed, captionMode? }` | `void` | 5 |
 | `get_resume_position` | `{ profileId, mediaKind, mediaId }` | `ResumeInfo \| null` | 5 |
 | `get_proxy_port` | `{}` | `number` (deprecated - use `resolve_stream`) | 5 |
@@ -88,6 +96,8 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | `jobs:queue:changed` | `{ jobs: JobSummary[] }` | 2 |
 | `epg:refresh:progress` | `{ source_id: number, pct: number }` | 4 |
 | `mpv:state` | `MpvPlayerState` | 5 |
+| `airplay:status` | `AirPlayStatus` (poll while a route is reachable / engaged) | 5 |
+| `airplay:picker-closed` | `void` (user finished with the native route picker) | 5 |
 
 ## Playback (Phase 5)
 
@@ -189,6 +199,20 @@ Player flow:
    audio-track and quality (video-track) menus; menus show only when ≥2 tracks of that kind exist.
 4. Every 5s while playing, `invoke("record_watch_progress", { ..., captionMode: "off" })`.
 5. On modal close / unmount: `invoke("mpv_close", { token })`.
+
+AirPlay (parallel AVPlayer route, macOS):
+
+1. The backend installs a native `AVRoutePickerView` overlay; the frontend reserves a button slot
+   and calls `airplay_set_picker_rect` to position it. The button shows only while a route is
+   reachable (`airplay:status.available`).
+2. When the user picks a device, `airplay:picker-closed` fires. The frontend calls `airplay_engage`,
+   which resolves the proxy HLS URL (so hostile IPTV becomes Apple-TV-friendly) and starts a muted
+   `AVPlayer`. Once `airplay:status.engaged` confirms the external route activated, the frontend
+   pauses mpv and unmutes via `airplay_set_mute`; if it never engages within ~6s it reverts.
+3. While engaged, transport uses the `airplay_*` commands and state comes from `airplay:status`.
+4. On disconnect (engaged → not engaged) or Stop, the frontend resumes mpv at the AirPlay position
+   and calls `airplay_disengage` (releasing the proxy session). Switching media drops the AirPlay
+   session; the new content plays locally.
 
 Fallback WebKit flow:
 

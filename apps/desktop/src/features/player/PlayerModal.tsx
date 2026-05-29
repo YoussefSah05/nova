@@ -35,6 +35,8 @@ import type { Channel } from "@/types";
 
 import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
 import { CaptionButton } from "./CaptionPicker";
+import { useAirPlay } from "./useAirPlay";
+import { AirPlayButton, AirPlayOverlay } from "./AirPlay";
 
 export type PlayMediaKind = "live" | "vod" | "episode";
 
@@ -257,6 +259,36 @@ export function PlayerModal({
   useEffect(() => {
     latestPlaybackRef.current = { currentTime, duration, playing };
   }, [currentTime, duration, playing]);
+
+  // -- AirPlay (parallel AVPlayer route) ----------------------------------
+  // When an AirPlay device is selected, the backend AVPlayer streams the proxy
+  // HLS to it; we pause mpv while engaged and resume locally on disconnect.
+  const airplay = useAirPlay({
+    enabled: USE_MPV_ENGINE,
+    profileId,
+    mediaKind: media.kind,
+    mediaId: media.id,
+    layoutKey: `${isFullscreen}:${cinema}`,
+    controlsVisible,
+    getPosition: () => latestPlaybackRef.current.currentTime,
+    getPlaying: () => latestPlaybackRef.current.playing,
+    onEngage: () => {
+      // Pause the local session so its audio/video stop while the TV plays.
+      if (nativeTokenRef.current && latestPlaybackRef.current.playing) {
+        void invoke("mpv_toggle_pause", { token: nativeTokenRef.current }).catch(
+          () => undefined
+        );
+      }
+    },
+    onDisengage: (positionSec, wasPlaying) => {
+      const token = nativeTokenRef.current;
+      if (!token) return;
+      void invoke("mpv_seek_absolute", { token, positionSec }).catch(() => undefined);
+      if (wasPlaying && !latestPlaybackRef.current.playing) {
+        void invoke("mpv_toggle_pause", { token }).catch(() => undefined);
+      }
+    },
+  });
 
   // -- Native libmpv playback path ---------------------------------------
   useEffect(() => {
@@ -1364,6 +1396,16 @@ export function PlayerModal({
           />
         )}
 
+        {/* AirPlay placeholder while streaming to an external device. */}
+        {airplay.engaged && (
+          <AirPlayOverlay
+            title={media.title}
+            isLive={isLive}
+            status={airplay.status}
+            onStop={airplay.stop}
+          />
+        )}
+
         {/* Caption overlay - inert in Phase 5; Phase 6/7 populate the cues. */}
         <CaptionOverlay
           mode={captionMode}
@@ -1603,6 +1645,7 @@ export function PlayerModal({
                 <PictureInPicture className="h-5 w-5" />
               </IconButton>
             )}
+            {airplay.available && <AirPlayButton slotRef={airplay.buttonRef} />}
             <IconButton
               onClick={toggleFullscreen}
               label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}

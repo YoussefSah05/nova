@@ -4,6 +4,8 @@ use sqlx::SqlitePool;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
+use crate::airplay::AirPlayEngine;
+
 pub struct AppState {
     /// Pool for app.db (profiles, app_settings).
     pub pool: Arc<SqlitePool>,
@@ -17,6 +19,9 @@ pub struct AppState {
     pub hls_sessions: SessionRegistry,
     /// Native libmpv playback engine used for reliable IPTV playback.
     pub mpv_engine: Arc<MpvEngine>,
+    /// AVFoundation engine used only while an AirPlay route is active. On macOS
+    /// it wraps an `AVPlayer` + route picker; elsewhere it's an inert stub.
+    pub airplay: Arc<AirPlayEngine>,
 }
 
 impl AppState {
@@ -28,6 +33,7 @@ impl AppState {
             hls_proxy_port,
             hls_sessions,
             mpv_engine: MpvEngine::new(),
+            airplay: AirPlayEngine::new(),
         }
     }
 
