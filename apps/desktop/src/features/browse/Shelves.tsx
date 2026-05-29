@@ -323,8 +323,7 @@ async function fetchShelf(
   return items.map((s) => ({
     key: `series-${s.seriesTitle}`,
     title: s.seriesTitle,
-    subtitle:
-      s.seasonCount > 0 ? `${s.seasonCount} season${s.seasonCount !== 1 ? "s" : ""}` : s.category,
+    subtitle: s.category,
     posterUrl: s.posterUrl,
     series: s,
   }));

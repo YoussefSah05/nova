@@ -1116,11 +1116,7 @@ function SeriesList({
             <MediaThumb src={item.posterUrl} className="h-14 w-10 rounded-lg object-cover" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm text-white">{item.seriesTitle}</p>
-              <p className="truncate text-xs text-white/30">
-                {item.category ? `${item.category} / ` : ""}
-                {item.seasonCount} season{item.seasonCount !== 1 ? "s" : ""} / {item.episodeCount}{" "}
-                ep
-              </p>
+              <p className="truncate text-xs text-white/30">{item.category || "Series"}</p>
             </div>
             <ChevronRightIcon className="h-4 w-4 flex-shrink-0 text-white/20" aria-hidden />
           </button>
