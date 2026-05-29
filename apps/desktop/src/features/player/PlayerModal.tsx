@@ -218,6 +218,8 @@ export function PlayerModal({
   // Mirrors `nativeToken` so the stale-event guard and the unmount-only close
   // always see the latest token, even during the async open window.
   const nativeTokenRef = useRef<string | null>(null);
+  // Guards async state callbacks (snapshots) from firing after unmount.
+  const mountedRef = useRef(true);
   const [nativeEmbedded, setNativeEmbedded] = useState(false);
   // False until the current load paints its first frame. Drives an opaque
   // cover so the previous file's frame can't show during a switch, while still
@@ -305,6 +307,7 @@ export function PlayerModal({
   useEffect(() => {
     if (!USE_MPV_ENGINE) return;
     return () => {
+      mountedRef.current = false;
       const token = nativeTokenRef.current;
       if (token) {
         void invoke("mpv_close", { token }).catch(() => undefined);
@@ -321,90 +324,92 @@ export function PlayerModal({
     };
   }, [nativeEmbedded]);
 
+  const applyNativeState = useCallback((state: NativePlayerState) => {
+    if (!mountedRef.current) return;
+    // Only apply state belonging to the current load. Drop stale tokens and
+    // the no-session (token === null) snapshots so a switch never regresses
+    // the UI. The ref tracks the newest token even mid-switch.
+    if (!nativeTokenRef.current || state.token !== nativeTokenRef.current) return;
+
+    setCurrentTime(state.positionSec);
+    setDuration(state.durationSec ?? 0);
+    setVolume(state.volume);
+    setMuted(state.muted);
+    setSpeed(state.speed);
+    setTracks(state.tracks);
+    setAudioTrackId(state.audioTrackId);
+    setVideoTrackId(state.videoTrackId);
+
+    if (state.phase === "error") {
+      setReady(false);
+      setBuffering(false);
+      setPlaying(false);
+      setError(state.error ?? "Native playback failed.");
+      return;
+    }
+
+    setError(null);
+    setPlaying(state.phase === "playing" || state.phase === "buffering");
+    setReady(state.phase === "playing" || state.phase === "paused" || state.phase === "ended");
+    setBuffering(state.phase === "opening" || state.phase === "buffering");
+    // A real frame exists once libmpv reports playing/paused — reveal the
+    // GL surface and keep it revealed for the rest of this load.
+    if (state.phase === "playing" || state.phase === "paused") setHasPainted(true);
+
+    if (state.phase === "opening") {
+      setLoadingPhase("resolving");
+      setLoadingProgress((p) => Math.max(p, 28));
+    } else if (state.phase === "buffering") {
+      setLoadingPhase("buffering");
+      setLoadingProgress((p) => Math.min(Math.max(p, 68), 88));
+    } else {
+      setLoadingPhase("ready");
+      setLoadingProgress(100);
+    }
+  }, []);
+
+  const snapshotNativeState = useCallback(async () => {
+    // Fallback for the event stream. A transient failure here (e.g. a poll
+    // racing a content switch) must NOT blank the player — real playback
+    // errors arrive via the event stream as `phase === "error"`.
+    try {
+      const state = await invoke<NativePlayerState>("mpv_player_state", {
+        token: nativeTokenRef.current,
+      });
+      applyNativeState(state);
+    } catch {
+      /* non-fatal: event stream is the source of truth for errors */
+    }
+  }, [applyNativeState]);
+
+  // Subscribe to mpv:state ONCE for the modal's lifetime. Re-subscribing per
+  // load (the old behavior) dropped the first events of a warm `loadfile`
+  // reuse — which loads near-instantly — so the UI got stuck on "opening"
+  // until the slow heartbeat caught up. The token gate handles relevance.
   useEffect(() => {
-    if (!USE_MPV_ENGINE || !nativeToken) return;
-
-    let cancelled = false;
-
-    const applyState = (state: NativePlayerState) => {
-      if (cancelled) return;
-      // The emitter on the Rust side fires on every libmpv wakeup; events
-      // sometimes arrive for a stale token between loads. Ignore those — the
-      // ref tracks the newest token even mid-switch.
-      if (state.token && state.token !== nativeTokenRef.current) return;
-
-      setCurrentTime(state.positionSec);
-      setDuration(state.durationSec ?? 0);
-      setVolume(state.volume);
-      setMuted(state.muted);
-      setSpeed(state.speed);
-      setTracks(state.tracks);
-      setAudioTrackId(state.audioTrackId);
-      setVideoTrackId(state.videoTrackId);
-
-      if (state.phase === "error") {
-        setReady(false);
-        setBuffering(false);
-        setPlaying(false);
-        setError(state.error ?? "Native playback failed.");
-        return;
-      }
-
-      setError(null);
-      setPlaying(state.phase === "playing" || state.phase === "buffering");
-      setReady(state.phase === "playing" || state.phase === "paused" || state.phase === "ended");
-      setBuffering(state.phase === "opening" || state.phase === "buffering");
-      // A real frame exists once libmpv reports playing/paused — reveal the
-      // GL surface and keep it revealed for the rest of this load.
-      if (state.phase === "playing" || state.phase === "paused") setHasPainted(true);
-
-      if (state.phase === "opening") {
-        setLoadingPhase("resolving");
-        setLoadingProgress((p) => Math.max(p, 28));
-      } else if (state.phase === "buffering") {
-        setLoadingPhase("buffering");
-        setLoadingProgress((p) => Math.min(Math.max(p, 68), 88));
-      } else {
-        setLoadingPhase("ready");
-        setLoadingProgress(100);
-      }
-    };
-
-    const snapshot = async () => {
-      // The heartbeat snapshot is only a fallback for the `mpv:state` event
-      // stream. A transient failure here (e.g. a poll racing a content switch)
-      // must NOT blank the player — real playback errors arrive via the event
-      // stream as `phase === "error"`. Ignore failures.
-      try {
-        const state = await invoke<NativePlayerState>("mpv_player_state", { token: nativeToken });
-        applyState(state);
-      } catch {
-        /* non-fatal: event stream is the source of truth for errors */
-      }
-    };
-
-    // Initial snapshot so the UI has correct state immediately after open.
-    void snapshot();
-
-    // Event-driven updates from the libmpv wakeup callback — replaces the
-    // 500ms poll. The Rust side emits `mpv:state` whenever libmpv signals
-    // new events.
+    if (!USE_MPV_ENGINE) return;
     const unlistenPromise = listen<NativePlayerState>("mpv:state", (event) => {
-      applyState(event.payload);
+      applyNativeState(event.payload);
     });
-
-    // Fallback heartbeat (long interval) in case an event is ever dropped.
-    // Pure insurance — the event path is the primary signal now.
-    const heartbeat = window.setInterval(() => {
-      void snapshot();
-    }, 2500);
-
+    const heartbeat = window.setInterval(() => void snapshotNativeState(), 2500);
     return () => {
-      cancelled = true;
       window.clearInterval(heartbeat);
       void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [nativeToken]);
+  }, [applyNativeState, snapshotNativeState]);
+
+  // Immediate catch-up whenever the active load changes, with a couple quick
+  // retries so a missed first event self-heals in well under a second.
+  useEffect(() => {
+    if (!USE_MPV_ENGINE || !nativeToken) return;
+    void snapshotNativeState();
+    const t1 = window.setTimeout(() => void snapshotNativeState(), 250);
+    const t2 = window.setTimeout(() => void snapshotNativeState(), 700);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [nativeToken, snapshotNativeState]);
 
   // -- 1. Resolve the playback URL through the backend --------------------
   // The backend probes the upstream codec/container, optionally starts a
