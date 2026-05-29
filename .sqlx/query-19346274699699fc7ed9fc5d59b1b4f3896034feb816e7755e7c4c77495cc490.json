@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(is_favorite) as \"fav?: i64\", MAX(is_in_watchlist) as \"wl?: i64\"\n               FROM series_episodes WHERE source_id = ? AND series_title = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "fav?: i64",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "wl?: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "19346274699699fc7ed9fc5d59b1b4f3896034feb816e7755e7c4c77495cc490"
+}

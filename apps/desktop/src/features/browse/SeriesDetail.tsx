@@ -22,15 +22,43 @@ export function SeriesDetail({
   onPlayEpisode,
 }: SeriesDetailProps) {
   const [episodes, setEpisodes] = useState<SeriesEpisode[]>([]);
-  const [openSeasons, setOpenSeasons] = useState<Set<number>>(new Set([1]));
+  const [openSeasons, setOpenSeasons] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  // Bumped by the retry button to re-run the fetch effect.
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    // The first open of an Xtream series fetches its episodes from the
+    // provider (get_series_info), so this can take a moment.
     invoke<SeriesEpisode[]>("list_series_episodes", {
       profileId,
       sourceId: series.sourceId,
       seriesTitle: series.seriesTitle,
-    }).then(setEpisodes);
-  }, [profileId, series]);
+    })
+      .then((eps) => {
+        if (cancelled) return;
+        setEpisodes(eps);
+        // Open the lowest season by default so episodes are visible immediately.
+        const first = eps.reduce<number | null>(
+          (min, e) => (min === null || e.season < min ? e.season : min),
+          null
+        );
+        setOpenSeasons(first === null ? new Set() : new Set([first]));
+      })
+      .catch((e) => {
+        if (!cancelled) setError(typeof e === "string" ? e : "Couldn't load episodes.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId, series, reloadKey]);
 
   const bySeasonMap = new Map<number, SeriesEpisode[]>();
   for (const ep of episodes) {
@@ -39,6 +67,10 @@ export function SeriesDetail({
     bySeasonMap.set(ep.season, list);
   }
   const seasons = Array.from(bySeasonMap.keys()).sort((a, b) => a - b);
+  // Derive counts from the fetched episodes — the catalog summary reports 0 for
+  // not-yet-fetched Xtream series.
+  const seasonCount = seasons.length || series.seasonCount;
+  const episodeCount = episodes.length || series.episodeCount;
 
   return (
     <div className="flex flex-col gap-4">
@@ -61,8 +93,8 @@ export function SeriesDetail({
           <div className="min-w-0">
             <h2 className="text-xl font-semibold text-white">{series.seriesTitle}</h2>
             <p className="text-sm text-white/50 mt-1">
-              {series.seasonCount} season{series.seasonCount !== 1 ? "s" : ""} ·{" "}
-              {series.episodeCount} episode{series.episodeCount !== 1 ? "s" : ""}
+              {seasonCount} season{seasonCount !== 1 ? "s" : ""} ·{" "}
+              {episodeCount} episode{episodeCount !== 1 ? "s" : ""}
               {series.category ? ` · ${series.category}` : ""}
             </p>
           </div>
@@ -80,6 +112,29 @@ export function SeriesDetail({
           </div>
         </div>
       </div>
+
+      {loading && (
+        <div className="flex items-center gap-3 px-1 py-8 text-sm text-white/50">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white/70" />
+          Loading episodes…
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="flex flex-col items-start gap-3 rounded-xl bg-neutral-900 px-4 py-5">
+          <p className="text-sm text-white/70">{error}</p>
+          <button
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="rounded-lg bg-white/10 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/20"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && episodes.length === 0 && (
+        <p className="px-1 py-8 text-sm text-white/50">No episodes available for this series.</p>
+      )}
 
       <div className="flex flex-col gap-2">
         {seasons.map((season) => {

@@ -406,6 +406,13 @@ pub async fn list_series_categories(
         .map_err(Into::into)
 }
 
+/// List a series' episodes, fetching them lazily for Xtream providers.
+///
+/// Xtream import stores one catalog *sentinel* per series (`stream_url` of
+/// `xtream://series/{id}`) instead of episodes, to keep import fast. The first
+/// time a series is opened we call `get_series_info`, persist the real episodes
+/// (replacing the sentinel), and return them; subsequent opens read the cache.
+/// M3U sources already carry real episodes inline, so this is a passthrough.
 #[tauri::command]
 pub async fn list_series_episodes(
     profile_id: String,
@@ -414,8 +421,61 @@ pub async fn list_series_episodes(
     state: State<'_, AppState>,
 ) -> Result<Vec<SeriesEpisode>, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
-    SeriesRepository::new(&pool)
-        .list_episodes(source_id, &series_title)
+    let repo = SeriesRepository::new(&pool);
+    let existing = repo.list_episodes(source_id, &series_title).await?;
+
+    // Find a not-yet-fetched Xtream sentinel.
+    let sentinel = existing
+        .iter()
+        .find_map(|e| e.stream_url.strip_prefix("xtream://series/"));
+    let Some(series_id_str) = sentinel else {
+        // M3U, or Xtream already fetched — return as-is.
+        return Ok(existing);
+    };
+    let series_id: i64 = series_id_str
+        .parse()
+        .map_err(|_| ApiError::Internal(format!("bad series sentinel: {series_id_str}")))?;
+
+    let source = SourceRepository::new(&pool)
+        .get(source_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("source {source_id} not found")))?;
+    let creds = nova_xtream::XtreamCredentials::from_url(&source.url).ok_or_else(|| {
+        ApiError::Internal("series episodes require an Xtream source".to_string())
+    })?;
+
+    let fetched = nova_xtream::fetch_series_info(&creds, series_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to load episodes: {e}")))?;
+
+    let rows: Vec<SeriesEpisode> = fetched
+        .into_iter()
+        .map(|ep| SeriesEpisode {
+            id: 0,
+            source_id,
+            series_title: series_title.clone(),
+            category: existing.first().and_then(|e| e.category.clone()),
+            season: ep.season,
+            episode: ep.episode,
+            episode_title: ep.title,
+            // Prefer the per-episode still; fall back to the series cover.
+            logo_url: ep
+                .still_url
+                .or_else(|| existing.first().and_then(|e| e.logo_url.clone())),
+            stream_url: ep.stream_url,
+            added_at: None,
+        })
+        .collect();
+
+    // Nothing came back (e.g. provider returned an empty info blob) — keep the
+    // sentinel so a later open can retry, and report empty.
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    repo.replace_series_episodes(source_id, &series_title, &rows)
+        .await?;
+    repo.list_episodes(source_id, &series_title)
         .await
         .map_err(Into::into)
 }

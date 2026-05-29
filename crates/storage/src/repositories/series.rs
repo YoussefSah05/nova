@@ -44,6 +44,60 @@ impl<'a> SeriesRepository<'a> {
         Ok(())
     }
 
+    /// Replace all rows for a series with freshly-fetched episodes (used by the
+    /// lazy Xtream `get_series_info` path). Deletes the catalog sentinel and any
+    /// prior episodes, then inserts the new set — preserving any series-level
+    /// favorite/watchlist flag the user set before episodes were fetched.
+    pub async fn replace_series_episodes(
+        &self,
+        source_id: i64,
+        series_title: &str,
+        episodes: &[SeriesEpisode],
+    ) -> Result<(), StorageError> {
+        let mut tx = self.pool.begin().await?;
+        let flags = sqlx::query!(
+            r#"SELECT MAX(is_favorite) as "fav?: i64", MAX(is_in_watchlist) as "wl?: i64"
+               FROM series_episodes WHERE source_id = ? AND series_title = ?"#,
+            source_id,
+            series_title,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let fav = flags.fav.unwrap_or(0);
+        let wl = flags.wl.unwrap_or(0);
+
+        sqlx::query!(
+            "DELETE FROM series_episodes WHERE source_id = ? AND series_title = ?",
+            source_id,
+            series_title,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        let added_at = now_ts();
+        for e in episodes {
+            sqlx::query!(
+                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, is_favorite, is_in_watchlist)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                e.source_id,
+                e.series_title,
+                e.category,
+                e.season,
+                e.episode,
+                e.episode_title,
+                e.logo_url,
+                e.stream_url,
+                added_at,
+                fav,
+                wl,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Returns one summary per unique series title.
     ///
     /// `is_favorite` / `is_in_watchlist` are true when *any* episode of the title is
@@ -68,8 +122,8 @@ impl<'a> SeriesRepository<'a> {
             ContentSort::RecentlyAdded => sqlx::query!(
                 r#"SELECT series_title as "series_title!: String",
                         MIN(category) as "category?: String",
-                        COUNT(*) as "episode_count!: i64",
-                        COUNT(DISTINCT season) as "season_count!: i64",
+                        SUM(CASE WHEN season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
+                        COUNT(DISTINCT CASE WHEN season > 0 THEN season END) as "season_count!: i64",
                         MIN(logo_url) as "poster_url?: String",
                         MAX(is_favorite) as "is_favorite!: i64",
                         MAX(is_in_watchlist) as "is_in_watchlist!: i64",
@@ -111,8 +165,8 @@ impl<'a> SeriesRepository<'a> {
             ContentSort::Default => sqlx::query!(
                 r#"SELECT series_title as "series_title!: String",
                         MIN(category) as "category?: String",
-                        COUNT(*) as "episode_count!: i64",
-                        COUNT(DISTINCT season) as "season_count!: i64",
+                        SUM(CASE WHEN season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
+                        COUNT(DISTINCT CASE WHEN season > 0 THEN season END) as "season_count!: i64",
                         MIN(logo_url) as "poster_url?: String",
                         MAX(is_favorite) as "is_favorite!: i64",
                         MAX(is_in_watchlist) as "is_in_watchlist!: i64",

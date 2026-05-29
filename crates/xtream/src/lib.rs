@@ -10,6 +10,7 @@
 use nova_core::{MediaKind, ParsedEntry};
 use serde::de::{DeserializeOwned, SeqAccess, Visitor};
 use serde::Deserialize;
+use serde_json::Value;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
@@ -72,6 +73,16 @@ impl XtreamCredentials {
         )
     }
 
+    /// Stream URL for a single series episode. Xtream serves episodes under
+    /// `/series/` keyed by the episode's own stream id (not the series id).
+    pub fn series_episode_url(&self, episode_id: &str, ext: &str) -> String {
+        let ext = if ext.is_empty() { "mp4" } else { ext };
+        format!(
+            "{}/series/{}/{}/{}.{}",
+            self.base_url, self.username, self.password, episode_id, ext
+        )
+    }
+
     /// Returns the XMLTV EPG feed URL for this provider. Every Xtream provider
     /// exposes `/xmltv.php` using the same credentials as the JSON API.
     pub fn xmltv_url(&self) -> String {
@@ -87,6 +98,120 @@ impl XtreamCredentials {
 /// Returns `true` when the URL looks like an Xtream Codes API endpoint.
 pub fn detect(url: &str) -> bool {
     url.contains("/get.php?") && url.contains("username=") && url.contains("password=")
+}
+
+/// One episode of a series, resolved from `get_series_info`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XtreamEpisode {
+    pub season: i64,
+    pub episode: i64,
+    pub title: Option<String>,
+    pub stream_url: String,
+    pub still_url: Option<String>,
+}
+
+/// Fetch the full season/episode list for one series via the `get_series_info`
+/// action. Unlike the catalog endpoints this is a single small object response,
+/// so we buffer + parse it directly rather than streaming. Called lazily when
+/// the user opens a series (see `list_series_episodes`).
+pub async fn fetch_series_info(
+    creds: &XtreamCredentials,
+    series_id: i64,
+) -> Result<Vec<XtreamEpisode>, String> {
+    let url = format!("{}&series_id={}", creds.api_url("get_series_info"), series_id);
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(45))
+        .user_agent("Mozilla/5.0 (compatible; nova-iptv/1.0)")
+        .build()
+        .map_err(|e| reqwest_error_summary(&e).to_string())?;
+
+    let resp = client
+        .get(&url)
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .send()
+        .await
+        .map_err(|e| reqwest_error_summary(&e).to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("get_series_info: HTTP {}", resp.status()));
+    }
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| reqwest_error_summary(&e).to_string())?;
+    Ok(parse_series_info(&body, creds))
+}
+
+/// Pure parser for a `get_series_info` body. The `episodes` field is normally an
+/// object keyed by season number (`{"1":[…],"2":[…]}`); some providers send a
+/// flat array, and ids/numbers arrive as either strings or numbers — all
+/// tolerated here. Factored out so it can be unit-tested without the network.
+fn parse_series_info(body: &Value, creds: &XtreamCredentials) -> Vec<XtreamEpisode> {
+    let mut out = Vec::new();
+    let episodes = &body["episodes"];
+    if let Some(map) = episodes.as_object() {
+        for (season_key, arr) in map {
+            let season_from_key = season_key.parse::<i64>().ok();
+            if let Some(list) = arr.as_array() {
+                for ep in list {
+                    push_episode(ep, season_from_key, creds, &mut out);
+                }
+            }
+        }
+    } else if let Some(list) = episodes.as_array() {
+        for ep in list {
+            push_episode(ep, None, creds, &mut out);
+        }
+    }
+    out.sort_by(|a, b| a.season.cmp(&b.season).then(a.episode.cmp(&b.episode)));
+    out
+}
+
+fn push_episode(
+    ep: &Value,
+    season_from_key: Option<i64>,
+    creds: &XtreamCredentials,
+    out: &mut Vec<XtreamEpisode>,
+) {
+    let Some(id) = value_as_string(&ep["id"]) else {
+        return;
+    };
+    let ext = ep["container_extension"].as_str().unwrap_or("mp4");
+    let episode = value_as_i64(&ep["episode_num"]).unwrap_or(0);
+    let season = season_from_key
+        .or_else(|| value_as_i64(&ep["season"]))
+        .unwrap_or(1);
+    let title = ep["title"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let still_url = ep["info"]["movie_image"]
+        .as_str()
+        .filter(|s| has_image_extension(s))
+        .map(str::to_owned);
+    out.push(XtreamEpisode {
+        season,
+        episode,
+        title,
+        stream_url: creds.series_episode_url(&id, ext),
+        still_url,
+    });
+}
+
+fn value_as_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+fn value_as_i64(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
+        Value::String(s) => s.trim().parse::<i64>().ok(),
+        _ => None,
+    }
 }
 
 /// Fetch all content from an Xtream provider via the JSON API.
@@ -478,6 +603,10 @@ fn to_series_entry(s: SeriesJson, _creds: &XtreamCredentials) -> ParsedEntry {
         .map(str::to_owned);
     let group_title = s.category_name.unwrap_or_default();
     let category = extract_category(&group_title);
+    // Catalog sentinel: one row per series carrying the series_id in its URL.
+    // Real seasons/episodes are fetched lazily via `get_series_info` the first
+    // time the user opens the series (see `list_series_episodes`). season/episode
+    // 0 marks it unfetched so series listings exclude it from episode counts.
     let stream_url = format!("xtream://series/{}", s.series_id);
     ParsedEntry {
         kind: MediaKind::Series,
@@ -490,8 +619,8 @@ fn to_series_entry(s: SeriesJson, _creds: &XtreamCredentials) -> ParsedEntry {
         clean_title: clean_title.clone(),
         year: None,
         series_title: Some(clean_title),
-        season: Some(1),
-        episode: Some(1),
+        season: Some(0),
+        episode: Some(0),
         category: Some(category),
     }
 }
@@ -665,6 +794,80 @@ mod tests {
         assert_eq!(e.kind, MediaKind::Series);
         assert_eq!(e.stream_url, "xtream://series/55");
         assert_eq!(e.series_title.as_deref(), Some("Mon Comeback"));
+    }
+
+    fn test_creds() -> XtreamCredentials {
+        XtreamCredentials {
+            base_url: "http://h:80".into(),
+            username: "u".into(),
+            password: "p".into(),
+        }
+    }
+
+    #[test]
+    fn series_episode_url_correct() {
+        let creds = test_creds();
+        assert_eq!(
+            creds.series_episode_url("293257", "mkv"),
+            "http://h:80/series/u/p/293257.mkv"
+        );
+        // Empty extension falls back to mp4.
+        assert_eq!(
+            creds.series_episode_url("1", ""),
+            "http://h:80/series/u/p/1.mp4"
+        );
+    }
+
+    #[test]
+    fn parse_series_info_object_keyed_seasons() {
+        let body = serde_json::json!({
+            "episodes": {
+                "1": [
+                    { "id": "101", "episode_num": 1, "title": "Pilot",
+                      "container_extension": "mkv",
+                      "info": { "movie_image": "http://img/1.jpg" } },
+                    { "id": 102, "episode_num": "2", "title": "",
+                      "container_extension": "mp4" }
+                ],
+                "2": [
+                    { "id": "201", "episode_num": 1, "container_extension": "mkv" }
+                ]
+            }
+        });
+        let eps = parse_series_info(&body, &test_creds());
+        assert_eq!(eps.len(), 3);
+        // Sorted by season then episode.
+        assert_eq!((eps[0].season, eps[0].episode), (1, 1));
+        assert_eq!(eps[0].title.as_deref(), Some("Pilot"));
+        assert_eq!(eps[0].stream_url, "http://h:80/series/u/p/101.mkv");
+        assert_eq!(eps[0].still_url.as_deref(), Some("http://img/1.jpg"));
+        // string episode_num + numeric id tolerated; empty title -> None.
+        assert_eq!((eps[1].season, eps[1].episode), (1, 2));
+        assert_eq!(eps[1].title, None);
+        assert_eq!(eps[1].stream_url, "http://h:80/series/u/p/102.mp4");
+        assert_eq!((eps[2].season, eps[2].episode), (2, 1));
+    }
+
+    #[test]
+    fn parse_series_info_handles_empty_or_missing() {
+        // Some providers send an empty array instead of an object.
+        let body = serde_json::json!({ "episodes": [] });
+        assert!(parse_series_info(&body, &test_creds()).is_empty());
+        // Missing episodes key entirely.
+        let body = serde_json::json!({ "info": {} });
+        assert!(parse_series_info(&body, &test_creds()).is_empty());
+    }
+
+    #[test]
+    fn parse_series_info_season_from_episode_field_when_flat_array() {
+        let body = serde_json::json!({
+            "episodes": [
+                { "id": "9", "episode_num": 3, "season": 4, "container_extension": "ts" }
+            ]
+        });
+        let eps = parse_series_info(&body, &test_creds());
+        assert_eq!(eps.len(), 1);
+        assert_eq!((eps[0].season, eps[0].episode), (4, 3));
     }
 
     #[test]
