@@ -218,8 +218,6 @@ export function PlayerModal({
   // Mirrors `nativeToken` so the stale-event guard and the unmount-only close
   // always see the latest token, even during the async open window.
   const nativeTokenRef = useRef<string | null>(null);
-  // Guards async state callbacks (snapshots) from firing after unmount.
-  const mountedRef = useRef(true);
   const [nativeEmbedded, setNativeEmbedded] = useState(false);
   // False until the current load paints its first frame. Drives an opaque
   // cover so the previous file's frame can't show during a switch, while still
@@ -307,7 +305,6 @@ export function PlayerModal({
   useEffect(() => {
     if (!USE_MPV_ENGINE) return;
     return () => {
-      mountedRef.current = false;
       const token = nativeTokenRef.current;
       if (token) {
         void invoke("mpv_close", { token }).catch(() => undefined);
@@ -325,7 +322,6 @@ export function PlayerModal({
   }, [nativeEmbedded]);
 
   const applyNativeState = useCallback((state: NativePlayerState) => {
-    if (!mountedRef.current) return;
     // Only apply state belonging to the current load. Drop stale tokens and
     // the no-session (token === null) snapshots so a switch never regresses
     // the UI. The ref tracks the newest token even mid-switch.
