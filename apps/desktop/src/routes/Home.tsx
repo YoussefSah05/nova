@@ -760,34 +760,40 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             </div>
           </section>
 
-          <section className="grid gap-2 px-6 pb-3 md:grid-cols-[minmax(0,1fr)_180px_220px]">
-            <label className="relative">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
-              <input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder={`Search ${tab}`}
-                className="h-10 w-full rounded-xl border border-white/10 bg-neutral-900 pl-9 pr-3 text-sm text-white outline-none transition-colors placeholder:text-white/25 hover:border-white/20 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/30"
-              />
-            </label>
+          <section className="px-6 pb-3">
+            <div
+              className={cn(
+                "grid gap-2",
+                tab === "live" ? "md:grid-cols-[minmax(0,1fr)_220px]" : "md:grid-cols-1"
+              )}
+            >
+              <label className="relative">
+                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder={`Search ${tab}`}
+                  className="h-10 w-full rounded-xl border border-white/10 bg-neutral-900 pl-9 pr-3 text-sm text-white outline-none transition-colors placeholder:text-white/25 hover:border-white/20 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/30"
+                />
+              </label>
 
-            {tab === "live" ? (
-              <FilterSelect
-                label="Country"
-                value={countryFilter}
-                options={filterOptions.channelCountries}
-                onChange={setCountryFilter}
+              {tab === "live" && (
+                <FilterSelect
+                  label="Country"
+                  value={countryFilter}
+                  options={filterOptions.channelCountries}
+                  onChange={setCountryFilter}
+                />
+              )}
+            </div>
+
+            {categoryOptions.length > 0 && (
+              <GenreChips
+                options={categoryOptions}
+                value={categoryFilter}
+                onChange={setCategoryFilter}
               />
-            ) : (
-              <div className="hidden md:block" />
             )}
-
-            <FilterSelect
-              label="Category"
-              value={categoryFilter}
-              options={categoryOptions}
-              onChange={setCategoryFilter}
-            />
           </section>
 
           <section className="flex-1 overflow-y-auto px-6 pb-6">
@@ -1122,6 +1128,47 @@ function FilterSelect({
         ))}
       </select>
     </label>
+  );
+}
+
+// Horizontal, scrollable genre chip-bar. Categories are canonical genres after
+// import normalization (nova_core::normalize_category), so each option is a
+// one-tap filter. Tapping the active chip (or "All") clears the filter.
+function GenreChips({
+  options,
+  value,
+  onChange,
+}: {
+  options: string[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const chip = (active: boolean) =>
+    cn(
+      "shrink-0 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400/40",
+      active
+        ? "bg-indigo-500 text-white"
+        : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+    );
+  return (
+    <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <button className={chip(value === "")} onClick={() => onChange("")}>
+        All
+      </button>
+      {options.map((option) => {
+        const active = value === option;
+        return (
+          <button
+            key={option}
+            className={chip(active)}
+            onClick={() => onChange(active ? "" : option)}
+            aria-pressed={active}
+          >
+            {option}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
