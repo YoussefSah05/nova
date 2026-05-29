@@ -74,11 +74,11 @@ mod imp {
     use objc2::rc::Retained;
     use objc2::runtime::ProtocolObject;
     use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadMarker};
-    use objc2_app_kit::NSView;
+    use objc2_app_kit::{NSColor, NSView, NSWindow};
     use objc2_av_foundation::{
         AVPlayer, AVPlayerItem, AVPlayerItemStatus, AVPlayerTimeControlStatus, AVRouteDetector,
     };
-    use objc2_av_kit::{AVRoutePickerView, AVRoutePickerViewDelegate};
+    use objc2_av_kit::{AVRoutePickerView, AVRoutePickerViewButtonState, AVRoutePickerViewDelegate};
     use objc2_core_media::CMTime;
     use objc2_foundation::{NSObject, NSObjectProtocol, NSString, NSURL};
     use tauri::{AppHandle, Emitter};
@@ -329,6 +329,18 @@ mod imp {
                     tracing::warn!("AirPlay: null webview pointer; skipping install");
                     return;
                 }
+                // Prefer the window's contentView as the overlay host: it is a
+                // sibling *above* the WKWebView, which renders reliably on top
+                // of out-of-process web content (subviews of the WKWebView
+                // itself can be hidden by its remote compositing).
+                let window_ptr = webview.ns_window();
+                if !window_ptr.is_null() {
+                    let ns_window: &NSWindow = &*window_ptr.cast::<NSWindow>();
+                    if let Some(content) = ns_window.contentView() {
+                        install(&engine, &content, &app);
+                        return;
+                    }
+                }
                 let host: &NSView = &*wk_ptr.cast::<NSView>();
                 install(&engine, host, &app);
             }
@@ -356,6 +368,10 @@ mod imp {
             let picker = AVRoutePickerView::new(mtm);
             picker.setPlayer(Some(&player));
             picker.setPrioritizesVideoDevices(true);
+            // White glyph so it reads on the dark control bar; system blue when
+            // a route is active.
+            let white = NSColor::whiteColor();
+            picker.setRoutePickerButtonColor_forState(Some(&white), AVRoutePickerViewButtonState::Normal);
             picker.setHidden(true);
             let delegate = RoutePickerDelegate::new(app.clone());
             picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));

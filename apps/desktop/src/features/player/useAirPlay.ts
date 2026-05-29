@@ -192,7 +192,11 @@ export function useAirPlay({
   // own Stop control then).
   useEffect(() => {
     if (!enabled) return;
-    const visible = available && controlsVisible && !engaged;
+    // Show/position the native picker whenever the controls are visible (the
+    // system picker itself handles the "no devices" case), not only when a
+    // route is already detected — otherwise the button never appears until a
+    // device happens to be reachable.
+    const visible = controlsVisible && !engaged;
     const el = buttonRef.current;
     if (!visible || !el) {
       void invoke("airplay_set_picker_rect", { rect: null }).catch(() => undefined);
@@ -205,12 +209,15 @@ export function useAirPlay({
       }).catch(() => undefined);
     };
     measure();
+    // Re-measure shortly after layout settles (the control bar animates in).
+    const t = window.setTimeout(measure, 250);
     window.addEventListener("resize", measure);
     return () => {
+      window.clearTimeout(t);
       window.removeEventListener("resize", measure);
       void invoke("airplay_set_picker_rect", { rect: null }).catch(() => undefined);
     };
-  }, [enabled, available, controlsVisible, engaged, layoutKey]);
+  }, [enabled, controlsVisible, engaged, layoutKey]);
 
   // Tear down on unmount so a closed modal doesn't leave AVPlayer running.
   useEffect(() => {

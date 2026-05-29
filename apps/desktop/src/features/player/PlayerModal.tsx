@@ -1645,7 +1645,7 @@ export function PlayerModal({
                 <PictureInPicture className="h-5 w-5" />
               </IconButton>
             )}
-            {airplay.available && <AirPlayButton slotRef={airplay.buttonRef} />}
+            {USE_MPV_ENGINE && <AirPlayButton slotRef={airplay.buttonRef} />}
             <IconButton
               onClick={toggleFullscreen}
               label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
