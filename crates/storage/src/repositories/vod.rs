@@ -43,6 +43,59 @@ impl<'a> VodRepository<'a> {
         Ok(())
     }
 
+    /// Snapshot `(stream_url, is_favorite, is_in_watchlist)` for marked VOD
+    /// items of a source. Used by refresh to re-apply user flags.
+    pub async fn snapshot_flags_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+    ) -> Result<Vec<(String, bool, bool)>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT stream_url as "stream_url!: String",
+                      is_favorite as "is_favorite!: i64",
+                      is_in_watchlist as "is_in_watchlist!: i64"
+               FROM vod_items
+               WHERE source_id = ? AND (is_favorite = 1 OR is_in_watchlist = 1)"#,
+            source_id,
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.stream_url, r.is_favorite != 0, r.is_in_watchlist != 0))
+            .collect())
+    }
+
+    pub async fn restore_flags_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+        flags: &[(String, bool, bool)],
+    ) -> Result<(), StorageError> {
+        for (url, fav, wl) in flags {
+            let f = *fav as i64;
+            let w = *wl as i64;
+            sqlx::query!(
+                "UPDATE vod_items SET is_favorite = ?, is_in_watchlist = ? WHERE source_id = ? AND stream_url = ?",
+                f,
+                w,
+                source_id,
+                url,
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_by_source_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+    ) -> Result<(), StorageError> {
+        sqlx::query!("DELETE FROM vod_items WHERE source_id = ?", source_id)
+            .execute(&mut **tx)
+            .await?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn list(
         &self,

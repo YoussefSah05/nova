@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT stream_url as \"stream_url!: String\",\n                      is_favorite as \"is_favorite!: i64\",\n                      is_in_watchlist as \"is_in_watchlist!: i64\"\n               FROM channels\n               WHERE source_id = ? AND (is_favorite = 1 OR is_in_watchlist = 1)",
+  "describe": {
+    "columns": [
+      {
+        "name": "stream_url!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_favorite!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_in_watchlist!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f94fa074d45ac669d606f057548385b3acb3834922287ab8036cc8f8ea574ac3"
+}

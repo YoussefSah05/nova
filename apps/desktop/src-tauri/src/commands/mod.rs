@@ -4,7 +4,7 @@ use nova_core::{
 };
 use nova_storage::{
     init_profile_db, ChannelRepository, EpgSourcesRepository, ProfileRepository, SeriesRepository,
-    SourceRepository, VodRepository, WatchHistoryRepository,
+    SourceRepository, VodRepository, WatchHistoryRepository, WatchSnapshot,
 };
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, State};
@@ -117,6 +117,52 @@ pub async fn add_source(
         .map_err(ApiError::from)?;
 
     let source_id = source.id;
+    start_import(pool, app, source, ImportMode::Append).await;
+    Ok(source_id)
+}
+
+/// How `run_import` treats existing rows for the source.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImportMode {
+    /// Fresh add: only insert (the source has no rows yet).
+    Append,
+    /// Refresh: snapshot user state, clear the source's rows, re-import, then
+    /// restore favorites/watchlist + movie/live resume — all in one transaction.
+    Replace,
+}
+
+/// Re-import an existing source from its provider, replacing its catalog while
+/// preserving Favorites/Watchlist and movie/live Continue-Watching. Reuses the
+/// same `playlist:import:progress` events as the initial import.
+#[tauri::command]
+pub async fn refresh_source(
+    profile_id: String,
+    source_id: i64,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let source = SourceRepository::new(&pool)
+        .get(source_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("source {source_id} not found")))?;
+    start_import(pool, app, source, ImportMode::Replace).await;
+    Ok(())
+}
+
+/// Shared kickoff for add + refresh: detect Xtream vs M3U, register the EPG
+/// feed, and spawn the streaming import task (returns once streaming has begun).
+async fn start_import(
+    pool: std::sync::Arc<sqlx::SqlitePool>,
+    app: AppHandle,
+    source: Source,
+    mode: ImportMode,
+) {
+    let source_id = source.id;
+    let url = source.url;
+    let xtream_creds = nova_xtream::detect(&url)
+        .then(|| nova_xtream::XtreamCredentials::from_url(&url))
+        .flatten();
 
     // EPG seeding (Phase 4): record any provider-supplied XMLTV URL alongside
     // the source so a later `epg_refresh` can pull programmes for it. Xtream's
@@ -158,12 +204,10 @@ pub async fn add_source(
         });
     }
 
-    // Spawn import task — returns immediately, streams progress events
+    // Spawn import task — returns immediately, streams progress events.
     tokio::spawn(async move {
-        run_import(source_id, rx, pool, app).await;
+        run_import(source_id, rx, pool, app, mode).await;
     });
-
-    Ok(source_id)
 }
 
 // ── Browse commands (Phase 2) ─────────────────────────────────────────────────
@@ -591,6 +635,7 @@ async fn run_import(
     mut rx: tokio::sync::mpsc::Receiver<Result<ParsedEntry, String>>,
     pool: std::sync::Arc<sqlx::SqlitePool>,
     app: AppHandle,
+    mode: ImportMode,
 ) {
     let started_at = Instant::now();
     let mut stats = ImportStats::default();
@@ -626,6 +671,29 @@ async fn run_import(
             );
             return;
         }
+    };
+
+    // Refresh: snapshot user state and clear the source's rows up front, inside
+    // this transaction, so the old catalog stays visible to the UI until commit.
+    let replace_snapshot = if mode == ImportMode::Replace {
+        match snapshot_and_clear(&mut tx, source_id).await {
+            Ok(snap) => Some(snap),
+            Err(e) => {
+                stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
+                emit_import_progress(
+                    &app,
+                    source_id,
+                    ImportStage::Failed,
+                    &stats,
+                    Some(e.to_string()),
+                    None,
+                    true,
+                );
+                return;
+            }
+        }
+    } else {
+        None
     };
 
     loop {
@@ -774,6 +842,23 @@ async fn run_import(
             true,
         );
         return;
+    }
+
+    // Refresh: re-apply the snapshotted user state onto the new rows.
+    if let Some(snap) = replace_snapshot {
+        if let Err(e) = restore_user_state(&mut tx, source_id, &snap).await {
+            stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
+            emit_import_progress(
+                &app,
+                source_id,
+                ImportStage::Failed,
+                &stats,
+                Some(e.to_string()),
+                None,
+                true,
+            );
+            return;
+        }
     }
 
     if let Err(e) = SourceRepository::touch_refreshed_tx(&mut tx, source_id).await {
@@ -964,6 +1049,55 @@ async fn flush_series(
     stats.persist_ms += started.elapsed().as_millis() as u64;
     stats.inserted += series_buf.len() as u64;
     series_buf.clear();
+    Ok(())
+}
+
+/// User state captured before a refresh clears a source's catalog, so it can be
+/// restored onto the re-imported rows. Flags are `(key, is_favorite,
+/// is_in_watchlist)` — key is `stream_url` for channels/vod and `series_title`
+/// for series.
+struct ReplaceSnapshot {
+    channel_flags: Vec<(String, bool, bool)>,
+    vod_flags: Vec<(String, bool, bool)>,
+    series_flags: Vec<(String, bool, bool)>,
+    watch: Vec<WatchSnapshot>,
+}
+
+/// Snapshot favorites/watchlist + movie/live resume, then delete the source's
+/// rows. Runs inside the import transaction (order matters: snapshot watch
+/// history and delete its rows while the media rows still exist).
+async fn snapshot_and_clear(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    source_id: i64,
+) -> Result<ReplaceSnapshot, nova_storage::StorageError> {
+    let channel_flags = ChannelRepository::snapshot_flags_tx(tx, source_id).await?;
+    let vod_flags = VodRepository::snapshot_flags_tx(tx, source_id).await?;
+    let series_flags = SeriesRepository::snapshot_series_flags_tx(tx, source_id).await?;
+    let watch = WatchHistoryRepository::snapshot_for_source_tx(tx, source_id).await?;
+
+    WatchHistoryRepository::delete_for_source_media_tx(tx, source_id).await?;
+    ChannelRepository::delete_by_source_tx(tx, source_id).await?;
+    VodRepository::delete_by_source_tx(tx, source_id).await?;
+    SeriesRepository::delete_by_source_tx(tx, source_id).await?;
+
+    Ok(ReplaceSnapshot {
+        channel_flags,
+        vod_flags,
+        series_flags,
+        watch,
+    })
+}
+
+/// Re-apply a [`ReplaceSnapshot`] onto the freshly re-imported rows.
+async fn restore_user_state(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    source_id: i64,
+    snap: &ReplaceSnapshot,
+) -> Result<(), nova_storage::StorageError> {
+    ChannelRepository::restore_flags_tx(tx, source_id, &snap.channel_flags).await?;
+    VodRepository::restore_flags_tx(tx, source_id, &snap.vod_flags).await?;
+    SeriesRepository::apply_series_flags_tx(tx, source_id, &snap.series_flags).await?;
+    WatchHistoryRepository::restore_tx(tx, source_id, &snap.watch).await?;
     Ok(())
 }
 

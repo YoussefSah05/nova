@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM series_episodes WHERE source_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "3b2464da66dfc7c0c8f0a9474004bb9ed66c0859401c6e20d2b661ef4380fb63"
+}

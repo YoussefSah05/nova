@@ -1,15 +1,17 @@
 import { useDeferredValue, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   AlertCircleIcon,
   ChevronRightIcon,
   DatabaseIcon,
   ListFilterIcon,
   PlusIcon,
+  RotateCwIcon,
   SearchIcon,
   XIcon,
 } from "lucide-react";
-import type { Channel, Profile, SeriesSummary, Source, VodItem } from "@/types";
+import type { Channel, ImportProgress, Profile, SeriesSummary, Source, VodItem } from "@/types";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SeriesDetail } from "@/features/browse/SeriesDetail";
 import { Shelves } from "@/features/browse/Shelves";
@@ -74,6 +76,10 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
   const [shelvesKey, setShelvesKey] = useState(0);
+  // Bumped to force every data loader to re-run (used by the Refresh button and
+  // after a re-import completes, so the home screen reflects changes).
+  const [reloadKey, setReloadKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const activeSource = sources.find((source) => source.id === activeSourceId) ?? null;
@@ -159,7 +165,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return () => {
       cancelled = true;
     };
-  }, [profile.id, sources]);
+  }, [profile.id, sources, reloadKey]);
 
   useEffect(() => {
     if (activeSourceId === null) {
@@ -203,7 +209,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return () => {
       cancelled = true;
     };
-  }, [profile.id, activeSourceId]);
+  }, [profile.id, activeSourceId, reloadKey]);
 
   useEffect(() => {
     if (activeSourceId === null) {
@@ -254,7 +260,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return () => {
       cancelled = true;
     };
-  }, [profile.id, activeSourceId]);
+  }, [profile.id, activeSourceId, reloadKey]);
 
   useEffect(() => {
     if (activeSourceId === null) {
@@ -370,7 +376,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return () => {
       cancelled = true;
     };
-  }, [profile.id, activeSourceId, tab, deferredSearchQuery, countryFilter, categoryFilter]);
+  }, [profile.id, activeSourceId, tab, deferredSearchQuery, countryFilter, categoryFilter, reloadKey]);
 
   async function handleSourceAdded() {
     setShowAddSource(false);
@@ -395,6 +401,45 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     setActiveSourceId(Number(value));
     resetBrowseState();
   }
+
+  async function handleRefresh() {
+    if (activeSourceId === null || refreshing) return;
+    setRefreshing(true);
+    setSourceError(null);
+    setContentError(null);
+    try {
+      // Re-imports the source from its provider; completion arrives via the
+      // playlist:import:progress listener, which reloads the home screen.
+      await invoke("refresh_source", { profileId: profile.id, sourceId: activeSourceId });
+    } catch (error: unknown) {
+      setRefreshing(false);
+      setSourceError(errorMessage(error));
+    }
+  }
+
+  // While a refresh runs, watch import progress for the active source. On
+  // completion, repaint the home screen with the refreshed catalog.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listen<ImportProgress>("playlist:import:progress", (event) => {
+      const p = event.payload;
+      if (p.sourceId !== activeSourceId) return;
+      if (p.error) setSourceError(p.error);
+      if (p.done) {
+        setRefreshing(false);
+        setReloadKey((k) => k + 1);
+        setShelvesKey((k) => k + 1);
+      }
+    }).then((un) => {
+      if (cancelled) un();
+      else unlisten = un;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [activeSourceId]);
 
   async function handleLoadMore() {
     if (activeSourceId === null || tab === "series" || isLoading || isLoadingMore || !hasMore) {
@@ -713,13 +758,24 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                 })}
               </select>
             </label>
-            <button
-              onClick={() => setShowAddSource(true)}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-indigo-400/30 bg-indigo-500/10 px-4 text-sm font-semibold text-indigo-200 transition-colors hover:bg-indigo-500/20 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950"
-            >
-              <PlusIcon className="h-4 w-4" aria-hidden />
-              Add playlist
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleRefresh}
+                disabled={activeSourceId === null || refreshing}
+                title="Re-fetch this playlist from the provider"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-sm font-medium text-white/80 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RotateCwIcon className={cn("h-4 w-4", refreshing && "animate-spin")} aria-hidden />
+                {refreshing ? "Refreshing…" : "Refresh"}
+              </button>
+              <button
+                onClick={() => setShowAddSource(true)}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-indigo-400/30 bg-indigo-500/10 px-4 text-sm font-semibold text-indigo-200 transition-colors hover:bg-indigo-500/20 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950"
+              >
+                <PlusIcon className="h-4 w-4" aria-hidden />
+                Add playlist
+              </button>
+            </div>
           </section>
 
           {activeSourceId !== null && (

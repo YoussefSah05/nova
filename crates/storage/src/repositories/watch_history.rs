@@ -1,7 +1,22 @@
 use nova_core::{now_ts, ContinueWatchingItem};
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
+
+/// A `watch_history` row captured before a refresh, keyed by the media's
+/// `stream_url` so it can be re-pointed at the new row IDs after re-import.
+/// Only `vod`/`live` are snapshot — episodes are lazy-fetched and get new IDs,
+/// so their resume can't be remapped.
+#[derive(Debug, Clone)]
+pub struct WatchSnapshot {
+    pub media_kind: String,
+    pub stream_url: String,
+    pub position_sec: f64,
+    pub duration_sec: Option<f64>,
+    pub completed: bool,
+    pub watched_at: i64,
+    pub caption_mode: Option<String>,
+}
 
 /// Resume state for a single media item. Returned by [`WatchHistoryRepository::resume_position`].
 #[derive(Debug, Clone, Copy)]
@@ -61,6 +76,118 @@ impl<'a> WatchHistoryRepository<'a> {
         )
         .execute(self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// Snapshot resume state for a source's `vod`/`live` media, keyed by
+    /// `stream_url`, so refresh can restore it onto the re-imported rows.
+    pub async fn snapshot_for_source_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+    ) -> Result<Vec<WatchSnapshot>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT
+                wh.media_kind   as "media_kind!: String",
+                wh.position_sec as "position_sec!: f64",
+                wh.duration_sec as "duration_sec?: f64",
+                wh.completed    as "completed!: i64",
+                wh.watched_at   as "watched_at!: i64",
+                wh.caption_mode as "caption_mode?: String",
+                COALESCE(v.stream_url, c.stream_url) as "stream_url!: String"
+               FROM watch_history wh
+               LEFT JOIN vod_items v ON wh.media_kind = 'vod'  AND v.id = wh.media_id AND v.source_id = ?
+               LEFT JOIN channels  c ON wh.media_kind = 'live' AND c.id = wh.media_id AND c.source_id = ?
+               WHERE v.id IS NOT NULL OR c.id IS NOT NULL"#,
+            source_id,
+            source_id,
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| WatchSnapshot {
+                media_kind: r.media_kind,
+                stream_url: r.stream_url,
+                position_sec: r.position_sec,
+                duration_sec: r.duration_sec,
+                completed: r.completed != 0,
+                watched_at: r.watched_at,
+                caption_mode: r.caption_mode,
+            })
+            .collect())
+    }
+
+    /// Delete a source's `watch_history` rows (vod/live/episode) ahead of a
+    /// re-import. Must run while the media rows still exist (the subqueries
+    /// resolve `media_id`). Episodes are cleared (can't be remapped).
+    pub async fn delete_for_source_media_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+    ) -> Result<(), StorageError> {
+        sqlx::query!(
+            r#"DELETE FROM watch_history
+               WHERE (media_kind = 'vod'     AND media_id IN (SELECT id FROM vod_items       WHERE source_id = ?))
+                  OR (media_kind = 'live'    AND media_id IN (SELECT id FROM channels        WHERE source_id = ?))
+                  OR (media_kind = 'episode' AND media_id IN (SELECT id FROM series_episodes WHERE source_id = ?))"#,
+            source_id,
+            source_id,
+            source_id,
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// Re-insert snapshot rows, resolving the new `media_id` from the
+    /// re-imported `vod_items`/`channels` row with the same `stream_url`.
+    /// Rows whose URL no longer exists (removed upstream) are skipped.
+    pub async fn restore_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+        rows: &[WatchSnapshot],
+    ) -> Result<(), StorageError> {
+        for r in rows {
+            let new_id: Option<i64> = match r.media_kind.as_str() {
+                "vod" => sqlx::query_scalar!(
+                    "SELECT id FROM vod_items WHERE source_id = ? AND stream_url = ? LIMIT 1",
+                    source_id,
+                    r.stream_url,
+                )
+                .fetch_optional(&mut **tx)
+                .await?
+                .flatten(),
+                "live" => sqlx::query_scalar!(
+                    "SELECT id FROM channels WHERE source_id = ? AND stream_url = ? LIMIT 1",
+                    source_id,
+                    r.stream_url,
+                )
+                .fetch_optional(&mut **tx)
+                .await?
+                .flatten(),
+                _ => None,
+            };
+            let Some(media_id) = new_id else { continue };
+            let completed_flag: i64 = if r.completed { 1 } else { 0 };
+            sqlx::query!(
+                r#"INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed, caption_mode)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(media_kind, media_id) DO UPDATE SET
+                       position_sec = excluded.position_sec,
+                       duration_sec = excluded.duration_sec,
+                       watched_at   = excluded.watched_at,
+                       completed    = excluded.completed,
+                       caption_mode = excluded.caption_mode"#,
+                r.media_kind,
+                media_id,
+                r.position_sec,
+                r.duration_sec,
+                r.watched_at,
+                completed_flag,
+                r.caption_mode,
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
         Ok(())
     }
 

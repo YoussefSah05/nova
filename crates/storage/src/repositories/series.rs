@@ -44,6 +44,61 @@ impl<'a> SeriesRepository<'a> {
         Ok(())
     }
 
+    /// Snapshot `(series_title, is_favorite, is_in_watchlist)` for marked
+    /// series of a source. Used by refresh to re-apply series-level flags.
+    pub async fn snapshot_series_flags_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+    ) -> Result<Vec<(String, bool, bool)>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT series_title as "series_title!: String",
+                      MAX(is_favorite) as "fav!: i64",
+                      MAX(is_in_watchlist) as "wl!: i64"
+               FROM series_episodes
+               WHERE source_id = ?
+               GROUP BY series_title
+               HAVING MAX(is_favorite) = 1 OR MAX(is_in_watchlist) = 1"#,
+            source_id,
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.series_title, r.fav != 0, r.wl != 0))
+            .collect())
+    }
+
+    pub async fn apply_series_flags_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+        flags: &[(String, bool, bool)],
+    ) -> Result<(), StorageError> {
+        for (title, fav, wl) in flags {
+            let f = *fav as i64;
+            let w = *wl as i64;
+            sqlx::query!(
+                "UPDATE series_episodes SET is_favorite = ?, is_in_watchlist = ? WHERE source_id = ? AND series_title = ?",
+                f,
+                w,
+                source_id,
+                title,
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_by_source_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+    ) -> Result<(), StorageError> {
+        sqlx::query!("DELETE FROM series_episodes WHERE source_id = ?", source_id)
+            .execute(&mut **tx)
+            .await?;
+        Ok(())
+    }
+
     /// Replace all rows for a series with freshly-fetched episodes (used by the
     /// lazy Xtream `get_series_info` path). Deletes the catalog sentinel and any
     /// prior episodes, then inserts the new set — preserving any series-level

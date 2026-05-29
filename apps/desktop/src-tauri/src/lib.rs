@@ -74,6 +74,7 @@ pub fn run() {
             // Phase 2
             commands::list_sources,
             commands::add_source,
+            commands::refresh_source,
             commands::list_channels,
             commands::count_channels,
             commands::list_channel_countries,

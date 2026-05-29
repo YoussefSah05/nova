@@ -13,5 +13,5 @@ pub use error::StorageError;
 pub use repositories::{
     ChannelRepository, EpgSource, EpgSourcesRepository, JobRepository, NowAndNext,
     PlaybackRepository, ProfileRepository, ProgramsRepository, ResolvedStreamUrl, ResumePosition,
-    SeriesRepository, SourceRepository, VodRepository, WatchHistoryRepository,
+    SeriesRepository, SourceRepository, VodRepository, WatchHistoryRepository, WatchSnapshot,
 };
