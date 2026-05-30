@@ -775,10 +775,15 @@ Per content (channel, VOD, episode), the chosen mode is persisted to `caption_pr
 - Captions in PiP: Mode A or Mode B available; Mode B is auto-tightened (smaller padding, smaller text) because PiP is small.
 
 ### AirPlay
-- **Deferred (Phase 5 deviation):** the libmpv embed has no `AVPlayer`, so there is no native
-  route picker. AirPlay needs a parallel `AVPlayer` path that takes over the proxy HLS URL when an
-  external route is selected — tracked as a scoped follow-up, not part of the initial Phase 5 chrome.
-- When implemented: surface the button when devices are detected.
+- **Implemented (Phase 5, macOS) as a parallel AVFoundation engine** (`src-tauri/src/airplay.rs`):
+  the libmpv embed has no `AVPlayer`, so AirPlay runs on a separate `AVPlayer` with
+  `allowsExternalPlayback`, fed the **proxy HLS URL** so hostile IPTV becomes Apple-TV-playable. A
+  native `AVRoutePickerView` is overlaid on the window `contentView` (above the WKWebView). When a
+  route engages, mpv pauses and the `AVPlayer` takes over playback/position; on disconnect, mpv
+  resumes at the handed-back position. Handoff is orchestrated frontend-side via the `airplay:status`
+  / `airplay:picker-closed` events (`features/player/useAirPlay.ts`).
+- The button is always shown (route detection is unreliable as a gate); the picker is positioned
+  whenever the controls are visible and no route is engaged.
 - AirPlay'd captions burn-in the source-language VTT only (AirPlay subtitle track support is inconsistent across receivers). When in translation mode and user AirPlays, show a one-time toast: "Captions will display in source language on AirPlay devices."
 
 ### Transcript companion panel
@@ -921,8 +926,12 @@ Each step ends with something runnable.
 2. Embedded libmpv engine (`crates/mpv-player/`, CAOpenGLLayer on macOS) — replaced Vidstack.
 3. All keyboard shortcuts, control chrome (incl. audio-track / quality / speed menus, frame-step).
 4. Mode A caption renderer (standard subtitles).
-5. Watch history.
-   (Deferred: AirPlay, cross-platform render handlers, manual real-stream verification.)
+5. Watch history + resume.
+6. AirPlay via parallel AVFoundation engine (macOS) — proxy-fed `AVPlayer` + native route picker.
+7. Lazy Xtream `get_series_info` episode fetch (real seasons/episodes on series open).
+8. Canonical genre classification (`crates/core/src/classify.rs`) + genre chip-bar browse filter.
+9. Refresh playlist (atomic re-fetch + reload) preserving favorites/watchlist/continue-watching.
+   (Deferred to a follow-up: cross-platform render handlers for Windows/Linux.)
 
 **Phase 6 — Transcription (VOD)**
 1. Bundle FFmpeg.

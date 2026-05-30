@@ -17,6 +17,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `select_profile` | `{ id: string }` | `Profile` | 1 |
 | `list_sources` | `{ profileId: string }` | `Source[]` | 2 |
 | `add_source` | `{ profileId: string, name: string, url: string }` | `number` source id | 2 |
+| `refresh_source` | `{ profileId: string, sourceId: number }` | `void` | 5 |
 | `list_channels` | `{ profileId, sourceId, limit, offset, filters? }` | `Channel[]` | 3 |
 | `count_channels` | `{ profileId, sourceId, filters? }` | `number` | 3 |
 | `list_channel_countries` | `{ profileId, sourceId }` | `string[]` | 3 |
@@ -203,8 +204,9 @@ Player flow:
 AirPlay (parallel AVPlayer route, macOS):
 
 1. The backend installs a native `AVRoutePickerView` overlay; the frontend reserves a button slot
-   and calls `airplay_set_picker_rect` to position it. The button shows only while a route is
-   reachable (`airplay:status.available`).
+   and calls `airplay_set_picker_rect` to position it. The button is always shown while the mpv
+   engine is active (route detection is unreliable as a gate); the picker is positioned whenever the
+   controls are visible and no route is engaged.
 2. When the user picks a device, `airplay:picker-closed` fires. The frontend calls `airplay_engage`,
    which resolves the proxy HLS URL (so hostile IPTV becomes Apple-TV-friendly) and starts a muted
    `AVPlayer`. Once `airplay:status.engaged` confirms the external route activated, the frontend
@@ -234,9 +236,18 @@ Fallback WebKit flow:
 | `GET /captions/{token}/{lang}.vtt` | 6 | Source-language captions. Returns 404 in Phase 5. |
 | `GET /captions/{token}/{src}-to-{tgt}.vtt` | 7 | Translated captions. Returns 404 in Phase 5. |
 
+### `refresh_source`
+
+Re-fetches the source's playlist and atomically replaces its content (Replace import mode):
+snapshot → clear → re-import → restore, all in one transaction so the browse surfaces never flash
+empty. User state is preserved across the swap — favorites/watchlist (matched by `stream_url` /
+series title) and movie/live continue-watching (watch history remapped by `stream_url`). Episode
+continue-watching cannot be remapped across a re-import and self-drops. Emits the same
+`playlist:import:progress` events as `add_source`, scoped to the refreshed `source_id`.
+
 ### `playlist:import:progress`
 
-Emitted by `add_source`/`run_import` while a playlist is importing.
+Emitted by `add_source`/`refresh_source`/`run_import` while a playlist is importing.
 
 Stages:
 - `connecting`: import worker started and is waiting for the first provider bytes.
