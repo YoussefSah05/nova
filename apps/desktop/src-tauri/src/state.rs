@@ -1,6 +1,10 @@
+use nova_hls_proxy::SessionRegistry;
+use nova_mpv_player::MpvEngine;
 use sqlx::SqlitePool;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
+
+use crate::airplay::AirPlayEngine;
 
 pub struct AppState {
     /// Pool for app.db (profiles, app_settings).
@@ -8,18 +12,28 @@ pub struct AppState {
     pub active_profile_id: Arc<RwLock<Option<String>>>,
     /// Per-profile SQLite pools, keyed by profile UUID.
     pub profile_pools: Arc<RwLock<HashMap<String, Arc<SqlitePool>>>>,
-    /// Port the local HLS proxy bound to. The player asks for it via
-    /// `get_proxy_port` and constructs `http://127.0.0.1:<port>/proxy?url=…`.
+    /// Port the local HLS proxy bound to.
     pub hls_proxy_port: u16,
+    /// Shared session registry on the proxy. `resolve_stream` calls
+    /// [`SessionRegistry::register`]; `stop_playback` calls `release`.
+    pub hls_sessions: SessionRegistry,
+    /// Native libmpv playback engine used for reliable IPTV playback.
+    pub mpv_engine: Arc<MpvEngine>,
+    /// AVFoundation engine used only while an AirPlay route is active. On macOS
+    /// it wraps an `AVPlayer` + route picker; elsewhere it's an inert stub.
+    pub airplay: Arc<AirPlayEngine>,
 }
 
 impl AppState {
-    pub fn new(pool: SqlitePool, hls_proxy_port: u16) -> Self {
+    pub fn new(pool: SqlitePool, hls_proxy_port: u16, hls_sessions: SessionRegistry) -> Self {
         Self {
             pool: Arc::new(pool),
             active_profile_id: Arc::new(RwLock::new(None)),
             profile_pools: Arc::new(RwLock::new(HashMap::new())),
             hls_proxy_port,
+            hls_sessions,
+            mpv_engine: MpvEngine::new(),
+            airplay: AirPlayEngine::new(),
         }
     }
 

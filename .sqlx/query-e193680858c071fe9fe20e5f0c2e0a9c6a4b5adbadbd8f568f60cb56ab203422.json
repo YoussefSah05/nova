@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM watch_history\n               WHERE (media_kind = 'vod'     AND media_id IN (SELECT id FROM vod_items       WHERE source_id = ?))\n                  OR (media_kind = 'live'    AND media_id IN (SELECT id FROM channels        WHERE source_id = ?))\n                  OR (media_kind = 'episode' AND media_id IN (SELECT id FROM series_episodes WHERE source_id = ?))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e193680858c071fe9fe20e5f0c2e0a9c6a4b5adbadbd8f568f60cb56ab203422"
+}

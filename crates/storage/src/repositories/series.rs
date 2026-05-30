@@ -44,6 +44,115 @@ impl<'a> SeriesRepository<'a> {
         Ok(())
     }
 
+    /// Snapshot `(series_title, is_favorite, is_in_watchlist)` for marked
+    /// series of a source. Used by refresh to re-apply series-level flags.
+    pub async fn snapshot_series_flags_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+    ) -> Result<Vec<(String, bool, bool)>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT series_title as "series_title!: String",
+                      MAX(is_favorite) as "fav!: i64",
+                      MAX(is_in_watchlist) as "wl!: i64"
+               FROM series_episodes
+               WHERE source_id = ?
+               GROUP BY series_title
+               HAVING MAX(is_favorite) = 1 OR MAX(is_in_watchlist) = 1"#,
+            source_id,
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.series_title, r.fav != 0, r.wl != 0))
+            .collect())
+    }
+
+    pub async fn apply_series_flags_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+        flags: &[(String, bool, bool)],
+    ) -> Result<(), StorageError> {
+        for (title, fav, wl) in flags {
+            let f = *fav as i64;
+            let w = *wl as i64;
+            sqlx::query!(
+                "UPDATE series_episodes SET is_favorite = ?, is_in_watchlist = ? WHERE source_id = ? AND series_title = ?",
+                f,
+                w,
+                source_id,
+                title,
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_by_source_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+    ) -> Result<(), StorageError> {
+        sqlx::query!("DELETE FROM series_episodes WHERE source_id = ?", source_id)
+            .execute(&mut **tx)
+            .await?;
+        Ok(())
+    }
+
+    /// Replace all rows for a series with freshly-fetched episodes (used by the
+    /// lazy Xtream `get_series_info` path). Deletes the catalog sentinel and any
+    /// prior episodes, then inserts the new set — preserving any series-level
+    /// favorite/watchlist flag the user set before episodes were fetched.
+    pub async fn replace_series_episodes(
+        &self,
+        source_id: i64,
+        series_title: &str,
+        episodes: &[SeriesEpisode],
+    ) -> Result<(), StorageError> {
+        let mut tx = self.pool.begin().await?;
+        let flags = sqlx::query!(
+            r#"SELECT MAX(is_favorite) as "fav?: i64", MAX(is_in_watchlist) as "wl?: i64"
+               FROM series_episodes WHERE source_id = ? AND series_title = ?"#,
+            source_id,
+            series_title,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let fav = flags.fav.unwrap_or(0);
+        let wl = flags.wl.unwrap_or(0);
+
+        sqlx::query!(
+            "DELETE FROM series_episodes WHERE source_id = ? AND series_title = ?",
+            source_id,
+            series_title,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        let added_at = now_ts();
+        for e in episodes {
+            sqlx::query!(
+                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, is_favorite, is_in_watchlist)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                e.source_id,
+                e.series_title,
+                e.category,
+                e.season,
+                e.episode,
+                e.episode_title,
+                e.logo_url,
+                e.stream_url,
+                added_at,
+                fav,
+                wl,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Returns one summary per unique series title.
     ///
     /// `is_favorite` / `is_in_watchlist` are true when *any* episode of the title is
@@ -68,8 +177,8 @@ impl<'a> SeriesRepository<'a> {
             ContentSort::RecentlyAdded => sqlx::query!(
                 r#"SELECT series_title as "series_title!: String",
                         MIN(category) as "category?: String",
-                        COUNT(*) as "episode_count!: i64",
-                        COUNT(DISTINCT season) as "season_count!: i64",
+                        SUM(CASE WHEN season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
+                        COUNT(DISTINCT CASE WHEN season > 0 THEN season END) as "season_count!: i64",
                         MIN(logo_url) as "poster_url?: String",
                         MAX(is_favorite) as "is_favorite!: i64",
                         MAX(is_in_watchlist) as "is_in_watchlist!: i64",
@@ -111,8 +220,8 @@ impl<'a> SeriesRepository<'a> {
             ContentSort::Default => sqlx::query!(
                 r#"SELECT series_title as "series_title!: String",
                         MIN(category) as "category?: String",
-                        COUNT(*) as "episode_count!: i64",
-                        COUNT(DISTINCT season) as "season_count!: i64",
+                        SUM(CASE WHEN season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
+                        COUNT(DISTINCT CASE WHEN season > 0 THEN season END) as "season_count!: i64",
                         MIN(logo_url) as "poster_url?: String",
                         MAX(is_favorite) as "is_favorite!: i64",
                         MAX(is_in_watchlist) as "is_in_watchlist!: i64",

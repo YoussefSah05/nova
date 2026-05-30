@@ -1,15 +1,17 @@
 import { useDeferredValue, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   AlertCircleIcon,
   ChevronRightIcon,
   DatabaseIcon,
   ListFilterIcon,
   PlusIcon,
+  RotateCwIcon,
   SearchIcon,
   XIcon,
 } from "lucide-react";
-import type { Channel, Profile, SeriesSummary, Source, VodItem } from "@/types";
+import type { Channel, ImportProgress, Profile, SeriesSummary, Source, VodItem } from "@/types";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SeriesDetail } from "@/features/browse/SeriesDetail";
 import { Shelves } from "@/features/browse/Shelves";
@@ -74,6 +76,10 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
   const [shelvesKey, setShelvesKey] = useState(0);
+  // Bumped to force every data loader to re-run (used by the Refresh button and
+  // after a re-import completes, so the home screen reflects changes).
+  const [reloadKey, setReloadKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const activeSource = sources.find((source) => source.id === activeSourceId) ?? null;
@@ -159,7 +165,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return () => {
       cancelled = true;
     };
-  }, [profile.id, sources]);
+  }, [profile.id, sources, reloadKey]);
 
   useEffect(() => {
     if (activeSourceId === null) {
@@ -203,7 +209,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return () => {
       cancelled = true;
     };
-  }, [profile.id, activeSourceId]);
+  }, [profile.id, activeSourceId, reloadKey]);
 
   useEffect(() => {
     if (activeSourceId === null) {
@@ -254,7 +260,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return () => {
       cancelled = true;
     };
-  }, [profile.id, activeSourceId]);
+  }, [profile.id, activeSourceId, reloadKey]);
 
   useEffect(() => {
     if (activeSourceId === null) {
@@ -370,7 +376,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return () => {
       cancelled = true;
     };
-  }, [profile.id, activeSourceId, tab, deferredSearchQuery, countryFilter, categoryFilter]);
+  }, [profile.id, activeSourceId, tab, deferredSearchQuery, countryFilter, categoryFilter, reloadKey]);
 
   async function handleSourceAdded() {
     setShowAddSource(false);
@@ -395,6 +401,45 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     setActiveSourceId(Number(value));
     resetBrowseState();
   }
+
+  async function handleRefresh() {
+    if (activeSourceId === null || refreshing) return;
+    setRefreshing(true);
+    setSourceError(null);
+    setContentError(null);
+    try {
+      // Re-imports the source from its provider; completion arrives via the
+      // playlist:import:progress listener, which reloads the home screen.
+      await invoke("refresh_source", { profileId: profile.id, sourceId: activeSourceId });
+    } catch (error: unknown) {
+      setRefreshing(false);
+      setSourceError(errorMessage(error));
+    }
+  }
+
+  // While a refresh runs, watch import progress for the active source. On
+  // completion, repaint the home screen with the refreshed catalog.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listen<ImportProgress>("playlist:import:progress", (event) => {
+      const p = event.payload;
+      if (p.sourceId !== activeSourceId) return;
+      if (p.error) setSourceError(p.error);
+      if (p.done) {
+        setRefreshing(false);
+        setReloadKey((k) => k + 1);
+        setShelvesKey((k) => k + 1);
+      }
+    }).then((un) => {
+      if (cancelled) un();
+      else unlisten = un;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [activeSourceId]);
 
   async function handleLoadMore() {
     if (activeSourceId === null || tab === "series" || isLoading || isLoadingMore || !hasMore) {
@@ -630,7 +675,6 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               setPlayingMedia({
                 kind: "episode",
                 id: episode.id,
-                streamUrl: episode.streamUrl,
                 title: selectedSeries.seriesTitle,
                 subtitle: `S${String(episode.season).padStart(2, "0")}E${String(episode.episode).padStart(2, "0")}${episode.episodeTitle ? ` — ${episode.episodeTitle}` : ""}`,
                 posterUrl: episode.logoUrl ?? selectedSeries.posterUrl,
@@ -643,6 +687,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             profileId={profile.id}
             media={playingMedia}
             onClose={() => setPlayingMedia(null)}
+            sourceId={activeSourceId}
+            onPlayMedia={setPlayingMedia}
           />
         )}
       </>
@@ -712,13 +758,24 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                 })}
               </select>
             </label>
-            <button
-              onClick={() => setShowAddSource(true)}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-indigo-400/30 bg-indigo-500/10 px-4 text-sm font-semibold text-indigo-200 transition-colors hover:bg-indigo-500/20 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950"
-            >
-              <PlusIcon className="h-4 w-4" aria-hidden />
-              Add playlist
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleRefresh}
+                disabled={activeSourceId === null || refreshing}
+                title="Re-fetch this playlist from the provider"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-sm font-medium text-white/80 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RotateCwIcon className={cn("h-4 w-4", refreshing && "animate-spin")} aria-hidden />
+                {refreshing ? "Refreshing…" : "Refresh"}
+              </button>
+              <button
+                onClick={() => setShowAddSource(true)}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-indigo-400/30 bg-indigo-500/10 px-4 text-sm font-semibold text-indigo-200 transition-colors hover:bg-indigo-500/20 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950"
+              >
+                <PlusIcon className="h-4 w-4" aria-hidden />
+                Add playlist
+              </button>
+            </div>
           </section>
 
           {activeSourceId !== null && (
@@ -728,6 +785,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               tab={tab}
               refreshKey={shelvesKey}
               onSelectSeries={setSelectedSeries}
+              onPlay={setPlayingMedia}
             />
           )}
 
@@ -758,34 +816,40 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             </div>
           </section>
 
-          <section className="grid gap-2 px-6 pb-3 md:grid-cols-[minmax(0,1fr)_180px_220px]">
-            <label className="relative">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
-              <input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder={`Search ${tab}`}
-                className="h-10 w-full rounded-xl border border-white/10 bg-neutral-900 pl-9 pr-3 text-sm text-white outline-none transition-colors placeholder:text-white/25 hover:border-white/20 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/30"
-              />
-            </label>
+          <section className="px-6 pb-3">
+            <div
+              className={cn(
+                "grid gap-2",
+                tab === "live" ? "md:grid-cols-[minmax(0,1fr)_220px]" : "md:grid-cols-1"
+              )}
+            >
+              <label className="relative">
+                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder={`Search ${tab}`}
+                  className="h-10 w-full rounded-xl border border-white/10 bg-neutral-900 pl-9 pr-3 text-sm text-white outline-none transition-colors placeholder:text-white/25 hover:border-white/20 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/30"
+                />
+              </label>
 
-            {tab === "live" ? (
-              <FilterSelect
-                label="Country"
-                value={countryFilter}
-                options={filterOptions.channelCountries}
-                onChange={setCountryFilter}
+              {tab === "live" && (
+                <FilterSelect
+                  label="Country"
+                  value={countryFilter}
+                  options={filterOptions.channelCountries}
+                  onChange={setCountryFilter}
+                />
+              )}
+            </div>
+
+            {categoryOptions.length > 0 && (
+              <GenreChips
+                options={categoryOptions}
+                value={categoryFilter}
+                onChange={setCategoryFilter}
               />
-            ) : (
-              <div className="hidden md:block" />
             )}
-
-            <FilterSelect
-              label="Category"
-              value={categoryFilter}
-              options={categoryOptions}
-              onChange={setCategoryFilter}
-            />
           </section>
 
           <section className="flex-1 overflow-y-auto px-6 pb-6">
@@ -842,7 +906,6 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                       setPlayingMedia({
                         kind: "live",
                         id: channel.id,
-                        streamUrl: channel.streamUrl,
                         title: channel.name,
                         subtitle:
                           [channel.country, channel.category].filter(Boolean).join(" / ") || null,
@@ -860,7 +923,6 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                       setPlayingMedia({
                         kind: "vod",
                         id: item.id,
-                        streamUrl: item.streamUrl,
                         title: item.cleanTitle ?? item.name,
                         subtitle:
                           [item.year?.toString(), item.category].filter(Boolean).join(" / ") ||
@@ -918,6 +980,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           profileId={profile.id}
           media={playingMedia}
           onClose={() => setPlayingMedia(null)}
+          sourceId={activeSourceId}
+          onPlayMedia={setPlayingMedia}
         />
       )}
     </div>
@@ -1052,11 +1116,7 @@ function SeriesList({
             <MediaThumb src={item.posterUrl} className="h-14 w-10 rounded-lg object-cover" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm text-white">{item.seriesTitle}</p>
-              <p className="truncate text-xs text-white/30">
-                {item.category ? `${item.category} / ` : ""}
-                {item.seasonCount} season{item.seasonCount !== 1 ? "s" : ""} / {item.episodeCount}{" "}
-                ep
-              </p>
+              <p className="truncate text-xs text-white/30">{item.category || "Series"}</p>
             </div>
             <ChevronRightIcon className="h-4 w-4 flex-shrink-0 text-white/20" aria-hidden />
           </button>
@@ -1120,6 +1180,47 @@ function FilterSelect({
         ))}
       </select>
     </label>
+  );
+}
+
+// Horizontal, scrollable genre chip-bar. Categories are canonical genres after
+// import normalization (nova_core::normalize_category), so each option is a
+// one-tap filter. Tapping the active chip (or "All") clears the filter.
+function GenreChips({
+  options,
+  value,
+  onChange,
+}: {
+  options: string[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const chip = (active: boolean) =>
+    cn(
+      "shrink-0 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400/40",
+      active
+        ? "bg-indigo-500 text-white"
+        : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+    );
+  return (
+    <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <button className={chip(value === "")} onClick={() => onChange("")}>
+        All
+      </button>
+      {options.map((option) => {
+        const active = value === option;
+        return (
+          <button
+            key={option}
+            className={chip(active)}
+            onClick={() => onChange(active ? "" : option)}
+            aria-pressed={active}
+          >
+            {option}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

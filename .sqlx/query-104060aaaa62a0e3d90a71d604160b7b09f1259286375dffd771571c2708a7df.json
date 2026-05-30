@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                wh.media_kind   as \"media_kind!: String\",\n                wh.position_sec as \"position_sec!: f64\",\n                wh.duration_sec as \"duration_sec?: f64\",\n                wh.completed    as \"completed!: i64\",\n                wh.watched_at   as \"watched_at!: i64\",\n                wh.caption_mode as \"caption_mode?: String\",\n                COALESCE(v.stream_url, c.stream_url) as \"stream_url!: String\"\n               FROM watch_history wh\n               LEFT JOIN vod_items v ON wh.media_kind = 'vod'  AND v.id = wh.media_id AND v.source_id = ?\n               LEFT JOIN channels  c ON wh.media_kind = 'live' AND c.id = wh.media_id AND c.source_id = ?\n               WHERE v.id IS NOT NULL OR c.id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "media_kind!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "position_sec!: f64",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "completed!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "watched_at!: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "caption_mode?: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "stream_url!: String",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "104060aaaa62a0e3d90a71d604160b7b09f1259286375dffd771571c2708a7df"
+}

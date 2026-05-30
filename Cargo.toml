@@ -10,6 +10,7 @@ members = [
     "crates/transcribe",
     "crates/translate",
     "crates/media",
+    "crates/mpv-player",
     "crates/storage",
     "crates/jobs",
     "crates/search",
@@ -52,6 +53,54 @@ insta = { version = "1", features = ["json", "yaml"] }
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }
+
+# Apple native view interop
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSColor",
+    "NSGraphics",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+    "objc2-quartz-core",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSGeometry",
+    "NSKeyValueCoding",
+    "NSObject",
+    "NSString",
+    "NSValue",
+] }
+objc2-web-kit = { version = "0.3", default-features = false, features = [
+    "objc2-app-kit",
+    "WKWebView",
+] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+    "std",
+    "CALayer",
+    "CAOpenGLLayer",
+    "objc2-core-foundation",
+] }
+objc2-av-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "AVAsset",
+    "AVPlayer",
+    "AVPlayerItem",
+    "AVRouteDetector",
+    "objc2-core-media",
+] }
+objc2-av-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "AVRoutePickerView",
+    "objc2-av-foundation",
+    "objc2-app-kit",
+] }
+objc2-core-media = { version = "0.3", default-features = false, features = [
+    "std",
+    "CMTime",
+] }
 
 [profile.dev]
 incremental = true

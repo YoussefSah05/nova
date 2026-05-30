@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT series_title as \"series_title!: String\",\n                        MIN(category) as \"category?: String\",\n                        SUM(CASE WHEN season > 0 THEN 1 ELSE 0 END) as \"episode_count!: i64\",\n                        COUNT(DISTINCT CASE WHEN season > 0 THEN season END) as \"season_count!: i64\",\n                        MIN(logo_url) as \"poster_url?: String\",\n                        MAX(is_favorite) as \"is_favorite!: i64\",\n                        MAX(is_in_watchlist) as \"is_in_watchlist!: i64\",\n                        MAX(added_at) as \"added_at?: i64\"\n                 FROM series_episodes\n                 WHERE source_id = ?\n                   AND (? IS NULL OR category = ?)\n                   AND (? IS NULL OR series_title LIKE ?)\n                 GROUP BY series_title\n                 HAVING (? = 0 OR MAX(is_favorite) = 1)\n                    AND (? = 0 OR MAX(is_in_watchlist) = 1)\n                 ORDER BY series_title ASC\n                 LIMIT ? OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "series_title!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "category?: String",
+        "ordinal": 1,
+        "type_info": "Null"
+      },
+      {
+        "name": "episode_count!: i64",
+        "ordinal": 2,
+        "type_info": "Null"
+      },
+      {
+        "name": "season_count!: i64",
+        "ordinal": 3,
+        "type_info": "Null"
+      },
+      {
+        "name": "poster_url?: String",
+        "ordinal": 4,
+        "type_info": "Null"
+      },
+      {
+        "name": "is_favorite!: i64",
+        "ordinal": 5,
+        "type_info": "Null"
+      },
+      {
+        "name": "is_in_watchlist!: i64",
+        "ordinal": 6,
+        "type_info": "Null"
+      },
+      {
+        "name": "added_at?: i64",
+        "ordinal": 7,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e6c951e600ec13307fa15bef405b1fbf79a9b6e6df029c8a02ac1b6c5d9a5d73"
+}

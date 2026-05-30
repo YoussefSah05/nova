@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT stream_url as \"stream_url!: String\"\n                       FROM channels WHERE id = ? LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "stream_url!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9220965404c3aa15e8d1de256a458d8515910e60a350ab867a01a5be5b087dcf"
+}

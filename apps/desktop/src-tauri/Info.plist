@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- AirPlay device discovery uses Bonjour/mDNS over the local network.
+       macOS prompts for local-network access on first use; this string is
+       shown in that prompt. See apps/desktop/src-tauri/src/airplay.rs. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Nova uses your local network to discover AirPlay devices so it can stream playback to your TV.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_airplay._tcp</string>
+    <string>_raop._tcp</string>
+  </array>
+</dict>
+</plist>

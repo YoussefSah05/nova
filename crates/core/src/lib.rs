@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod classify;
+pub use classify::normalize_category;
+
 // ── Profiles ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::process::Stdio;
 
-use nova_core::{MediaKind, ParsedEntry};
+use nova_core::{normalize_category, MediaKind, ParsedEntry};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
@@ -384,7 +384,7 @@ fn classify(attrs: ExtinfAttrs, stream_url: &str) -> ParsedEntry {
     };
 
     let group_title = attrs.group_title.unwrap_or_default();
-    let category = extract_category(&group_title);
+    let category = normalize_category(&group_title);
 
     ParsedEntry {
         kind,
@@ -495,14 +495,6 @@ fn find_season_episode(title: &str) -> Option<(usize, u8, u8)> {
         }
     }
     None
-}
-
-fn extract_category(group_title: &str) -> String {
-    if let Some(pipe_pos) = group_title.find("| ") {
-        group_title[pipe_pos + 2..].trim().to_string()
-    } else {
-        group_title.trim().to_string()
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -646,10 +638,11 @@ mod tests {
     }
 
     #[test]
-    fn category_extracted_from_group() {
-        assert_eq!(extract_category("DE| GERMANY MOVIES"), "GERMANY MOVIES");
-        assert_eq!(extract_category("SRS-FR| HBO"), "HBO");
-        assert_eq!(extract_category("PLAIN"), "PLAIN");
+    fn category_normalized_via_classifier() {
+        // Categories now flow through nova_core::normalize_category.
+        assert_eq!(normalize_category("DE| GERMANY MOVIES"), "Movies");
+        assert_eq!(normalize_category("SRS-FR| HBO"), "HBO");
+        assert_eq!(normalize_category("PLAIN"), "Plain");
     }
 
     #[test]

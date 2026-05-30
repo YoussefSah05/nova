@@ -1,0 +1,12 @@
+[package]
+name = "nova-mpv-player"
+version = "0.1.0"
+edition = "2021"
+description = "libmpv-backed local playback engine"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+

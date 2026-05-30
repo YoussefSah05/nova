@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE channels SET is_favorite = ?, is_in_watchlist = ? WHERE source_id = ? AND stream_url = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "b528d88f584ba8c2703421a5bd95d7198a73ef48374af78515f95802c08961f8"
+}
