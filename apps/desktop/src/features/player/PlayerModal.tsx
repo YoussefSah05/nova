@@ -35,6 +35,7 @@ import type { Channel } from "@/types";
 
 import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
 import { CaptionButton } from "./CaptionPicker";
+import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
 import { useAirPlay } from "./useAirPlay";
 import { AirPlayButton, AirPlayOverlay } from "./AirPlay";
 
@@ -252,13 +253,27 @@ export function PlayerModal({
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
   const audioTracks = tracks.filter((t) => t.kind === "audio");
   const videoTracks = tracks.filter((t) => t.kind === "video");
-  const sourceCues: Cue[] = [];
+  // Source-language captions (Phase 6): generated on demand when the user
+  // selects "Source language", rendered through CaptionOverlay below.
+  const sourceCaptions = useSourceCaptions(
+    profileId,
+    { kind: media.kind, id: media.id },
+    captionMode === "source"
+  );
+  const sourceCues: Cue[] = sourceCaptions.cues;
   const translatedCues: Cue[] = [];
   const latestPlaybackRef = useRef({ currentTime: 0, duration: 0, playing: false });
+  // Mirror the caption selection into a ref so the watch-progress interval
+  // (which captures its closure once) always records the current mode.
+  const captionModeRef = useRef<CaptionMode>("off");
 
   useEffect(() => {
     latestPlaybackRef.current = { currentTime, duration, playing };
   }, [currentTime, duration, playing]);
+
+  useEffect(() => {
+    captionModeRef.current = captionMode;
+  }, [captionMode]);
 
   // -- AirPlay (parallel AVPlayer route) ----------------------------------
   // When an AirPlay device is selected, the backend AVPlayer streams the proxy
@@ -826,7 +841,7 @@ export function PlayerModal({
           positionSec: latest.currentTime,
           durationSec: dur,
           completed,
-          captionMode: "off",
+          captionMode: captionModeRef.current,
         }).catch(() => {
           /* progress writes are best-effort */
         });
@@ -855,10 +870,7 @@ export function PlayerModal({
         positionSec: video.currentTime,
         durationSec: dur,
         completed,
-        // Always 'off' in Phase 5. Phase 6/7 will read the active selection
-        // from the caption picker and pass it through here so it persists
-        // per (media_kind, media_id).
-        captionMode: "off",
+        captionMode: captionModeRef.current,
       }).catch(() => {
         /* progress writes are best-effort */
       });
@@ -1406,7 +1418,7 @@ export function PlayerModal({
           />
         )}
 
-        {/* Caption overlay - inert in Phase 5; Phase 6/7 populate the cues. */}
+        {/* Caption overlay - Phase 6 source captions; Phase 7 adds translation. */}
         <CaptionOverlay
           mode={captionMode}
           sourceCues={sourceCues}
@@ -1414,6 +1426,25 @@ export function PlayerModal({
           currentTime={currentTime}
           sourceLang={resolved?.sourceLang}
         />
+
+        {/* Transcription progress banner (source captions still generating). */}
+        {captionMode === "source" &&
+          sourceCaptions.status !== "ready" &&
+          sourceCaptions.status !== "idle" && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-[22%] z-10 flex justify-center px-6">
+              <div
+                className={cn(
+                  "rounded-full bg-black/70 px-4 py-1.5 text-sm text-white/90 backdrop-blur-md",
+                  "border border-white/10 shadow-lg",
+                  sourceCaptions.status === "failed" && "text-rose-300"
+                )}
+              >
+                {sourceCaptions.status === "failed"
+                  ? `Caption generation failed${sourceCaptions.error ? `: ${sourceCaptions.error}` : ""}`
+                  : `Generating captions — ${sourceCaptionNote(sourceCaptions) ?? "working…"}`}
+              </div>
+            </div>
+          )}
 
         {/* Skip indicator (+-10s) */}
         {skipIndicator && (
@@ -1630,6 +1661,7 @@ export function PlayerModal({
               open={captionMenuOpen}
               onToggle={() => setCaptionMenuOpen((v) => !v)}
               onClose={() => setCaptionMenuOpen(false)}
+              sourceNote={sourceCaptionNote(sourceCaptions)}
             />
 
             <IconButton

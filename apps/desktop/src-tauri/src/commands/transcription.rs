@@ -99,6 +99,21 @@ pub struct ModelStatus {
     pub model_id: String,
 }
 
+/// A caption cue for the frontend `CaptionOverlay` (`{ start, end, text }`).
+#[derive(Debug, Clone, Serialize)]
+pub struct CaptionCue {
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptCues {
+    pub language: String,
+    pub cues: Vec<CaptionCue>,
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -176,6 +191,36 @@ pub async fn get_transcript_status(
         state: job_state.unwrap_or_else(|| "none".into()),
         vtt_path: None,
         language: None,
+    })
+}
+
+/// Return the transcript's cues for rendering in the React caption overlay.
+/// Cues are the stored segments (start/end/text); the overlay — not mpv — owns
+/// rendering so the Phase 7 translation card can share the same pipeline.
+#[tauri::command]
+pub async fn get_transcript_cues(
+    profile_id: String,
+    media_kind: String,
+    media_id: i64,
+    state: State<'_, AppState>,
+) -> Result<TranscriptCues, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let repo = TranscriptRepository::new(&pool);
+    let transcript = repo
+        .get_for_media(&media_kind, media_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("no transcript for media".into()))?;
+    let segments = repo.get_segments(transcript.id).await?;
+    Ok(TranscriptCues {
+        language: transcript.language,
+        cues: segments
+            .into_iter()
+            .map(|s| CaptionCue {
+                start: s.start_sec,
+                end: s.end_sec,
+                text: s.text,
+            })
+            .collect(),
     })
 }
 
