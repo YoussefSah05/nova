@@ -35,7 +35,7 @@ use objc2::rc::Retained;
 use objc2::runtime::Bool;
 use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
-use objc2_quartz_core::{CAOpenGLLayer, CALayer};
+use objc2_quartz_core::{CALayer, CAOpenGLLayer};
 
 // -- libdispatch FFI ---------------------------------------------------------
 //
@@ -271,8 +271,7 @@ impl MpvLayer {
         // error so we don't keep retrying every frame.
         if inner.render_ctx.is_none() {
             if let Some(handle) = inner.pending_handle.take() {
-                let ctx_ptr = (&self.ivars().opengl_lib as *const AtomicPtr<c_void>)
-                    as *mut c_void;
+                let ctx_ptr = (&self.ivars().opengl_lib as *const AtomicPtr<c_void>) as *mut c_void;
                 match MpvRenderContext::new(handle, ctx_ptr, get_proc_address_trampoline) {
                     Ok(ctx) => {
                         let layer_ptr: *const MpvLayer = self;

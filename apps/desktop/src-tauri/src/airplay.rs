@@ -78,11 +78,13 @@ mod imp {
     use objc2_av_foundation::{
         AVPlayer, AVPlayerItem, AVPlayerItemStatus, AVPlayerTimeControlStatus, AVRouteDetector,
     };
-    use objc2_av_kit::{AVRoutePickerView, AVRoutePickerViewButtonState, AVRoutePickerViewDelegate};
+    use objc2_av_kit::{
+        AVRoutePickerView, AVRoutePickerViewButtonState, AVRoutePickerViewDelegate,
+    };
     use objc2_core_media::CMTime;
     use objc2_foundation::{NSObject, NSObjectProtocol, NSString, NSURL};
-    use tauri::{AppHandle, Emitter};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use tauri::{AppHandle, Emitter};
 
     use super::AirPlayEngine;
 
@@ -182,7 +184,8 @@ mod imp {
         fn set_volume(&self, volume: f64) {
             // SAFETY: main-thread setter; AVPlayer volume is 0.0..=1.0.
             unsafe {
-                self.player().setVolume(volume.clamp(0.0, 1.0) as core::ffi::c_float);
+                self.player()
+                    .setVolume(volume.clamp(0.0, 1.0) as core::ffi::c_float);
             }
         }
 
@@ -371,7 +374,10 @@ mod imp {
             // White glyph so it reads on the dark control bar; system blue when
             // a route is active.
             let white = NSColor::whiteColor();
-            picker.setRoutePickerButtonColor_forState(Some(&white), AVRoutePickerViewButtonState::Normal);
+            picker.setRoutePickerButtonColor_forState(
+                Some(&white),
+                AVRoutePickerViewButtonState::Normal,
+            );
             picker.setHidden(true);
             let delegate = RoutePickerDelegate::new(app.clone());
             picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
@@ -507,11 +513,7 @@ mod imp {
     /// Whether an AirPlay engine was installed (always true on macOS once
     /// `install` ran; the helper exists so the non-macOS stub can return false).
     pub fn is_installed(engine: &Arc<AirPlayEngine>) -> bool {
-        engine
-            .inner
-            .lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false)
+        engine.inner.lock().map(|g| g.is_some()).unwrap_or(false)
     }
 }
 

@@ -192,10 +192,7 @@ impl MpvEngine {
         self: &Arc<Self>,
         handler: Arc<dyn RenderLifecycleHandler>,
     ) -> Result<(), MpvError> {
-        *self
-            .render_handler
-            .lock()
-            .map_err(|_| MpvError::Poisoned)? = Some(handler);
+        *self.render_handler.lock().map_err(|_| MpvError::Poisoned)? = Some(handler);
         Ok(())
     }
 
@@ -355,14 +352,23 @@ impl MpvEngine {
 
     pub fn frame_step(self: &Arc<Self>, token: &str, forward: bool) -> Result<(), MpvError> {
         let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
-        let cmd = if forward { "frame-step" } else { "frame-back-step" };
+        let cmd = if forward {
+            "frame-step"
+        } else {
+            "frame-back-step"
+        };
         active_session(&mut guard, token)?.command(&[cmd])
     }
 
     /// Ask the render host to repaint (e.g. after a window resize/fullscreen
     /// toggle). No-op if no handler is registered.
     pub fn request_redraw(self: &Arc<Self>) -> Result<(), MpvError> {
-        if let Some(handler) = self.render_handler.lock().map_err(|_| MpvError::Poisoned)?.as_ref() {
+        if let Some(handler) = self
+            .render_handler
+            .lock()
+            .map_err(|_| MpvError::Poisoned)?
+            .as_ref()
+        {
             handler.request_redraw();
         }
         Ok(())
@@ -371,7 +377,12 @@ impl MpvEngine {
     /// Constrain the video surface to `rect` (CSS px, window-relative), or
     /// `None` to fill the window. No-op if no handler is registered.
     pub fn set_video_rect(self: &Arc<Self>, rect: Option<VideoRect>) -> Result<(), MpvError> {
-        if let Some(handler) = self.render_handler.lock().map_err(|_| MpvError::Poisoned)?.as_ref() {
+        if let Some(handler) = self
+            .render_handler
+            .lock()
+            .map_err(|_| MpvError::Poisoned)?
+            .as_ref()
+        {
             handler.set_video_rect(rect);
         }
         Ok(())
@@ -494,11 +505,7 @@ impl MpvSession {
             // `mpv_terminate_destroy` (see `Drop`). libmpv guarantees no more
             // callbacks after `mpv_terminate_destroy` returns.
             unsafe {
-                mpv_set_wakeup_callback(
-                    handle,
-                    Some(wakeup_trampoline),
-                    ctx_ptr.cast::<c_void>(),
-                );
+                mpv_set_wakeup_callback(handle, Some(wakeup_trampoline), ctx_ptr.cast::<c_void>());
                 session.wakeup_ctx = Some(Box::from_raw(ctx_ptr));
             }
         }
@@ -856,9 +863,8 @@ impl MpvRenderContext {
         // SAFETY: `handle.as_ptr()` is a live mpv handle (invariant on
         // `MpvRawHandle`'s API). `params` is fully initialized above and
         // outlives the call; `init_params` likewise.
-        let rc = unsafe {
-            mpv_render_context_create(&mut ctx, handle.as_ptr(), params.as_mut_ptr())
-        };
+        let rc =
+            unsafe { mpv_render_context_create(&mut ctx, handle.as_ptr(), params.as_mut_ptr()) };
         if rc < 0 {
             return Err(MpvError::RenderContext(mpv_error_to_string(rc)));
         }

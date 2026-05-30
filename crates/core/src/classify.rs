@@ -60,12 +60,24 @@ fn is_adult(label: &str) -> bool {
 const TAXONOMY: &[(&str, &[&str])] = &[
     // Specific film/TV genres first.
     ("Action", &["action", "اكشن", "akshن"]),
-    ("Comedy", &["comedy", "comedie", "comédie", "comedia", "كوميدي"]),
+    (
+        "Comedy",
+        &["comedy", "comedie", "comédie", "comedia", "كوميدي"],
+    ),
     ("Horror", &["horror", "horreur", "terror", "رعب"]),
     ("Thriller", &["thriller", "suspense"]),
-    ("Romance", &["romance", "romantic", "romantique", "romantik"]),
-    ("Animation", &["animation", "anime", "animated", "animacion"]),
-    ("Sci-Fi", &["sci-fi", "scifi", "science fiction", "science-fiction"]),
+    (
+        "Romance",
+        &["romance", "romantic", "romantique", "romantik"],
+    ),
+    (
+        "Animation",
+        &["animation", "anime", "animated", "animacion"],
+    ),
+    (
+        "Sci-Fi",
+        &["sci-fi", "scifi", "science fiction", "science-fiction"],
+    ),
     ("Fantasy", &["fantasy", "fantastique", "fantastico"]),
     ("Crime", &["crime", "polar", "policier"]),
     ("Adventure", &["adventure", "aventure", "aventura"]),
@@ -77,44 +89,104 @@ const TAXONOMY: &[(&str, &[&str])] = &[
     (
         "Sports",
         &[
-            "sport", "deporte", "futbol", "football", "calcio", "bein", "espn", "nba", "nfl",
-            "ufc", "motogp", "formula", "رياضة", "tennis", "golf",
+            "sport",
+            "deporte",
+            "futbol",
+            "football",
+            "calcio",
+            "bein",
+            "espn",
+            "nba",
+            "nfl",
+            "ufc",
+            "motogp",
+            "formula",
+            "رياضة",
+            "tennis",
+            "golf",
         ],
     ),
     (
         "News",
-        &["news", "noticias", "info", "actualit", "nachrichten", "اخبار", "akhbar"],
+        &[
+            "news",
+            "noticias",
+            "info",
+            "actualit",
+            "nachrichten",
+            "اخبار",
+            "akhbar",
+        ],
     ),
     (
         "Kids",
         &[
-            "kids", "kid", "enfant", "infantil", "niños", "ninos", "cartoon", "dibujos", "baby",
-            "اطفال", "atfal", "junior",
+            "kids",
+            "kid",
+            "enfant",
+            "infantil",
+            "niños",
+            "ninos",
+            "cartoon",
+            "dibujos",
+            "baby",
+            "اطفال",
+            "atfal",
+            "junior",
         ],
     ),
     (
         "Documentary",
         &[
-            "document", "docu", "discovery", "nat geo", "natgeo", "documentaire", "documental",
+            "document",
+            "docu",
+            "discovery",
+            "nat geo",
+            "natgeo",
+            "documentaire",
+            "documental",
             "وثائقي",
         ],
     ),
-    ("Music", &["music", "musique", "musica", "mtv", "clips", "موسيقى"]),
+    (
+        "Music",
+        &["music", "musique", "musica", "mtv", "clips", "موسيقى"],
+    ),
     (
         "Religion",
-        &["religion", "islam", "quran", "coran", "church", "gospel", "قرآن", "دين"],
+        &[
+            "religion", "islam", "quran", "coran", "church", "gospel", "قرآن", "دين",
+        ],
     ),
     // Generic catch-alls last.
     (
         "Movies",
         &[
-            "movie", "movies", "vod", "film", "films", "cine", "cinema", "cinéma", "pelicula",
-            "peliculas", "أفلام", "aflam",
+            "movie",
+            "movies",
+            "vod",
+            "film",
+            "films",
+            "cine",
+            "cinema",
+            "cinéma",
+            "pelicula",
+            "peliculas",
+            "أفلام",
+            "aflam",
         ],
     ),
     (
         "Series",
-        &["series", "serie", "séries", "shows", "tv show", "مسلسلات", "mosalsalat"],
+        &[
+            "series",
+            "serie",
+            "séries",
+            "shows",
+            "tv show",
+            "مسلسلات",
+            "mosalsalat",
+        ],
     ),
     (
         "Entertainment",
@@ -148,7 +220,9 @@ fn title_case(label: &str) -> String {
         .split_whitespace()
         .map(|word| {
             let is_acronym = word.len() <= 4
-                && word.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
                 && word.chars().any(|c| c.is_ascii_uppercase());
             if is_acronym {
                 return word.to_string();

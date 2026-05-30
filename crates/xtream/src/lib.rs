@@ -118,7 +118,11 @@ pub async fn fetch_series_info(
     creds: &XtreamCredentials,
     series_id: i64,
 ) -> Result<Vec<XtreamEpisode>, String> {
-    let url = format!("{}&series_id={}", creds.api_url("get_series_info"), series_id);
+    let url = format!(
+        "{}&series_id={}",
+        creds.api_url("get_series_info"),
+        series_id
+    );
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(45))

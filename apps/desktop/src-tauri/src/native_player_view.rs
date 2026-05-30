@@ -22,7 +22,7 @@ use objc2::rc::Retained;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSColor, NSView, NSWindow};
 use objc2_foundation::{ns_string, NSNumber, NSObjectNSKeyValueCoding};
-use objc2_quartz_core::{CALayer, CAAutoresizingMask};
+use objc2_quartz_core::{CAAutoresizingMask, CALayer};
 use objc2_web_kit::WKWebView;
 use tauri::{webview::PlatformWebview, Runtime, WebviewWindow};
 
