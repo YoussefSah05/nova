@@ -32,6 +32,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install system dependencies (libmpv for the player crate)
+        env:
+          # Don't rebuild installed dependents (the runner ships the `iina`
+          # cask, which depends on mpv; reinstalling it runs a post-install
+          # hook that hits the GitHub API and fails on rate limits).
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          # Authenticate brew's GitHub API calls to avoid HTTP 403 rate limits.
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Tauri 2 on macOS uses the system WebKit — no extra packages needed.
           # nova-mpv-player links libmpv; the Homebrew mpv formula ships libmpv
