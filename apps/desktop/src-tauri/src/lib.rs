@@ -121,6 +121,11 @@ pub fn run() {
             commands::playback::mpv_set_video_rect,
             commands::playback::record_watch_progress,
             commands::playback::get_resume_position,
+            // Phase 6 — Transcription (VOD)
+            commands::transcription::enqueue_transcription,
+            commands::transcription::get_transcript_status,
+            commands::transcription::get_model_status,
+            commands::transcription::download_whisper_model,
             // Phase 5 — AirPlay (parallel AVPlayer route)
             commands::playback::airplay_set_picker_rect,
             commands::playback::airplay_engage,

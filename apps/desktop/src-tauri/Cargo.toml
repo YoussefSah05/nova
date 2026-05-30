@@ -25,10 +25,14 @@ nova-xtream = { path = "../../../crates/xtream" }
 nova-epg = { path = "../../../crates/epg" }
 nova-hls-proxy = { path = "../../../crates/hls-proxy" }
 nova-mpv-player = { path = "../../../crates/mpv-player" }
+nova-media = { path = "../../../crates/media" }
+nova-transcribe = { path = "../../../crates/transcribe" }
+nova-jobs = { path = "../../../crates/jobs" }
 sqlx = { workspace = true }
 uuid = { workspace = true }
 dirs = "5"
 reqwest = { workspace = true }
+tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }

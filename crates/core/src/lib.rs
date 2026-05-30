@@ -191,6 +191,57 @@ pub struct ImportProgress {
     pub warning: Option<String>,
 }
 
+// ── Transcription (Phase 6) ───────────────────────────────────────────────────
+
+/// One word with its timing, when Whisper emits word/token timestamps.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptWord {
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub word: String,
+}
+
+/// A single caption-sized unit of a transcript. `words` is `None` when the
+/// engine did not provide word-level timing. Persisted as a row in
+/// `transcript_segments` (with `words` flattened to the `words_json` column).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptSegment {
+    /// Segment ordinal within the transcript, starting at 0.
+    pub seq: i64,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub text: String,
+    pub words: Option<Vec<TranscriptWord>>,
+}
+
+/// The output of a transcription run, before it is persisted. Maps onto a
+/// `transcripts` row plus its `transcript_segments`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawTranscript {
+    /// BCP-47 source language (detected or supplied).
+    pub language: String,
+    /// Model identifier, e.g. `large-v3-turbo-q5_0`.
+    pub model: String,
+    pub segments: Vec<TranscriptSegment>,
+    /// Seconds of audio actually processed, if known.
+    pub duration_processed_sec: Option<f64>,
+}
+
+/// Lifecycle state of a transcript for a media item, surfaced to the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TranscriptState {
+    /// No transcript and no job.
+    None,
+    Queued,
+    Running,
+    Done,
+    Failed,
+}
+
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 pub fn now_ts() -> i64 {

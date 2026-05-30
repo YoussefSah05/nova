@@ -933,13 +933,21 @@ Each step ends with something runnable.
 9. Refresh playlist (atomic re-fetch + reload) preserving favorites/watchlist/continue-watching.
    (Deferred to a follow-up: cross-platform render handlers for Windows/Linux.)
 
-**Phase 6 — Transcription (VOD)**
-1. Bundle FFmpeg.
-2. Build whisper.cpp with Core ML enabled.
-3. `transcribe` crate batch transcription with word timestamps.
-4. First-run model download + Core ML compile.
-5. Job queue runs transcriptions.
-6. Source-language VTT injected into manifest, picker reflects state.
+**Phase 6 — Transcription (VOD)** — 🟡 backend implemented (`feat/phase-6-transcription`)
+1. FFmpeg audio extraction to 16 kHz mono WAV (`nova_media::extract_audio_16k_mono`).
+2. **Decision update:** `whisper-cli` is driven as a **subprocess** (Homebrew `whisper-cpp`,
+   Core ML), not linked via FFI — same external-binary pattern as ffmpeg/mpv. The `transcribe`
+   crate (`model`/`whisper`/`vtt`) downloads the prebuilt **GGML + Core ML** model on first run
+   (no Python conversion), runs whisper-cli with `--output-json-full` (word timestamps), and
+   renders WebVTT with the `whisper-config` post-rules.
+3. Transcripts persisted to `transcripts` + `transcript_segments` (migration 0007); the kick-driven
+   `nova-jobs` queue runs `transcribe_vod` jobs (concurrency cap 1/profile).
+4. Commands: `enqueue_transcription`, `get_transcript_status`, `get_model_status`,
+   `download_whisper_model`; events `transcription:progress` / `:complete`, `model:download:progress`.
+5. **Caption delivery deviation (continues the Phase 5 libmpv switch):** the source VTT is loaded
+   into the player via mpv `sub-add <path>`, **not** injected into the proxy HLS manifest. The
+   proxy `/captions` endpoint stays a stub (relevant only to the AirPlay/AVPlayer path).
+6. Follow-up (same branch): wire the caption picker UI + mpv `sub-add` command; sticky prefs.
 
 **Phase 7 — Translation (VOD)**
 1. `translate` crate with NLLB-200 distilled 600M via CTranslate2.

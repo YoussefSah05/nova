@@ -1,12 +1,28 @@
-//! whisper.cpp FFI wrapper + streaming ASR.
+//! On-device speech-to-text for Nova (Phase 6).
 //!
-//! Implemented in Phase 6: batch VOD transcription with word-level timestamps,
-//! live streaming ASR with LocalAgreement-2 stabilization.
-//! Builds whisper.cpp with WHISPER_COREML=1 for Apple Neural Engine acceleration.
-//! See docs/reference/whisper-config.md for model selection and VAD tuning.
+//! Nova drives `whisper-cli` (whisper.cpp's CLI, built with Core ML) as a
+//! subprocess — the same external-binary pattern used for ffmpeg and mpv —
+//! rather than linking libwhisper. This crate owns three concerns:
+//!
+//! - [`model`] — describe, locate, and first-run-download the GGML weights +
+//!   prebuilt Core ML encoder.
+//! - [`whisper`] — invoke `whisper-cli` and parse its JSON output into
+//!   [`nova_core::RawTranscript`].
+//! - [`vtt`] — render segments to WebVTT with the `whisper-config` post-rules.
+//!
+//! Audio extraction (16 kHz mono WAV) lives in `nova_media::extract_audio_16k_mono`;
+//! orchestration (resolve URL → extract → ensure model → transcribe → persist)
+//! lives in the desktop job handler so this crate stays free of Tauri/storage.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_compiles() {}
-}
+pub mod model;
+pub mod vtt;
+pub mod whisper;
+
+pub use model::{
+    default_model, ensure_model, is_installed, model_paths, ModelDownloadProgress, ModelError,
+    ModelPaths, WhisperModel,
+};
+pub use vtt::segments_to_vtt;
+pub use whisper::{
+    parse_whisper_json, transcribe_wav, whisper_bin, TranscribeOptions, WhisperError,
+};

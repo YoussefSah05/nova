@@ -53,6 +53,7 @@ insta = { version = "1", features = ["json", "yaml"] }
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Apple native view interop
 objc2 = "0.6"

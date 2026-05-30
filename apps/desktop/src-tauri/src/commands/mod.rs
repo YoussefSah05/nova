@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 pub mod epg;
 pub mod playback;
+pub mod transcription;
 
 // ── Profile commands (Phase 1) ────────────────────────────────────────────────
 

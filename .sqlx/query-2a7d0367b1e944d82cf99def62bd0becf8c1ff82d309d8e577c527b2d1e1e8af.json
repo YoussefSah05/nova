@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM transcripts\n             WHERE media_kind = ? AND media_id = ? AND language = ? AND model = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "2a7d0367b1e944d82cf99def62bd0becf8c1ff82d309d8e577c527b2d1e1e8af"
+}

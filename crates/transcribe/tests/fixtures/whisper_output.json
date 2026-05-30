@@ -1,0 +1,43 @@
+{
+  "result": { "language": "en" },
+  "transcription": [
+    {
+      "timestamps": { "from": "00:00:00,000", "to": "00:00:02,000" },
+      "offsets": { "from": 0, "to": 2000 },
+      "text": " Hello world.",
+      "tokens": [
+        { "text": "[_BEG_]", "offsets": { "from": 0, "to": 0 } },
+        { "text": " Hello", "offsets": { "from": 0, "to": 500 } },
+        { "text": " world", "offsets": { "from": 600, "to": 1400 } },
+        { "text": ".", "offsets": { "from": 1400, "to": 2000 } }
+      ]
+    },
+    {
+      "timestamps": { "from": "00:00:02,000", "to": "00:00:03,000" },
+      "offsets": { "from": 2000, "to": 3000 },
+      "text": "   ",
+      "tokens": [
+        { "text": "[_BEG_]", "offsets": { "from": 2000, "to": 2000 } },
+        { "text": " ", "offsets": { "from": 2000, "to": 3000 } }
+      ]
+    },
+    {
+      "timestamps": { "from": "00:00:03,000", "to": "00:00:05,500" },
+      "offsets": { "from": 3000, "to": 5500 },
+      "text": " This is a longer caption line that will need wrapping.",
+      "tokens": [
+        { "text": " This", "offsets": { "from": 3000, "to": 3300 } },
+        { "text": " is", "offsets": { "from": 3300, "to": 3500 } },
+        { "text": " a", "offsets": { "from": 3500, "to": 3600 } },
+        { "text": " longer", "offsets": { "from": 3600, "to": 4000 } },
+        { "text": " caption", "offsets": { "from": 4000, "to": 4400 } },
+        { "text": " line", "offsets": { "from": 4400, "to": 4700 } },
+        { "text": " that", "offsets": { "from": 4700, "to": 4900 } },
+        { "text": " will", "offsets": { "from": 4900, "to": 5100 } },
+        { "text": " need", "offsets": { "from": 5100, "to": 5300 } },
+        { "text": " wrapping", "offsets": { "from": 5300, "to": 5450 } },
+        { "text": ".", "offsets": { "from": 5450, "to": 5500 } }
+      ]
+    }
+  ]
+}

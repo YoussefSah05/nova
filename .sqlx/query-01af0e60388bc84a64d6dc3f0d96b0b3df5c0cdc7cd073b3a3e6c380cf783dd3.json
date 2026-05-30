@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                 id                     as \"id!: i64\",\n                 media_kind,\n                 media_id               as \"media_id!: i64\",\n                 language,\n                 model,\n                 vtt_path,\n                 json_path,\n                 created_at             as \"created_at!: i64\",\n                 duration_processed_sec as \"duration_processed_sec?: f64\"\n               FROM transcripts\n               WHERE media_kind = ? AND media_id = ?\n               ORDER BY created_at DESC\n               LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "media_kind",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "media_id!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "language",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "model",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "vtt_path",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "json_path",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: i64",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "duration_processed_sec?: f64",
+        "ordinal": 8,
+        "type_info": "Float"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "01af0e60388bc84a64d6dc3f0d96b0b3df5c0cdc7cd073b3a3e6c380cf783dd3"
+}
