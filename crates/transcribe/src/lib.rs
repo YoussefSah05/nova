@@ -24,5 +24,6 @@ pub use model::{
 };
 pub use vtt::segments_to_vtt;
 pub use whisper::{
-    parse_whisper_json, transcribe_wav, whisper_bin, TranscribeOptions, WhisperError,
+    parse_whisper_json, shift_transcript, transcribe_wav, whisper_bin, TranscribeOptions,
+    WhisperError,
 };

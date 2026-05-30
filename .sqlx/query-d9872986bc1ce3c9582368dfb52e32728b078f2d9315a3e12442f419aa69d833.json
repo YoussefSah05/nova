@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT\n                 seq        as \"seq!: i64\",\n                 start_sec  as \"start_sec!: f64\",\n                 end_sec    as \"end_sec!: f64\",\n                 text,\n                 words_json as \"words_json?: String\"\n               FROM transcript_segments\n               WHERE transcript_id = ?\n               ORDER BY seq ASC",
+  "query": "SELECT\n                 seq        as \"seq!: i64\",\n                 start_sec  as \"start_sec!: f64\",\n                 end_sec    as \"end_sec!: f64\",\n                 text,\n                 words_json as \"words_json?: String\"\n               FROM transcript_segments\n               WHERE transcript_id = ?\n               ORDER BY start_sec ASC",
   "describe": {
     "columns": [
       {
@@ -40,5 +40,5 @@
       true
     ]
   },
-  "hash": "35b13891328da2b0a902d2df986838dd02c9a9c74eb403e86655349ab7f1c040"
+  "hash": "d9872986bc1ce3c9582368dfb52e32728b078f2d9315a3e12442f419aa69d833"
 }

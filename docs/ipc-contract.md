@@ -56,10 +56,11 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `record_watch_progress` | `{ profileId, mediaKind, mediaId, positionSec, durationSec?, completed, captionMode? }` | `void` | 5 |
 | `get_resume_position` | `{ profileId, mediaKind, mediaId }` | `ResumeInfo \| null` | 5 |
 | `get_proxy_port` | `{}` | `number` (deprecated - use `resolve_stream`) | 5 |
-| `enqueue_transcription` | `{ profileId, mediaKind, mediaId }` | `{ jobId?: number, alreadyDone: boolean }` | 6 |
-| `get_transcript_status` | `{ profileId, mediaKind, mediaId }` | `{ state: 'none'\|'queued'\|'running'\|'done'\|'failed', vttPath?, language? }` | 6 |
 | `get_model_status` | `{}` | `{ installed: boolean, modelId: string }` | 6 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
+| `start_caption_session` | `{ profileId, mediaKind, mediaId, fromSec, durationSec? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
+| `set_caption_playhead` | `{ sec: number }` | `void` | 6 |
+| `stop_caption_session` | `{}` | `void` | 6 |
 | `enqueue_translation` | `{ transcript_id: number, target_lang: string, backend: TranslationBackend }` | `JobId` | 7 |
 | `get_transcript` | `{ transcript_id: number }` | `Transcript` | 6 |
 | `search` | `{ query: string, lang_filter?: string }` | `SearchResult[]` | 8 |
@@ -91,8 +92,8 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | Event | Payload | Phase |
 |---|---|---|
 | `playlist:import:progress` | `{ sourceId, stage, parsed, inserted, liveCount, movieCount, seriesCount, failedCount, skippedCount, elapsedMs, done, error?, warning? }` | 2 |
-| `transcription:progress` | `{ mediaKind, mediaId, stage: 'extracting'\|'transcribing'\|'persisting'\|'complete'\|'failed', pct, error? }` | 6 |
-| `transcription:complete` | `{ mediaKind, mediaId, language, vttPath }` | 6 |
+| `transcription:cues` | `{ mediaKind, mediaId, language, cues: [{start,end,text}] }` (incremental, absolute times) | 6 |
+| `transcription:status` | `{ mediaKind, mediaId, state: 'preparing'\|'streaming'\|'complete'\|'failed', coveredSec?, error? }` | 6 |
 | `model:download:progress` | `{ artifact: 'weights'\|'coreml', downloadedBytes, totalBytes? }` | 6 |
 | `translation:progress` | `{ job_id: number, pct: number }` | 7 |
 | `translation:complete` | `{ job_id: number, transcript_id: number, target_lang: string }` | 7 |

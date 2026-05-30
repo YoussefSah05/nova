@@ -32,11 +32,11 @@ impl<'a> TranscriptRepository<'a> {
         Self { pool }
     }
 
-    /// Replace any existing transcript for `(media_kind, media_id, language,
-    /// model)` and its segments, returning the new transcript id. Runs in one
-    /// transaction so a partial write never leaves a half-populated transcript.
+    /// Find or create the transcript row for `(media_kind, media_id, language,
+    /// model)`, returning its id. Used by the streaming pipeline, which appends
+    /// windows over multiple sessions rather than writing the whole file at once.
     #[allow(clippy::too_many_arguments)]
-    pub async fn replace_transcript(
+    pub async fn get_or_create_transcript(
         &self,
         media_kind: &str,
         media_id: i64,
@@ -44,28 +44,26 @@ impl<'a> TranscriptRepository<'a> {
         model: &str,
         vtt_path: &str,
         json_path: &str,
-        duration_processed_sec: Option<f64>,
-        segments: &[TranscriptSegment],
     ) -> Result<i64, StorageError> {
-        let now = now_ts();
-        let mut tx = self.pool.begin().await?;
-
-        sqlx::query!(
-            "DELETE FROM transcripts
-             WHERE media_kind = ? AND media_id = ? AND language = ? AND model = ?",
+        if let Some(row) = sqlx::query!(
+            r#"SELECT id as "id!: i64" FROM transcripts
+               WHERE media_kind = ? AND media_id = ? AND language = ? AND model = ?"#,
             media_kind,
             media_id,
             language,
             model,
         )
-        .execute(&mut *tx)
-        .await?;
+        .fetch_optional(self.pool)
+        .await?
+        {
+            return Ok(row.id);
+        }
 
+        let now = now_ts();
         let row = sqlx::query!(
             r#"INSERT INTO transcripts
-                 (media_kind, media_id, language, model, vtt_path, json_path,
-                  created_at, duration_processed_sec)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 (media_kind, media_id, language, model, vtt_path, json_path, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                RETURNING id as "id!: i64""#,
             media_kind,
             media_id,
@@ -74,12 +72,19 @@ impl<'a> TranscriptRepository<'a> {
             vtt_path,
             json_path,
             now,
-            duration_processed_sec,
         )
-        .fetch_one(&mut *tx)
+        .fetch_one(self.pool)
         .await?;
-        let transcript_id = row.id;
+        Ok(row.id)
+    }
 
+    /// Append a window's segments to a transcript (one transaction).
+    pub async fn append_segments(
+        &self,
+        transcript_id: i64,
+        segments: &[TranscriptSegment],
+    ) -> Result<(), StorageError> {
+        let mut tx = self.pool.begin().await?;
         for seg in segments {
             let words_json = match &seg.words {
                 Some(words) => Some(serde_json::to_string(words)?),
@@ -99,9 +104,53 @@ impl<'a> TranscriptRepository<'a> {
             .execute(&mut *tx)
             .await?;
         }
-
         tx.commit().await?;
-        Ok(transcript_id)
+        Ok(())
+    }
+
+    /// Record a transcribed window `[start_sec, end_sec)` for coverage tracking.
+    pub async fn record_window(
+        &self,
+        transcript_id: i64,
+        start_sec: f64,
+        end_sec: f64,
+    ) -> Result<(), StorageError> {
+        sqlx::query!(
+            "INSERT INTO transcript_windows (transcript_id, start_sec, end_sec)
+             VALUES (?, ?, ?)",
+            transcript_id,
+            start_sec,
+            end_sec,
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// All covered windows for a transcript, ordered by start.
+    pub async fn covered_windows(
+        &self,
+        transcript_id: i64,
+    ) -> Result<Vec<(f64, f64)>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT start_sec as "start_sec!: f64", end_sec as "end_sec!: f64"
+               FROM transcript_windows WHERE transcript_id = ? ORDER BY start_sec ASC"#,
+            transcript_id,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| (r.start_sec, r.end_sec)).collect())
+    }
+
+    /// Flag a transcript as fully covering its media duration.
+    pub async fn mark_complete(&self, transcript_id: i64) -> Result<(), StorageError> {
+        sqlx::query!(
+            "UPDATE transcripts SET complete = 1 WHERE id = ?",
+            transcript_id
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(())
     }
 
     /// The most recent transcript for a media item, in any language. Used by
@@ -161,7 +210,7 @@ impl<'a> TranscriptRepository<'a> {
                  words_json as "words_json?: String"
                FROM transcript_segments
                WHERE transcript_id = ?
-               ORDER BY seq ASC"#,
+               ORDER BY start_sec ASC"#,
             transcript_id,
         )
         .fetch_all(self.pool)

@@ -4,8 +4,9 @@
 //! `whisper-cpp`) rather than linking libwhisper — same pattern as our ffmpeg
 //! and mpv handling. The CLI is built with Core ML, which it discovers
 //! automatically next to the GGML weights. Flags follow
-//! `docs/reference/whisper.md`: always `--task transcribe`, always word
-//! timestamps (`--output-json-full`), `-nc` for Arabic.
+//! `docs/reference/whisper.md`: transcribe (whisper.cpp's default — there
+//! is no `--task` flag), always word timestamps (`--output-json-full`), `-nc`
+//! for Arabic.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -29,10 +30,32 @@ pub enum WhisperError {
     Io(#[from] std::io::Error),
 }
 
-/// Resolve the `whisper-cli` binary. Honours `NOVA_WHISPER_BIN` for dev/test
-/// overrides; otherwise the OS PATH is searched (Homebrew `whisper-cpp`).
+/// Candidate binary names for whisper.cpp's CLI, newest naming first. The
+/// Homebrew `whisper-cpp` formula installs `whisper-cli`; older builds shipped
+/// `main`/`whisper-cpp`.
+const WHISPER_CANDIDATES: &[&str] = &["whisper-cli", "whisper-cpp", "main"];
+
+/// Resolve the whisper CLI binary. Honours `NOVA_WHISPER_BIN`; otherwise probes
+/// `PATH` for a known name, falling back to `whisper-cli` (so the error message
+/// names the expected binary when none is installed).
 pub fn whisper_bin() -> String {
-    std::env::var("NOVA_WHISPER_BIN").unwrap_or_else(|_| "whisper-cli".into())
+    if let Ok(explicit) = std::env::var("NOVA_WHISPER_BIN") {
+        return explicit;
+    }
+    for cand in WHISPER_CANDIDATES {
+        if binary_on_path(cand) {
+            return (*cand).to_string();
+        }
+    }
+    "whisper-cli".to_string()
+}
+
+/// True if `name` resolves to an executable on `PATH`.
+fn binary_on_path(name: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join(name).is_file())
 }
 
 /// Options for a single transcription run.
@@ -64,7 +87,8 @@ pub async fn transcribe_wav(
         .arg(ggml_model)
         .arg("-f")
         .arg(wav)
-        .args(["--task", "transcribe"])
+        // Transcription (not translation) is whisper.cpp's default — there is
+        // no `--task` flag; passing one makes the CLI print help and exit.
         // Word/token timestamps land in the JSON; required for alignment.
         .arg("--output-json-full")
         .arg("--output-file")
@@ -203,6 +227,23 @@ fn ms_to_sec(ms: i64) -> f64 {
     ms as f64 / 1000.0
 }
 
+/// Shift all segment and word timings by `offset_sec`. whisper-cli emits times
+/// relative to the start of the WAV it was given; for a windowed transcription
+/// the WAV starts at `offset_sec` into the media, so add it back to get
+/// absolute media timestamps.
+pub fn shift_transcript(t: &mut RawTranscript, offset_sec: f64) {
+    for seg in &mut t.segments {
+        seg.start_sec += offset_sec;
+        seg.end_sec += offset_sec;
+        if let Some(words) = &mut seg.words {
+            for w in words {
+                w.start_sec += offset_sec;
+                w.end_sec += offset_sec;
+            }
+        }
+    }
+}
+
 /// Group whisper's sub-word tokens into words. Whisper marks a new word with a
 /// leading space; continuation pieces (no leading space) are appended to the
 /// previous word. Special tokens (`[_BEG_]`, `[_TT_..]`, …) are skipped.
@@ -263,6 +304,19 @@ mod tests {
     fn lang_override_wins() {
         let t = parse_whisper_json(FIXTURE, "m", Some("fr")).unwrap();
         assert_eq!(t.language, "fr");
+    }
+
+    #[test]
+    fn shift_transcript_offsets_all_timings() {
+        let mut t = parse_whisper_json(FIXTURE, "m", None).unwrap();
+        let before = t.segments[0].start_sec;
+        let word_before = t.segments[0].words.as_ref().unwrap()[0].start_sec;
+        shift_transcript(&mut t, 30.0);
+        assert!((t.segments[0].start_sec - (before + 30.0)).abs() < 1e-9);
+        assert!(
+            (t.segments[0].words.as_ref().unwrap()[0].start_sec - (word_before + 30.0)).abs()
+                < 1e-9
+        );
     }
 
     #[test]

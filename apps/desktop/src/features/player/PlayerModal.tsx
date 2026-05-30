@@ -253,15 +253,6 @@ export function PlayerModal({
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
   const audioTracks = tracks.filter((t) => t.kind === "audio");
   const videoTracks = tracks.filter((t) => t.kind === "video");
-  // Source-language captions (Phase 6): generated on demand when the user
-  // selects "Source language", rendered through CaptionOverlay below.
-  const sourceCaptions = useSourceCaptions(
-    profileId,
-    { kind: media.kind, id: media.id },
-    captionMode === "source"
-  );
-  const sourceCues: Cue[] = sourceCaptions.cues;
-  const translatedCues: Cue[] = [];
   const latestPlaybackRef = useRef({ currentTime: 0, duration: 0, playing: false });
   // Mirror the caption selection into a ref so the watch-progress interval
   // (which captures its closure once) always records the current mode.
@@ -270,6 +261,18 @@ export function PlayerModal({
   useEffect(() => {
     latestPlaybackRef.current = { currentTime, duration, playing };
   }, [currentTime, duration, playing]);
+
+  // Source-language captions (Phase 6): a streaming session transcribes ~30s
+  // windows at the playhead and emits cues, rendered through CaptionOverlay.
+  const sourceCaptions = useSourceCaptions(
+    profileId,
+    { kind: media.kind, id: media.id },
+    captionMode === "source",
+    () => latestPlaybackRef.current.currentTime,
+    () => latestPlaybackRef.current.duration
+  );
+  const sourceCues: Cue[] = sourceCaptions.cues;
+  const translatedCues: Cue[] = [];
 
   useEffect(() => {
     captionModeRef.current = captionMode;
@@ -1427,21 +1430,46 @@ export function PlayerModal({
           sourceLang={resolved?.sourceLang}
         />
 
-        {/* Transcription progress banner (source captions still generating). */}
+        {/* Caption status banner: model-download prompt, preparing, or error.
+            Hidden once cues are streaming (status "streaming" with cues). */}
         {captionMode === "source" &&
-          sourceCaptions.status !== "ready" &&
-          sourceCaptions.status !== "idle" && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-[22%] z-10 flex justify-center px-6">
+          sourceCaptions.status !== "idle" &&
+          sourceCaptions.status !== "complete" &&
+          !(sourceCaptions.status === "streaming" && sourceCues.length > 0) && (
+            <div className="absolute inset-x-0 bottom-[22%] z-10 flex justify-center px-6">
               <div
                 className={cn(
-                  "rounded-full bg-black/70 px-4 py-1.5 text-sm text-white/90 backdrop-blur-md",
-                  "border border-white/10 shadow-lg",
-                  sourceCaptions.status === "failed" && "text-rose-300"
+                  "flex items-center gap-3 rounded-full bg-black/75 px-4 py-1.5 text-sm text-white/90",
+                  "border border-white/10 shadow-lg backdrop-blur-md"
                 )}
               >
-                {sourceCaptions.status === "failed"
-                  ? `Caption generation failed${sourceCaptions.error ? `: ${sourceCaptions.error}` : ""}`
-                  : `Generating captions — ${sourceCaptionNote(sourceCaptions) ?? "working…"}`}
+                {sourceCaptions.status === "needsModel" ? (
+                  <>
+                    <span>Captions need a one-time model download (~500MB)</span>
+                    <button
+                      type="button"
+                      onClick={sourceCaptions.downloadModel}
+                      className="rounded-full bg-[var(--color-accent)] px-3 py-0.5 text-xs font-semibold text-white hover:brightness-110"
+                    >
+                      Download
+                    </button>
+                  </>
+                ) : sourceCaptions.status === "failed" ? (
+                  <>
+                    <span className="text-rose-300">
+                      Captions failed{sourceCaptions.error ? `: ${sourceCaptions.error}` : ""}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={sourceCaptions.downloadModel}
+                      className="rounded-full bg-white/15 px-3 py-0.5 text-xs font-semibold hover:bg-white/25"
+                    >
+                      Retry
+                    </button>
+                  </>
+                ) : (
+                  <span>Preparing captions — {sourceCaptionNote(sourceCaptions) ?? "working…"}</span>
+                )}
               </div>
             </div>
           )}

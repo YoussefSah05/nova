@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO transcript_windows (transcript_id, start_sec, end_sec)\n             VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "569c53b5b5e7c9f50663ab0fd83dc6e1cc85b095680373ed71179cbbe76fe37c"
+}

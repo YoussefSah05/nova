@@ -933,21 +933,28 @@ Each step ends with something runnable.
 9. Refresh playlist (atomic re-fetch + reload) preserving favorites/watchlist/continue-watching.
    (Deferred to a follow-up: cross-platform render handlers for Windows/Linux.)
 
-**Phase 6 — Transcription (VOD)** — 🟡 backend implemented (`feat/phase-6-transcription`)
-1. FFmpeg audio extraction to 16 kHz mono WAV (`nova_media::extract_audio_16k_mono`).
-2. **Decision update:** `whisper-cli` is driven as a **subprocess** (Homebrew `whisper-cpp`,
+**Phase 6 — Transcription (VOD)** — 🟡 implemented (`feat/phase-6-transcription`)
+1. **Decision update:** `whisper-cli` is driven as a **subprocess** (Homebrew `whisper-cpp`,
    Core ML), not linked via FFI — same external-binary pattern as ffmpeg/mpv. The `transcribe`
-   crate (`model`/`whisper`/`vtt`) downloads the prebuilt **GGML + Core ML** model on first run
-   (no Python conversion), runs whisper-cli with `--output-json-full` (word timestamps), and
-   renders WebVTT with the `whisper-config` post-rules.
-3. Transcripts persisted to `transcripts` + `transcript_segments` (migration 0007); the kick-driven
-   `nova-jobs` queue runs `transcribe_vod` jobs (concurrency cap 1/profile).
-4. Commands: `enqueue_transcription`, `get_transcript_status`, `get_model_status`,
-   `download_whisper_model`; events `transcription:progress` / `:complete`, `model:download:progress`.
-5. **Caption delivery deviation (continues the Phase 5 libmpv switch):** the source VTT is loaded
-   into the player via mpv `sub-add <path>`, **not** injected into the proxy HLS manifest. The
-   proxy `/captions` endpoint stays a stub (relevant only to the AirPlay/AVPlayer path).
-6. Follow-up (same branch): wire the caption picker UI + mpv `sub-add` command; sticky prefs.
+   crate downloads the prebuilt **GGML + Core ML** model on first run (no Python conversion; the
+   UI prompts for the one-time ~500MB download). whisper.cpp has **no `--task` flag** (transcribe
+   is the default); word timestamps come from `--output-json-full`.
+2. **Streaming, playback-anchored captions (Phase 6.1):** rather than batch-transcribing the whole
+   file (which left the user at 0% for minutes), a **caption session** transcribes ~30s windows
+   starting at the playhead (`nova_media::extract_audio_window` + `transcribe_wav` +
+   `shift_transcript`), emits cues incrementally, prefetches ~90s ahead, and **lazily** covers only
+   what's watched. First caption appears in seconds. One session at a time
+   (`apps/desktop/.../caption_session.rs`).
+3. Persistence/cache: `transcripts` + `transcript_segments` (migration 0007) plus `transcript_windows`
+   coverage + `complete` flag (migration 0008). Cached windows replay instantly on re-watch; the
+   on-disk VTT is refreshed per window.
+4. Commands: `start_caption_session` / `set_caption_playhead` / `stop_caption_session`,
+   `get_model_status`, `download_whisper_model`; events `transcription:cues` / `transcription:status`,
+   `model:download:progress`.
+5. **Caption delivery (continues the Phase 5 libmpv switch):** cues render through the React
+   `CaptionOverlay`, **not** mpv's native renderer and **not** the proxy `/captions` manifest path
+   (so the Phase 7 translation card reuses the same cue stream). The proxy `/captions` endpoint
+   stays a stub (relevant only to the AirPlay/AVPlayer path).
 
 **Phase 7 — Translation (VOD)**
 1. `translate` crate with NLLB-200 distilled 600M via CTranslate2.

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT start_sec as \"start_sec!: f64\", end_sec as \"end_sec!: f64\"\n               FROM transcript_windows WHERE transcript_id = ? ORDER BY start_sec ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "start_sec!: f64",
+        "ordinal": 0,
+        "type_info": "Float"
+      },
+      {
+        "name": "end_sec!: f64",
+        "ordinal": 1,
+        "type_info": "Float"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "fc182b15be7d0407ece306f4e54e034b72422550c776f1ef51c0c9bf1951059f"
+}

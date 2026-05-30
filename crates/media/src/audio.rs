@@ -36,6 +36,37 @@ pub async fn extract_audio_16k_mono(
     out_wav: &Path,
     deadline: Duration,
 ) -> Result<(), AudioError> {
+    let mut cmd = base_ffmpeg();
+    cmd.arg("-i").arg(input);
+    pcm_output(&mut cmd, out_wav);
+    run(cmd, deadline).await
+}
+
+/// Extract just the window `[start_sec, start_sec + dur_sec)` to a 16 kHz mono
+/// WAV — the unit of the streaming caption pipeline. `-ss` is placed **before**
+/// `-i` for a fast input seek (keyframe-accurate is unnecessary for audio).
+/// The caller offsets the resulting transcript timings by `start_sec`.
+pub async fn extract_audio_window(
+    input: &str,
+    out_wav: &Path,
+    start_sec: f64,
+    dur_sec: f64,
+    deadline: Duration,
+) -> Result<(), AudioError> {
+    let mut cmd = base_ffmpeg();
+    cmd.arg("-ss")
+        .arg(format!("{:.3}", start_sec.max(0.0)))
+        .arg("-i")
+        .arg(input)
+        .arg("-t")
+        .arg(format!("{:.3}", dur_sec.max(0.0)));
+    pcm_output(&mut cmd, out_wav);
+    run(cmd, deadline).await
+}
+
+/// ffmpeg invocation common to both extractors: quiet, reconnecting (IPTV CDNs
+/// flap), with piped stderr for error reporting.
+fn base_ffmpeg() -> Command {
     let mut cmd = Command::new(ffmpeg_bin());
     cmd.kill_on_drop(true)
         .stdin(std::process::Stdio::null())
@@ -45,35 +76,40 @@ pub async fn extract_audio_16k_mono(
             "-hide_banner",
             "-loglevel",
             "error",
-            // IPTV CDNs flap; reconnect rather than abort the extraction.
             "-reconnect",
             "1",
             "-reconnect_streamed",
             "1",
             "-reconnect_delay_max",
             "5",
-            "-i",
-            input,
-            // Drop video, downmix to mono 16 kHz PCM — Whisper's required format.
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-c:a",
-            "pcm_s16le",
-            "-f",
-            "wav",
-            // Safe to overwrite: the caller owns this temp path.
-            "-y",
-        ])
-        .arg(out_wav);
+        ]);
+    cmd
+}
 
+/// Append Whisper's required output format (mono 16 kHz signed-16 PCM WAV).
+fn pcm_output(cmd: &mut Command, out_wav: &Path) {
+    cmd.args([
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        "-f",
+        "wav",
+        // Safe to overwrite: the caller owns this temp path.
+        "-y",
+    ])
+    .arg(out_wav);
+}
+
+/// Run `cmd` with a timeout and surface a clean error on non-zero exit.
+async fn run(mut cmd: Command, deadline: Duration) -> Result<(), AudioError> {
     let output = match timeout(deadline, cmd.output()).await {
         Ok(result) => result?,
         Err(_) => return Err(AudioError::Timeout(deadline)),
     };
-
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(AudioError::Failed(output.status.code(), stderr));

@@ -1,13 +1,15 @@
-//! Source-language captions for the player (Phase 6).
+//! Source-language captions for the player (Phase 6.1 — streaming).
 //!
-//! When the user picks "Source language" captions, this hook makes the
-//! transcript appear: it checks whether one exists, enqueues a `transcribe_vod`
-//! job if not, follows the backend's progress/complete events (including the
-//! one-time model download), and fetches the cues when ready. Cues render
-//! through the React `CaptionOverlay` — never mpv's native subtitle renderer —
-//! so the Phase 7 translation card can reuse the same pipeline.
+//! When the user picks "Source language", this hook drives a backend caption
+//! *session*: it ensures the model is present (prompting an explicit one-time
+//! download), starts the session at the current playhead, then accumulates the
+//! `transcription:cues` that stream in window-by-window. The first caption
+//! appears within seconds; captions roll forward as playback advances. It also
+//! pushes the playhead so the backend prioritises/throttles correctly.
+//!
+//! Cues render through the React `CaptionOverlay`, never mpv's native renderer.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -15,188 +17,215 @@ import type { Cue } from "./CaptionOverlay";
 
 export type SourceCaptionStatus =
   | "idle"
-  | "checking"
+  | "needsModel"
   | "downloadingModel"
-  | "generating"
-  | "ready"
+  | "preparing"
+  | "streaming"
+  | "complete"
   | "failed";
 
 export interface SourceCaptionsState {
   cues: Cue[];
   status: SourceCaptionStatus;
-  /// Transcription progress, 0..100.
-  pct: number;
-  /// Model-download progress when known, else null.
+  /// Model-download progress (0..100) when known, else null.
   modelPct: number | null;
   language: string | null;
   error: string | null;
+  /// Called by the UI to confirm the one-time model download.
+  downloadModel: () => void;
 }
 
-const INITIAL: SourceCaptionsState = {
-  cues: [],
-  status: "idle",
-  pct: 0,
-  modelPct: null,
-  language: null,
-  error: null,
-};
-
-interface ProgressEvent {
-  mediaKind: string;
-  mediaId: number;
-  stage: string;
-  pct: number;
-  error?: string | null;
-}
-interface CompleteEvent {
+interface CuesEvent {
   mediaKind: string;
   mediaId: number;
   language: string;
-  vttPath: string;
+  cues: Cue[];
+}
+interface StatusEvent {
+  mediaKind: string;
+  mediaId: number;
+  state: "preparing" | "streaming" | "complete" | "failed";
+  coveredSec?: number | null;
+  error?: string | null;
 }
 interface ModelProgress {
   artifact: string;
   downloadedBytes: number;
   totalBytes?: number | null;
 }
-interface CuesResult {
-  language: string;
-  cues: Cue[];
-}
-interface StatusResult {
-  state: string;
-  vttPath?: string | null;
-  language?: string | null;
+interface ModelStatusResult {
+  installed: boolean;
+  modelId: string;
 }
 
-/// Drive source-caption generation/loading for `media` while `active` is true.
-/// `active` is typically `captionMode === "source"`. Live channels are not
-/// eligible (live transcription arrives in Phase 9).
+const PLAYHEAD_PUSH_MS = 2000;
+const CUE_DEDUPE_EPS = 0.05;
+
+/// Merge new cues into the sorted accumulator, replacing any with the same
+/// start time (windows can re-emit a boundary cue).
+function mergeCues(existing: Cue[], incoming: Cue[]): Cue[] {
+  if (incoming.length === 0) return existing;
+  const out = existing.slice();
+  for (const c of incoming) {
+    const i = out.findIndex((e) => Math.abs(e.start - c.start) < CUE_DEDUPE_EPS);
+    if (i >= 0) out[i] = c;
+    else out.push(c);
+  }
+  out.sort((a, b) => a.start - b.start);
+  return out;
+}
+
+/// Drive streaming source captions for `media` while `active` is true.
+/// `getPlayhead`/`getDuration` read the live player clock without re-subscribing.
 export function useSourceCaptions(
   profileId: string,
   media: { kind: string; id: number },
-  active: boolean
+  active: boolean,
+  getPlayhead: () => number,
+  getDuration: () => number
 ): SourceCaptionsState {
-  const [state, setState] = useState<SourceCaptionsState>(INITIAL);
+  const [cues, setCues] = useState<Cue[]>([]);
+  const [status, setStatus] = useState<SourceCaptionStatus>("idle");
+  const [modelPct, setModelPct] = useState<number | null>(null);
+  const [language, setLanguage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
   const mediaKey = `${media.kind}:${media.id}`;
-
-  // Forget everything when the media changes.
-  useEffect(() => {
-    setState(INITIAL);
-  }, [mediaKey]);
-
   const eligible = active && media.kind !== "live";
+
+  // Keep the latest clock getters in refs so the lifecycle effect need not
+  // depend on them (they change identity every render).
+  const playheadRef = useRef(getPlayhead);
+  const durationRef = useRef(getDuration);
+  playheadRef.current = getPlayhead;
+  durationRef.current = getDuration;
+
+  const startSession = useCallback(async () => {
+    setStatus("preparing");
+    try {
+      const dur = durationRef.current();
+      await invoke("start_caption_session", {
+        profileId,
+        mediaKind: media.kind,
+        mediaId: media.id,
+        fromSec: playheadRef.current(),
+        durationSec: dur > 0 ? dur : null,
+      });
+    } catch (e) {
+      setStatus("failed");
+      setError(String(e));
+    }
+  }, [profileId, media.kind, media.id]);
+
+  const downloadModel = useCallback(() => {
+    void (async () => {
+      setStatus("downloadingModel");
+      setModelPct(null);
+      try {
+        await invoke("download_whisper_model");
+        await startSession();
+      } catch (e) {
+        setStatus("failed");
+        setError(String(e));
+      }
+    })();
+  }, [startSession]);
+
+  // Reset everything when the media changes.
+  useEffect(() => {
+    setCues([]);
+    setStatus("idle");
+    setModelPct(null);
+    setLanguage(null);
+    setError(null);
+  }, [mediaKey]);
 
   useEffect(() => {
     if (!eligible) return;
     let cancelled = false;
     const unlisteners: Array<() => void> = [];
 
-    const fetchCues = async () => {
-      try {
-        const res = await invoke<CuesResult>("get_transcript_cues", {
-          profileId,
-          mediaKind: media.kind,
-          mediaId: media.id,
-        });
-        if (cancelled) return;
-        setState((s) => ({
-          ...s,
-          cues: res.cues,
-          language: res.language,
-          status: "ready",
-          pct: 100,
-          error: null,
-        }));
-      } catch (e) {
-        if (!cancelled) setState((s) => ({ ...s, status: "failed", error: String(e) }));
-      }
-    };
-
-    const begin = async () => {
-      setState((s) => ({ ...s, status: "checking", error: null }));
-      let status: StatusResult;
-      try {
-        status = await invoke<StatusResult>("get_transcript_status", {
-          profileId,
-          mediaKind: media.kind,
-          mediaId: media.id,
-        });
-      } catch (e) {
-        if (!cancelled) setState((s) => ({ ...s, status: "failed", error: String(e) }));
-        return;
-      }
-      if (cancelled) return;
-
-      if (status.state === "done") {
-        await fetchCues();
-        return;
-      }
-      // none | queued | running | failed → (re)enqueue and wait for events.
-      setState((s) => ({ ...s, status: "generating", pct: 0 }));
-      try {
-        await invoke("enqueue_transcription", {
-          profileId,
-          mediaKind: media.kind,
-          mediaId: media.id,
-        });
-      } catch (e) {
-        if (!cancelled) setState((s) => ({ ...s, status: "failed", error: String(e) }));
-      }
-    };
-
-    // Register listeners before kicking off work so no fast event is missed.
     void Promise.all([
-      listen<ProgressEvent>("transcription:progress", (ev) => {
+      listen<CuesEvent>("transcription:cues", (ev) => {
         const p = ev.payload;
         if (p.mediaKind !== media.kind || p.mediaId !== media.id) return;
-        if (p.stage === "failed") {
-          setState((s) => ({ ...s, status: "failed", error: p.error ?? "transcription failed" }));
-        } else if (p.stage !== "complete") {
-          setState((s) => ({ ...s, status: "generating", pct: p.pct }));
-        }
+        setLanguage(p.language);
+        setCues((prev) => mergeCues(prev, p.cues));
       }),
-      listen<CompleteEvent>("transcription:complete", (ev) => {
+      listen<StatusEvent>("transcription:status", (ev) => {
         const p = ev.payload;
         if (p.mediaKind !== media.kind || p.mediaId !== media.id) return;
-        void fetchCues();
+        if (p.state === "failed") {
+          setStatus("failed");
+          setError(p.error ?? "transcription failed");
+        } else {
+          setStatus(p.state);
+        }
       }),
       listen<ModelProgress>("model:download:progress", (ev) => {
         const p = ev.payload;
-        const pct =
+        setModelPct(
           p.totalBytes && p.totalBytes > 0
             ? Math.round((p.downloadedBytes / p.totalBytes) * 100)
-            : null;
-        setState((s) => ({ ...s, status: "downloadingModel", modelPct: pct }));
+            : null
+        );
       }),
     ]).then((uns) => {
-      if (cancelled) uns.forEach((u) => u());
-      else {
-        unlisteners.push(...uns);
-        void begin();
+      if (cancelled) {
+        uns.forEach((u) => u());
+        return;
       }
+      unlisteners.push(...uns);
     });
+
+    // Decide whether to prompt for the model or start immediately.
+    void (async () => {
+      try {
+        const model = await invoke<ModelStatusResult>("get_model_status");
+        if (cancelled) return;
+        if (model.installed) {
+          await startSession();
+        } else {
+          setStatus("needsModel");
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setStatus("failed");
+          setError(String(e));
+        }
+      }
+    })();
+
+    // Push the live playhead so the backend anchors/throttles to playback.
+    const interval = window.setInterval(() => {
+      void invoke("set_caption_playhead", { sec: playheadRef.current() }).catch(
+        () => undefined
+      );
+    }, PLAYHEAD_PUSH_MS);
 
     return () => {
       cancelled = true;
+      window.clearInterval(interval);
       unlisteners.forEach((u) => u());
+      void invoke("stop_caption_session").catch(() => undefined);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eligible, profileId, mediaKey]);
+  }, [eligible, profileId, mediaKey, startSession, media.kind, media.id]);
 
-  return state;
+  return { cues, status, modelPct, language, error, downloadModel };
 }
 
-/// A short status label for the caption menu / progress banner, or null when
-/// nothing needs surfacing (idle or ready).
+/// Short status label for the caption menu / banner, or null when nothing needs
+/// surfacing (idle / streaming-with-cues / complete).
 export function sourceCaptionNote(s: SourceCaptionsState): string | null {
   switch (s.status) {
-    case "checking":
-      return "Checking…";
+    case "needsModel":
+      return "Download model (~500MB)";
     case "downloadingModel":
       return s.modelPct != null ? `Downloading model… ${s.modelPct}%` : "Downloading model…";
-    case "generating":
-      return `Generating… ${s.pct}%`;
+    case "preparing":
+      return "Preparing…";
+    case "streaming":
+      return s.cues.length === 0 ? "Preparing…" : null;
     case "failed":
       return "Failed — try again";
     default:
