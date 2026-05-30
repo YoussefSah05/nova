@@ -6,10 +6,15 @@ import { Home } from "./Home";
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
+  listen: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: mocks.invoke,
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: mocks.listen,
 }));
 
 type InvokeArgs = Record<string, unknown> | undefined;
@@ -106,6 +111,8 @@ function isShelfRequest(args: InvokeArgs): boolean {
 describe("Home", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Refresh progress listener — resolve to a no-op unlisten fn.
+    mocks.listen.mockResolvedValue(() => {});
   });
 
   it("shows imported counts and the first page for the selected source", async () => {
