@@ -31,10 +31,12 @@ jobs:
       - name: Cache cargo registry + build
         uses: Swatinem/rust-cache@v2
 
-      - name: Install system dependencies (macOS WebKit for Tauri)
+      - name: Install system dependencies (libmpv for the player crate)
         run: |
-          # Tauri 2 on macOS uses the system WebKit — no extra packages needed on macos-14.
-          echo "System deps OK"
+          # Tauri 2 on macOS uses the system WebKit — no extra packages needed.
+          # nova-mpv-player links libmpv; the Homebrew mpv formula ships libmpv
+          # plus a pkg-config file (build.rs prefers `pkg-config --libs mpv`).
+          brew install mpv
 
       - name: cargo check
         run: cargo check --workspace
