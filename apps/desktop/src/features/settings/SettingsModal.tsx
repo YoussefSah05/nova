@@ -60,7 +60,10 @@ export function SettingsModal({
 
         {/* Content */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex items-center justify-between border-b border-white/10 px-6 py-3">
+          <header
+            data-tauri-drag-region
+            className="flex items-center justify-between border-b border-white/10 px-6 py-3"
+          >
             <h2 className="text-sm font-semibold text-white">
               {SECTIONS.find((s) => s.id === active)?.label}
             </h2>

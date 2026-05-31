@@ -4,6 +4,7 @@ import type { Profile } from "@/types";
 import { ProfileCard } from "./ProfileCard";
 import { CreateProfileModal } from "./CreateProfileModal";
 import { PlusIcon } from "lucide-react";
+import { DragRegion } from "@/components/DragRegion";
 
 interface ProfilePickerProps {
   onSelect: (profile: Profile) => void;
@@ -40,7 +41,8 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-10 bg-neutral-950">
+    <div className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-neutral-950">
+      <DragRegion />
       <h1 className="text-3xl font-semibold text-white tracking-tight">Who's watching?</h1>
 
       <div className="flex flex-wrap justify-center gap-8">
