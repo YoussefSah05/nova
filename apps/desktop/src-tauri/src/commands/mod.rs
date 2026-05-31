@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 pub mod caption_style;
 pub mod epg;
 pub mod playback;
+pub mod profile_settings;
+pub mod settings;
 pub mod transcription;
 
 // ── Profile commands (Phase 1) ────────────────────────────────────────────────
@@ -467,8 +469,40 @@ pub async fn list_series_episodes(
     state: State<'_, AppState>,
 ) -> Result<Vec<SeriesEpisode>, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
-    let repo = SeriesRepository::new(&pool);
-    let existing = repo.list_episodes(source_id, &series_title).await?;
+    fetch_series_episodes(&pool, source_id, &series_title).await
+}
+
+/// Episodes of the series the given episode belongs to — for the player's
+/// cinema-mode episode browser and autoplay-next. Resolves the episode's
+/// `source_id` + `series_title`, then reuses the same lazy Xtream fetch as
+/// [`list_series_episodes`]. Returns `[]` if `episode_id` isn't an episode.
+#[tauri::command]
+pub async fn list_player_episodes(
+    profile_id: String,
+    episode_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<SeriesEpisode>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let Some(ep) = SeriesRepository::new(&pool).get_episode(episode_id).await? else {
+        return Ok(Vec::new());
+    };
+    fetch_series_episodes(&pool, ep.source_id, &ep.series_title).await
+}
+
+/// List a series' episodes, fetching them lazily for Xtream providers.
+///
+/// Xtream import stores one catalog *sentinel* per series (`stream_url` of
+/// `xtream://series/{id}`) instead of episodes, to keep import fast. The first
+/// time a series is opened we call `get_series_info`, persist the real episodes
+/// (replacing the sentinel), and return them; subsequent opens read the cache.
+/// M3U sources already carry real episodes inline, so this is a passthrough.
+async fn fetch_series_episodes(
+    pool: &sqlx::SqlitePool,
+    source_id: i64,
+    series_title: &str,
+) -> Result<Vec<SeriesEpisode>, ApiError> {
+    let repo = SeriesRepository::new(pool);
+    let existing = repo.list_episodes(source_id, series_title).await?;
 
     // Find a not-yet-fetched Xtream sentinel.
     let sentinel = existing
@@ -482,7 +516,7 @@ pub async fn list_series_episodes(
         .parse()
         .map_err(|_| ApiError::Internal(format!("bad series sentinel: {series_id_str}")))?;
 
-    let source = SourceRepository::new(&pool)
+    let source = SourceRepository::new(pool)
         .get(source_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("source {source_id} not found")))?;
@@ -499,7 +533,7 @@ pub async fn list_series_episodes(
         .map(|ep| SeriesEpisode {
             id: 0,
             source_id,
-            series_title: series_title.clone(),
+            series_title: series_title.to_string(),
             category: existing.first().and_then(|e| e.category.clone()),
             season: ep.season,
             episode: ep.episode,
@@ -519,9 +553,9 @@ pub async fn list_series_episodes(
         return Ok(Vec::new());
     }
 
-    repo.replace_series_episodes(source_id, &series_title, &rows)
+    repo.replace_series_episodes(source_id, series_title, &rows)
         .await?;
-    repo.list_episodes(source_id, &series_title)
+    repo.list_episodes(source_id, series_title)
         .await
         .map_err(Into::into)
 }

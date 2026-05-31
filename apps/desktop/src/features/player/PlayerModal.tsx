@@ -31,11 +31,14 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { Channel } from "@/types";
+import type { Channel, SeriesEpisode } from "@/types";
+import { useProfileSettings } from "@/features/settings/useProfileSettings";
 
 import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
 import { CaptionButton } from "./CaptionPicker";
 import { CaptionStyleButton } from "./CaptionStylePanel";
+import { CinemaEpisodeBrowser } from "./CinemaEpisodeBrowser";
+import { episodeToMedia } from "./episodeMedia";
 import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
 import { useCaptionStyle } from "./useCaptionStyle";
 import { useAirPlay } from "./useAirPlay";
@@ -292,6 +295,62 @@ export function PlayerModal({
     captionModeRef.current = captionMode;
   }, [captionMode]);
 
+  // -- per-profile settings + autoplay-next-episode -----------------------
+  const profileSettings = useProfileSettings(profileId);
+
+  // The next episode to roll into when this one ends (autoplay). Resolved from
+  // the sibling list, ordered by (season, episode).
+  const [nextEpisode, setNextEpisode] = useState<PlayMedia | null>(null);
+  useEffect(() => {
+    if (media.kind !== "episode") {
+      setNextEpisode(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const eps = await invoke<SeriesEpisode[]>("list_player_episodes", {
+          profileId,
+          episodeId: media.id,
+        });
+        if (cancelled) return;
+        const sorted = [...eps].sort((a, b) => a.season - b.season || a.episode - b.episode);
+        const idx = sorted.findIndex((e) => e.id === media.id);
+        const next = idx >= 0 && idx + 1 < sorted.length ? sorted[idx + 1] : null;
+        setNextEpisode(next ? episodeToMedia(next, media.posterUrl) : null);
+      } catch {
+        if (!cancelled) setNextEpisode(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [media.kind, media.id, profileId, media.posterUrl]);
+
+  // Read by the native-state handler (which has empty deps) without re-binding.
+  const autoplayRef = useRef<{ enabled: boolean; next: PlayMedia | null }>({
+    enabled: true,
+    next: null,
+  });
+  autoplayRef.current = { enabled: profileSettings.settings.autoplayNext, next: nextEpisode };
+  const onPlayMediaRef = useRef(onPlayMedia);
+  onPlayMediaRef.current = onPlayMedia;
+  // Fire autoplay at most once per playthrough.
+  const endedHandledRef = useRef(false);
+  useEffect(() => {
+    endedHandledRef.current = false;
+  }, [media.kind, media.id]);
+
+  // Apply the profile's default caption mode once, when the player opens (not on
+  // every episode switch, so a mid-session manual toggle isn't overridden).
+  const defaultCaptionApplied = useRef(false);
+  useEffect(() => {
+    if (!profileSettings.loaded || defaultCaptionApplied.current) return;
+    defaultCaptionApplied.current = true;
+    const def = profileSettings.settings.defaultCaptionMode as CaptionMode;
+    if (def !== "off" && media.kind !== "live") setCaptionMode(def);
+  }, [profileSettings.loaded, profileSettings.settings.defaultCaptionMode, media.kind]);
+
   // -- AirPlay (parallel AVPlayer route) ----------------------------------
   // When an AirPlay device is selected, the backend AVPlayer streams the proxy
   // HLS to it; we pause mpv while engaged and resume locally on disconnect.
@@ -425,6 +484,15 @@ export function PlayerModal({
     } else {
       setLoadingPhase("ready");
       setLoadingProgress(100);
+    }
+
+    // Autoplay the next episode when this one ends.
+    if (state.phase === "ended" && !endedHandledRef.current) {
+      const { enabled, next } = autoplayRef.current;
+      if (enabled && next) {
+        endedHandledRef.current = true;
+        onPlayMediaRef.current?.(next);
+      }
     }
   }, []);
 
@@ -1822,6 +1890,13 @@ function CinemaPanel({
           sourceId={sourceId}
           currentChannelId={currentMediaId}
           onSelectChannel={onSelectMedia}
+        />
+      ) : media.kind === "episode" ? (
+        <CinemaEpisodeBrowser
+          profileId={profileId}
+          currentEpisodeId={currentMediaId}
+          fallbackPoster={media.posterUrl}
+          onSelectMedia={onSelectMedia}
         />
       ) : (
         <div className="flex h-full items-center gap-5 px-8">
