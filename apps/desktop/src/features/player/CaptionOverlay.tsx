@@ -10,6 +10,8 @@
 //! All cues render through this component instead.
 
 import { cn } from "@/lib/utils";
+import { DEFAULT_CAPTION_STYLE, type CaptionStyle } from "@/types";
+import { captionTextClass, captionTextStyle } from "./captionStyleCss";
 
 export type CaptionMode = "off" | "source" | "translation" | "dual";
 
@@ -29,6 +31,8 @@ interface CaptionOverlayProps {
   currentTime: number;
   sourceLang?: string | null;
   targetLang?: string | null;
+  /// User caption appearance. Defaults to the medium-sans/white/drop-shadow look.
+  captionStyle?: CaptionStyle;
 }
 
 export function CaptionOverlay({
@@ -36,6 +40,7 @@ export function CaptionOverlay({
   sourceCues,
   translatedCues,
   currentTime,
+  captionStyle = DEFAULT_CAPTION_STYLE,
 }: CaptionOverlayProps) {
   if (mode === "off") return null;
 
@@ -44,7 +49,7 @@ export function CaptionOverlay({
 
   if (mode === "source") {
     if (!sourceActive) return null;
-    return <StandardCue text={sourceActive.text} />;
+    return <StandardCue text={sourceActive.text} style={captionStyle} />;
   }
 
   // Modes B/C are spec'd in ARCHITECTURE.md section 10 but ship in Phase 7. The
@@ -53,14 +58,14 @@ export function CaptionOverlay({
   if (mode === "translation") {
     const text = translatedActive?.text;
     if (!text) return null;
-    return <StandardCue text={text} />;
+    return <StandardCue text={text} style={captionStyle} />;
   }
 
   if (mode === "dual") {
     const top = sourceActive?.text;
     const bottom = translatedActive?.text;
     if (!top && !bottom) return null;
-    return <StandardCue text={[top, bottom].filter(Boolean).join("\n")} />;
+    return <StandardCue text={[top, bottom].filter(Boolean).join("\n")} style={captionStyle} />;
   }
 
   return null;
@@ -75,7 +80,7 @@ function activeCue(cues: Cue[], t: number): Cue | undefined {
   return undefined;
 }
 
-function StandardCue({ text }: { text: string }) {
+function StandardCue({ text, style }: { text: string; style: CaptionStyle }) {
   return (
     <div
       className={cn(
@@ -84,9 +89,10 @@ function StandardCue({ text }: { text: string }) {
     >
       <p
         className={cn(
-          "max-w-[70%] whitespace-pre-line text-center text-lg font-medium leading-snug text-white",
-          "drop-shadow-[0_2px_2px_rgba(0,0,0,0.75)]"
+          "max-w-[70%] whitespace-pre-line text-center font-medium leading-snug",
+          captionTextClass(style)
         )}
+        style={captionTextStyle(style)}
       >
         {text}
       </p>

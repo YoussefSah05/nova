@@ -128,6 +128,9 @@ pub fn run() {
             commands::transcription::start_caption_session,
             commands::transcription::set_caption_playhead,
             commands::transcription::stop_caption_session,
+            // Phase 6.2 — per-profile caption styling
+            commands::caption_style::get_caption_style,
+            commands::caption_style::set_caption_style,
             // Phase 5 — AirPlay (parallel AVPlayer route)
             commands::playback::airplay_set_picker_rect,
             commands::playback::airplay_engage,

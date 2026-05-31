@@ -1,3 +1,4 @@
+pub mod caption_style;
 pub mod channels;
 pub mod epg_sources;
 pub mod jobs;
@@ -10,6 +11,7 @@ pub mod transcripts;
 pub mod vod;
 pub mod watch_history;
 
+pub use caption_style::CaptionStyleRepository;
 pub use channels::ChannelRepository;
 pub use epg_sources::{EpgSource, EpgSourcesRepository};
 pub use jobs::{Job, JobRepository};

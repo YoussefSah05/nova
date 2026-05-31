@@ -35,7 +35,9 @@ import type { Channel } from "@/types";
 
 import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
 import { CaptionButton } from "./CaptionPicker";
+import { CaptionStyleButton } from "./CaptionStylePanel";
 import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
+import { useCaptionStyle } from "./useCaptionStyle";
 import { useAirPlay } from "./useAirPlay";
 import { AirPlayButton, AirPlayOverlay } from "./AirPlay";
 
@@ -242,6 +244,8 @@ export function PlayerModal({
   // -- caption state (Phase 5: inert; Phase 6/7 will populate the cue arrays) --
   const [captionMode, setCaptionMode] = useState<CaptionMode>("off");
   const [captionMenuOpen, setCaptionMenuOpen] = useState(false);
+  const [captionStyleOpen, setCaptionStyleOpen] = useState(false);
+  const captionStyleState = useCaptionStyle(profileId);
 
   // -- track / speed state (driven by mpv:state) -------------------------
   const [tracks, setTracks] = useState<NativeTrack[]>([]);
@@ -1428,6 +1432,7 @@ export function PlayerModal({
           translatedCues={translatedCues}
           currentTime={currentTime}
           sourceLang={resolved?.sourceLang}
+          captionStyle={captionStyleState.style}
         />
 
         {/* Caption status banner: model-download prompt, preparing, or error.
@@ -1691,6 +1696,17 @@ export function PlayerModal({
               onClose={() => setCaptionMenuOpen(false)}
               sourceNote={sourceCaptionNote(sourceCaptions)}
             />
+
+            {/* Caption-style ("Aa") controls — only while captions are showing. */}
+            {captionMode !== "off" && (
+              <CaptionStyleButton
+                style={captionStyleState.style}
+                onChange={captionStyleState.setStyle}
+                open={captionStyleOpen}
+                onToggle={() => setCaptionStyleOpen((v) => !v)}
+                onClose={() => setCaptionStyleOpen(false)}
+              />
+            )}
 
             <IconButton
               onClick={() => setCinema((v) => !v)}

@@ -242,6 +242,38 @@ pub enum TranscriptState {
     Failed,
 }
 
+/// Personalizable caption appearance, persisted per profile (Phase 6.2). Pure
+/// presentation — applied by the React `CaptionOverlay`. String enums are kept
+/// as `String` so the frontend can map them to its own class/style tables and
+/// new presets don't require a schema change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionStyle {
+    /// Multiplier on the base caption font size (e.g. 0.85 / 1.0 / 1.25 / 1.5).
+    pub font_scale: f64,
+    /// `sans` | `serif` | `mono` | `dyslexic`.
+    pub font_family: String,
+    /// `white` | `yellow` | `cyan`.
+    pub text_color: String,
+    /// Readability backdrop: `shadow` | `outline` | `box`.
+    pub background: String,
+    /// Box-background opacity in 0..=1, used when `background == "box"`.
+    pub bg_opacity: f64,
+}
+
+impl Default for CaptionStyle {
+    fn default() -> Self {
+        // Matches the player's pre-6.2 look: medium sans, white, drop-shadow.
+        Self {
+            font_scale: 1.0,
+            font_family: "sans".to_string(),
+            text_color: "white".to_string(),
+            background: "shadow".to_string(),
+            bg_opacity: 0.6,
+        }
+    }
+}
+
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 pub fn now_ts() -> i64 {

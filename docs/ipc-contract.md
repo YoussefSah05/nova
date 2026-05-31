@@ -61,6 +61,8 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `start_caption_session` | `{ profileId, mediaKind, mediaId, fromSec, durationSec? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
 | `set_caption_playhead` | `{ sec: number }` | `void` | 6 |
 | `stop_caption_session` | `{}` | `void` | 6 |
+| `get_caption_style` | `{ profileId }` | `CaptionStyle` (defaults if unsaved) | 6 |
+| `set_caption_style` | `{ profileId, style: CaptionStyle }` | `void` | 6 |
 | `enqueue_translation` | `{ transcript_id: number, target_lang: string, backend: TranslationBackend }` | `JobId` | 7 |
 | `get_transcript` | `{ transcript_id: number }` | `Transcript` | 6 |
 | `search` | `{ query: string, lang_filter?: string }` | `SearchResult[]` | 8 |
@@ -123,6 +125,15 @@ standalone mpv window.
 type PlaybackKind = "hls" | "file";
 type PlaybackRoute = "hls_passthrough" | "file_passthrough" | "remux_hls" | "transcode_hls";
 type CaptionAssetState = "unavailable" | "pending" | "ready";
+
+// Per-profile caption appearance (Phase 6.2). Persisted in the profile DB.
+type CaptionStyle = {
+  fontScale: number; // 0.85 | 1.0 | 1.25 | 1.5
+  fontFamily: "sans" | "serif" | "mono" | "dyslexic";
+  textColor: "white" | "yellow" | "cyan";
+  background: "shadow" | "outline" | "box";
+  bgOpacity: number; // 0..1, used when background === "box"
+};
 type MpvPlayerPhase = "opening" | "buffering" | "playing" | "paused" | "ended" | "error";
 
 type MpvOpenResult = {

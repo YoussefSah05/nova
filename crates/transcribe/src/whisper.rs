@@ -5,8 +5,17 @@
 //! and mpv handling. The CLI is built with Core ML, which it discovers
 //! automatically next to the GGML weights. Flags follow
 //! `docs/reference/whisper.md`: transcribe (whisper.cpp's default — there
-//! is no `--task` flag), always word timestamps (`--output-json-full`), `-nc`
-//! for Arabic.
+//! is no `--task` flag), word/token timestamps via `--output-json-full`, and
+//! `--dtw <preset>` for **DTW-aligned** token timestamps (dynamic time warping
+//! over the cross-attention heads — far more accurate than whisper's default
+//! heuristic offsets, and the source of our word-level cue timing). `-nc` for
+//! Arabic; `--prompt` carries the previous window's tail across boundaries.
+//!
+//! Note: we deliberately do **not** pass `--vad`. In this whisper.cpp build VAD
+//! remaps segment offsets to the original timeline but leaves the per-token DTW
+//! offsets in the VAD-compressed timeline, which corrupts the word timings we
+//! rely on. Adaptive, pause-aligned chunking is achieved at the session layer
+//! using whisper's natural segment boundaries instead.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -59,12 +68,18 @@ fn binary_on_path(name: &str) -> bool {
 }
 
 /// Options for a single transcription run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TranscribeOptions {
     /// BCP-47 source language; `None` lets Whisper auto-detect.
     pub language: Option<String>,
     /// Model identifier persisted into the transcript (e.g. `large-v3-turbo-q5_0`).
     pub model_id: String,
+    /// whisper.cpp DTW alignment-head preset (e.g. `large.v3.turbo`). Empty
+    /// disables DTW; when set, token offsets in the JSON are DTW-aligned.
+    pub dtw_preset: String,
+    /// Initial prompt fed via `--prompt` — the tail of the previous window so
+    /// the model keeps lexical context across the boundary. `None` to omit.
+    pub initial_prompt: Option<String>,
 }
 
 /// Transcribe `wav` (16 kHz mono) using the GGML weights at `ggml_model`.
@@ -95,6 +110,19 @@ pub async fn transcribe_wav(
         .arg(out_base)
         // Report progress to stderr so we can surface a percentage.
         .arg("--print-progress");
+
+    // DTW-aligned token timestamps. Without this, token offsets are whisper's
+    // coarse heuristic times and word/cue timing drifts.
+    if !opts.dtw_preset.is_empty() {
+        cmd.args(["--dtw", &opts.dtw_preset]);
+    }
+
+    // Lexical context carried from the previous window's tail.
+    if let Some(prompt) = opts.initial_prompt.as_deref() {
+        if !prompt.trim().is_empty() {
+            cmd.args(["--prompt", prompt]);
+        }
+    }
 
     let language = opts.language.as_deref().unwrap_or("auto");
     cmd.args(["--language", language]);

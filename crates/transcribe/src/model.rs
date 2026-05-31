@@ -44,6 +44,10 @@ pub struct WhisperModel {
     pub ggml_file: &'static str,
     /// Core ML encoder directory name (`.mlmodelc`), downloaded as `<name>.zip`.
     pub coreml_dir: &'static str,
+    /// whisper.cpp DTW alignment-head preset for `--dtw` (token-level timestamps
+    /// via dynamic time warping). Must match the model's family, e.g.
+    /// `large.v3.turbo`. An empty string disables DTW.
+    pub dtw_preset: &'static str,
 }
 
 /// The default model per `docs/reference/whisper.md`: near-`large-v3`
@@ -53,6 +57,7 @@ pub fn default_model() -> WhisperModel {
         id: "large-v3-turbo-q5_0",
         ggml_file: "ggml-large-v3-turbo-q5_0.bin",
         coreml_dir: "ggml-large-v3-turbo-encoder.mlmodelc",
+        dtw_preset: "large.v3.turbo",
     }
 }
 

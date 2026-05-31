@@ -566,21 +566,41 @@ Xtream pattern: `.../streaming/timeshift.php?username=X&password=Y&stream=<id>&s
 - Cache compiled `.mlmodelc` at `~/Library/Application Support/Stream/models/whisper/`.
 - Advanced users can also download `large-v3` (full, ~1.5 GB) for archival-quality.
 
-### Whisper invocation rules
-- `--task transcribe` always (we use the dedicated translation pipeline for cross-language, not Whisper's translate task — see §9 rationale).
-- `--language <bcp47>` when channel/VOD has known expected language; otherwise auto-detect on first 30s.
-- `--word-timestamps true` always (enables word-level alignment for the dual-mode UI and transcript-deep-link search).
-- `--no-context true` for Arabic specifically (reduces hallucinations across silence).
-- VAD enabled to skip silent regions.
+### Whisper invocation rules (as implemented — `whisper-cli` subprocess)
+We drive the Homebrew `whisper-cpp` CLI as a subprocess (same pattern as ffmpeg/mpv), not FFI.
+- **No `--task` flag** — transcription is whisper.cpp's default; passing `--task` prints help and
+  exits. Cross-language uses the dedicated translation pipeline (§9), never Whisper's translate task.
+- `--output-json-full` always (segments **and** per-token offsets → word-level timing for dual-mode
+  and transcript-deep-link search).
+- `--dtw <preset>` always (e.g. `large.v3.turbo`): DTW-aligned token timestamps. This is the
+  timestamp-accuracy lever; without it token offsets are coarse heuristics and cue timing drifts.
+- `--prompt "<tail>"` carries the previous window's last words for cross-boundary lexical context.
+- `--language <bcp47>` when known; otherwise auto-detect (learned from the first window and persisted).
+- `--no-context` for Arabic specifically (reduces hallucinations across silence).
+- **VAD is deliberately disabled.** whisper.cpp's `--vad` remaps *segment* offsets to the original
+  timeline but leaves *token* DTW offsets in the VAD-compressed timeline, corrupting the word timing
+  we depend on. We chunk on whisper's natural pause-aligned segment boundaries instead (see below).
 
-### VOD transcription flow
-1. Job enqueued: `{vod_id, language: "auto"|<bcp47>}`.
-2. Worker pulls job. FFmpeg extracts audio: `ffmpeg -i <url> -ac 1 -ar 16000 -f s16le -`.
-3. whisper.cpp consumes PCM, emits segments with word-level timestamps.
-4. Output: WebVTT + segments JSON. Both written to disk; rows inserted into `transcripts` + `transcript_segments` + FTS5 index.
-5. Progress event every 5% of duration processed.
-6. On completion: if user's preferences ask for translation into a target language for this source, automatically enqueue a `translate_transcript` job.
-7. Concurrency: max 2 transcription jobs on 16GB+ M3, 1 on 8GB M3 (auto-detected at startup).
+### VOD transcription flow (streaming, playback-anchored)
+Rather than transcribing the whole file before showing anything, a **caption session**
+(`apps/desktop/.../caption_session.rs`) streams cues from the playhead:
+1. `start_caption_session{profileId, mediaKind, mediaId, fromSec, durationSec?}` ensures the model,
+   replays any cached coverage instantly, then runs a **segment-aligned sliding cursor**.
+2. Per window: `extract_audio_window` (ffmpeg `-ss/-t`, 16 kHz mono WAV) pulls up to 30s with a 2s
+   overlap → `transcribe_wav` (DTW + prompt) → `shift_transcript` to absolute time.
+3. Only **complete** segments are kept (the trailing segment within ~1.5s of the hard 30s cut is
+   left for the next window to re-read with context), and the cursor advances to the last complete
+   segment's end — so a sentence is never hard-cut. Coverage is tracked as `[start,end)` intervals
+   (persisted in `transcript_windows`, migration 0008) so a re-watch replays instantly.
+4. Cues emit incrementally via `transcription:cues`; WebVTT + rows land in `transcripts` /
+   `transcript_segments`. The session prefetches ~90s ahead and covers only what's watched (lazy).
+5. One active session at a time (the open player); a new `start` cancels the previous.
+
+### Caption appearance (Phase 6.2, per profile)
+Caption styling is personalizable like Netflix (font size / family / colour / backdrop), stored in
+the profile DB (`caption_style`, migration 0009; `nova_core::CaptionStyle`) via
+`get_caption_style` / `set_caption_style`, and applied by the React `CaptionOverlay` (the
+`CaptionStylePanel` "Aa" control). Pure presentation — it does not affect the transcript.
 
 ### Live transcription flow
 1. User toggles captions on a channel.
