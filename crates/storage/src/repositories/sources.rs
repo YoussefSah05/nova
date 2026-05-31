@@ -74,6 +74,27 @@ impl<'a> SourceRepository<'a> {
         Ok(())
     }
 
+    /// Set how often a source auto-refreshes (hours).
+    pub async fn set_auto_refresh(&self, id: i64, hours: i64) -> Result<(), StorageError> {
+        sqlx::query!(
+            "UPDATE sources SET auto_refresh_hours = ? WHERE id = ?",
+            hours,
+            id
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Delete a source and everything it imported. Channels / VOD / series rows
+    /// cascade via their `ON DELETE CASCADE` foreign keys.
+    pub async fn delete(&self, id: i64) -> Result<(), StorageError> {
+        sqlx::query!("DELETE FROM sources WHERE id = ?", id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn touch_refreshed_tx(
         tx: &mut Transaction<'_, Sqlite>,
         id: i64,

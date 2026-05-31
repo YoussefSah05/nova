@@ -63,6 +63,16 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `stop_caption_session` | `{}` | `void` | 6 |
 | `get_caption_style` | `{ profileId }` | `CaptionStyle` (defaults if unsaved) | 6 |
 | `set_caption_style` | `{ profileId, style: CaptionStyle }` | `void` | 6 |
+| `list_player_episodes` | `{ profileId, episodeId }` | `SeriesEpisode[]` (siblings of the episode; `[]` if not an episode) | cleanup |
+| `get_profile_settings` | `{ profileId }` | `ProfileSettings` (defaults if unsaved) | cleanup |
+| `set_profile_settings` | `{ profileId, settings: ProfileSettings }` | `void` | cleanup |
+| `update_profile` | `{ id, name, avatarColor }` | `Profile` | cleanup |
+| `delete_source` | `{ profileId, sourceId }` | `void` (cascades imported content) | cleanup |
+| `set_source_auto_refresh` | `{ profileId, sourceId, hours }` | `void` | cleanup |
+| `remove_whisper_model` | `{}` | `void` | cleanup |
+| `get_transcription_cache_stats` | `{ profileId }` | `{ transcripts, bytes }` | cleanup |
+| `clear_transcription_cache` | `{ profileId }` | `void` | cleanup |
+| `get_app_info` | `{}` | `{ version, dataDir, transcriptsBytes, modelsBytes }` | cleanup |
 | `enqueue_translation` | `{ transcript_id: number, target_lang: string, backend: TranslationBackend }` | `JobId` | 7 |
 | `get_transcript` | `{ transcript_id: number }` | `Transcript` | 6 |
 | `search` | `{ query: string, lang_filter?: string }` | `SearchResult[]` | 8 |
@@ -133,6 +143,15 @@ type CaptionStyle = {
   textColor: "white" | "yellow" | "cyan";
   background: "shadow" | "outline" | "box";
   bgOpacity: number; // 0..1, used when background === "box"
+};
+
+// Per-profile viewing/behaviour settings (cleanup phase). Persisted in the profile DB.
+type ProfileSettings = {
+  autoplayNext: boolean;
+  defaultCaptionMode: string; // "off" | "source" | "translation" | "dual"
+  preferredAudioLang: string | null;
+  preferredSubtitleLang: string | null;
+  defaultPlaybackRoute: "auto" | "remux_hls" | "transcode_hls";
 };
 type MpvPlayerPhase = "opening" | "buffering" | "playing" | "paused" | "ended" | "error";
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE profiles SET name = ?, avatar_color = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "b693d2f53ccc48969ebaafc9a70391de2f463cd4796e37f7d0306647a00db8ea"
+}

@@ -87,6 +87,7 @@ pub fn run() {
             commands::count_series,
             commands::list_series_categories,
             commands::list_series_episodes,
+            commands::list_player_episodes,
             // Phase 3
             commands::set_channel_favorite,
             commands::set_vod_favorite,
@@ -131,6 +132,17 @@ pub fn run() {
             // Phase 6.2 — per-profile caption styling
             commands::caption_style::get_caption_style,
             commands::caption_style::set_caption_style,
+            // Cleanup — per-profile viewing settings + player episode list
+            commands::profile_settings::get_profile_settings,
+            commands::profile_settings::set_profile_settings,
+            // Cleanup — Settings sections
+            commands::settings::update_profile,
+            commands::settings::delete_source,
+            commands::settings::set_source_auto_refresh,
+            commands::settings::remove_whisper_model,
+            commands::settings::get_transcription_cache_stats,
+            commands::settings::clear_transcription_cache,
+            commands::settings::get_app_info,
             // Phase 5 — AirPlay (parallel AVPlayer route)
             commands::playback::airplay_set_picker_rect,
             commands::playback::airplay_engage,

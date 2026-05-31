@@ -181,6 +181,27 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   bgOpacity: 0.6,
 };
 
+// ── Per-profile viewing / behaviour settings (cleanup phase) ───────────────────
+
+export type DefaultPlaybackRoute = "auto" | "remux_hls" | "transcode_hls";
+
+export interface ProfileSettings {
+  autoplayNext: boolean;
+  /// "off" | "source" | "translation" | "dual"
+  defaultCaptionMode: string;
+  preferredAudioLang: string | null;
+  preferredSubtitleLang: string | null;
+  defaultPlaybackRoute: DefaultPlaybackRoute;
+}
+
+export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
+  autoplayNext: true,
+  defaultCaptionMode: "off",
+  preferredAudioLang: null,
+  preferredSubtitleLang: null,
+  defaultPlaybackRoute: "auto",
+};
+
 // ── IPC errors ────────────────────────────────────────────────────────────────
 
 export type ApiError =

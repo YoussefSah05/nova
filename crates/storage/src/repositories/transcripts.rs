@@ -285,6 +285,31 @@ impl<'a> TranscriptRepository<'a> {
         }))
     }
 
+    /// Number of cached transcripts (for the settings cache view).
+    pub async fn count(&self) -> Result<i64, StorageError> {
+        let row = sqlx::query!(r#"SELECT COUNT(*) as "n!: i64" FROM transcripts"#)
+            .fetch_one(self.pool)
+            .await?;
+        Ok(row.n)
+    }
+
+    /// Delete every cached transcript (segments/windows cascade) and return the
+    /// on-disk artifact paths so the caller can remove the VTT/JSON files.
+    pub async fn clear_all(&self) -> Result<Vec<String>, StorageError> {
+        let rows = sqlx::query!("SELECT vtt_path, json_path FROM transcripts")
+            .fetch_all(self.pool)
+            .await?;
+        let mut paths = Vec::with_capacity(rows.len() * 2);
+        for r in rows {
+            paths.push(r.vtt_path);
+            paths.push(r.json_path);
+        }
+        sqlx::query!("DELETE FROM transcripts")
+            .execute(self.pool)
+            .await?;
+        Ok(paths)
+    }
+
     /// All segments of a transcript, ordered. Used by Phase 7 translation and
     /// Phase 8 search; kept here so the segment ↔ `words_json` mapping lives in
     /// one place.

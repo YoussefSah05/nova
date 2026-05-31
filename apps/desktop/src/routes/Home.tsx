@@ -9,10 +9,12 @@ import {
   PlusIcon,
   RotateCwIcon,
   SearchIcon,
+  SettingsIcon,
   XIcon,
 } from "lucide-react";
 import type { Channel, ImportProgress, Profile, SeriesSummary, Source, VodItem } from "@/types";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
+import { SettingsModal } from "@/features/settings/SettingsModal";
 import { SeriesDetail } from "@/features/browse/SeriesDetail";
 import { Shelves } from "@/features/browse/Shelves";
 import { FavoriteButton } from "@/features/browse/FavoriteButton";
@@ -67,6 +69,12 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const [selectedSeries, setSelectedSeries] = useState<SeriesSummary | null>(null);
   const [playingMedia, setPlayingMedia] = useState<PlayMedia | null>(null);
   const [showAddSource, setShowAddSource] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  // Local copy of the profile so a rename/recolour in Settings shows immediately.
+  const [profileView, setProfileView] = useState(profile);
+  useEffect(() => {
+    setProfileView(profile);
+  }, [profile]);
   const [searchQuery, setSearchQuery] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -706,18 +714,28 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             </p>
           )}
         </div>
-        <button
-          onClick={onSwitchProfile}
-          className="flex items-center gap-2 text-sm text-white/50 transition-colors hover:text-white"
-        >
-          <div
-            className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold text-white"
-            style={{ backgroundColor: profile.avatarColor }}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setShowSettings(true)}
+            aria-label="Settings"
+            title="Settings"
+            className="flex h-9 w-9 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
           >
-            {profile.name.slice(0, 2).toUpperCase()}
-          </div>
-          {profile.name}
-        </button>
+            <SettingsIcon className="h-5 w-5" aria-hidden />
+          </button>
+          <button
+            onClick={onSwitchProfile}
+            className="flex items-center gap-2 text-sm text-white/50 transition-colors hover:text-white"
+          >
+            <div
+              className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold text-white"
+              style={{ backgroundColor: profileView.avatarColor }}
+            >
+              {profileView.name.slice(0, 2).toUpperCase()}
+            </div>
+            {profileView.name}
+          </button>
+        </div>
       </header>
 
       {sources.length === 0 ? (
@@ -972,6 +990,16 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           profileId={profile.id}
           onDone={handleSourceAdded}
           onCancel={() => setShowAddSource(false)}
+        />
+      )}
+
+      {showSettings && (
+        <SettingsModal
+          profile={profileView}
+          onClose={() => setShowSettings(false)}
+          onSwitchProfile={onSwitchProfile}
+          onProfileUpdated={setProfileView}
+          onSourcesChanged={() => setReloadKey((k) => k + 1)}
         />
       )}
 

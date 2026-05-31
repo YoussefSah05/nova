@@ -296,6 +296,30 @@ impl<'a> SeriesRepository<'a> {
             .collect())
     }
 
+    /// A single episode by id. Used by the player to resolve the series an
+    /// episode belongs to (for the cinema-mode episode browser / autoplay).
+    pub async fn get_episode(&self, id: i64) -> Result<Option<SeriesEpisode>, StorageError> {
+        let row = sqlx::query!(
+            r#"SELECT id as "id!: i64", source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at
+             FROM series_episodes WHERE id = ?"#,
+            id,
+        )
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|r| SeriesEpisode {
+            id: r.id,
+            source_id: r.source_id,
+            series_title: r.series_title,
+            category: r.category,
+            season: r.season,
+            episode: r.episode,
+            episode_title: r.episode_title,
+            logo_url: r.logo_url,
+            stream_url: r.stream_url,
+            added_at: r.added_at,
+        }))
+    }
+
     pub async fn count_series(
         &self,
         source_id: i64,

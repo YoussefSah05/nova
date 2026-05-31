@@ -835,6 +835,22 @@ Captures the rendering rules, font choices per script, layout math, dual-mode al
 ### Skill: `video-player-ux`
 Captures all of the above as a checklist verified during player work.
 
+### Cinema-mode episode browser (cleanup phase)
+For a series episode, the player's cinema panel shows a season selector + a strip of that season's
+episodes (current one highlighted); clicking switches playback in place via `onPlayMedia`. Siblings
+come from `list_player_episodes(profileId, episodeId)`, which resolves the episode's series and reuses
+the same lazy Xtream fetch as `list_series_episodes`. When `ProfileSettings.autoplayNext` is on, the
+player advances to the next episode (by season/episode order) on playback end.
+
+### Settings + per-profile settings store (cleanup phase)
+A `SettingsModal` (header gear) with four sections — Playback & Captions, Transcription & Cache,
+Sources & EPG, Profile & About. Viewing/behaviour settings live per-profile in `profile_settings`
+(migration 0011, `nova_core::ProfileSettings` as a JSON blob; `get/set_profile_settings`), alongside
+the existing per-profile `caption_style`. Sections reuse existing commands and add maintenance ones:
+`update_profile`, `delete_source`, `set_source_auto_refresh`, `remove_whisper_model`,
+`get_transcription_cache_stats`, `clear_transcription_cache`, `get_app_info`. Future sections
+(appearance/UI language, shortcuts, parental controls, network/proxy, diagnostics) are deferred.
+
 ---
 
 ## 11. Engineering reference notes

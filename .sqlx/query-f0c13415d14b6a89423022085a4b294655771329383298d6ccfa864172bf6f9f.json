@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\", source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at\n             FROM series_episodes WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "series_title",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "category",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "season",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "episode",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "episode_title",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "logo_url",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "stream_url",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "added_at",
+        "ordinal": 9,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "f0c13415d14b6a89423022085a4b294655771329383298d6ccfa864172bf6f9f"
+}

@@ -113,15 +113,15 @@ pub async fn stop_caption_session(state: State<'_, AppState>) -> Result<(), ApiE
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
-fn whisper_models_dir(app: &AppHandle) -> Result<PathBuf, ApiError> {
+pub(crate) fn whisper_models_dir(app: &AppHandle) -> Result<PathBuf, ApiError> {
     Ok(app_data_dir(app)?.join("models").join("whisper"))
 }
 
-fn transcripts_dir(app: &AppHandle) -> Result<PathBuf, ApiError> {
+pub(crate) fn transcripts_dir(app: &AppHandle) -> Result<PathBuf, ApiError> {
     Ok(app_data_dir(app)?.join("transcripts"))
 }
 
-fn app_data_dir(app: &AppHandle) -> Result<PathBuf, ApiError> {
+pub(crate) fn app_data_dir(app: &AppHandle) -> Result<PathBuf, ApiError> {
     app.path()
         .app_data_dir()
         .map_err(|e| ApiError::Internal(e.to_string()))

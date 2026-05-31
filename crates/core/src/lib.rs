@@ -274,6 +274,37 @@ impl Default for CaptionStyle {
     }
 }
 
+/// Per-profile viewing / behaviour settings (cleanup phase). Stored as a JSON
+/// blob in the profile DB's `profile_settings` table. Defaults are applied when
+/// no row exists yet.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProfileSettings {
+    /// Auto-advance to the next episode when one finishes.
+    pub autoplay_next: bool,
+    /// Caption mode applied when a media item opens: `off` | `source` |
+    /// `translation` | `dual`.
+    pub default_caption_mode: String,
+    /// Preferred audio-track language (BCP-47 / ISO code), if any.
+    pub preferred_audio_lang: Option<String>,
+    /// Preferred subtitle/caption language, if any.
+    pub preferred_subtitle_lang: Option<String>,
+    /// Default playback route: `auto` | `remux_hls` | `transcode_hls`.
+    pub default_playback_route: String,
+}
+
+impl Default for ProfileSettings {
+    fn default() -> Self {
+        Self {
+            autoplay_next: true,
+            default_caption_mode: "off".to_string(),
+            preferred_audio_lang: None,
+            preferred_subtitle_lang: None,
+            default_playback_route: "auto".to_string(),
+        }
+    }
+}
+
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 pub fn now_ts() -> i64 {
