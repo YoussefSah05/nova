@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sources SET auto_refresh_hours = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ff4956043c456ffb3c849b72d1c7f766cf897751fb034be3184dcc41cc8b3098"
+}

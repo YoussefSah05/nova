@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT vtt_path, json_path FROM transcripts",
+  "describe": {
+    "columns": [
+      {
+        "name": "vtt_path",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "json_path",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "20c6179430c26d18e6aef1694d16c8edd7e828262eccff27a9e56e092aae3867"
+}

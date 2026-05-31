@@ -69,6 +69,24 @@ impl<'a> ProfileRepository<'a> {
         })
     }
 
+    /// Rename / recolour a profile, returning the updated row.
+    pub async fn update(
+        &self,
+        id: &str,
+        name: &str,
+        avatar_color: &str,
+    ) -> Result<Profile, StorageError> {
+        sqlx::query!(
+            "UPDATE profiles SET name = ?, avatar_color = ? WHERE id = ?",
+            name,
+            avatar_color,
+            id,
+        )
+        .execute(self.pool)
+        .await?;
+        self.get(id).await
+    }
+
     pub async fn update_last_used(&self, id: &str) -> Result<(), StorageError> {
         let now = now_ts();
         sqlx::query!("UPDATE profiles SET last_used_at = ? WHERE id = ?", now, id)
