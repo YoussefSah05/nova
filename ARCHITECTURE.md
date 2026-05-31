@@ -842,6 +842,15 @@ come from `list_player_episodes(profileId, episodeId)`, which resolves the episo
 the same lazy Xtream fetch as `list_series_episodes`. When `ProfileSettings.autoplayNext` is on, the
 player advances to the next episode (by season/episode order) on playback end.
 
+### Window shell (cleanup phase)
+The window uses macOS `titleBarStyle: "Overlay"` (floating traffic-lights, full-bleed content). The
+move-handle is provided by `data-tauri-drag-region` on the persistent top chrome (browse header,
+profile-picker top strip via `components/DragRegion.tsx`, settings header) — double-click maximizes;
+edge-resize is native. This needs `core:window:allow-start-dragging` +
+`core:window:allow-internal-toggle-maximize` in `capabilities/default.json`. Header content is left-
+inset (~`pl-20`) so it clears the traffic-lights. `tauri-plugin-window-state` persists window
+size/position/maximized across launches (`window-state:default` permission).
+
 ### Settings + per-profile settings store (cleanup phase)
 A `SettingsModal` (header gear) with four sections — Playback & Captions, Transcription & Cache,
 Sources & EPG, Profile & About. Viewing/behaviour settings live per-profile in `profile_settings`

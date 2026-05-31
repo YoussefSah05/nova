@@ -45,6 +45,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        // Remember the window's size / position / maximized state across launches.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(state::AppState::new(pool, proxy_port, proxy_sessions))
         .setup(|app| {
             let engine = app.state::<state::AppState>().mpv_engine.clone();

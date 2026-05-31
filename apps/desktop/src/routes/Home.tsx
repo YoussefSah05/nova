@@ -705,7 +705,10 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
 
   return (
     <div className="flex min-h-screen flex-col bg-neutral-950">
-      <header className="flex items-center justify-between border-b border-white/5 px-6 py-4">
+      <header
+        data-tauri-drag-region
+        className="flex items-center justify-between border-b border-white/5 py-4 pl-20 pr-6"
+      >
         <div>
           <span className="text-lg font-semibold text-white">Nova</span>
           {activeSource && (
