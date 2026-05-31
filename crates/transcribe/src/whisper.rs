@@ -31,8 +31,6 @@ pub enum WhisperError {
     Spawn(#[source] std::io::Error),
     #[error("whisper-cli exited with status {0:?}: {1}")]
     Failed(Option<i32>, String),
-    #[error("could not read whisper output {0}: {1}")]
-    Output(String, #[source] std::io::Error),
     #[error("whisper output was not valid JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("I/O error: {0}")]
@@ -136,9 +134,13 @@ pub async fn transcribe_wav(
         cmd.arg("--split-on-word");
     }
 
-    let language = opts.language.as_deref().unwrap_or("auto");
-    cmd.args(["--language", language]);
-    if opts.language.as_deref() == Some("ar") {
+    // Normalize the language hint to a code whisper.cpp accepts. The player
+    // reports ISO-639-2 ("eng"), which whisper-cli rejects — it then prints help
+    // and writes no JSON (the "could not read whisper output" failure). Unknown
+    // codes fall back to auto-detect rather than breaking the run.
+    let normalized = opts.language.as_deref().and_then(normalize_whisper_lang);
+    cmd.args(["--language", normalized.as_deref().unwrap_or("auto")]);
+    if normalized.as_deref() == Some("ar") {
         // Arabic hallucinates across silence without this; see whisper-config.
         cmd.arg("--no-context");
     }
@@ -167,10 +169,87 @@ pub async fn transcribe_wav(
     on_progress(100);
 
     let json_path = out_base.with_extension("json");
-    let json = tokio::fs::read_to_string(&json_path)
-        .await
-        .map_err(|e| WhisperError::Output(json_path.display().to_string(), e))?;
-    parse_whisper_json(&json, &opts.model_id, opts.language.as_deref())
+    let json = match tokio::fs::read_to_string(&json_path).await {
+        Ok(j) => j,
+        // whisper-cli exited 0 but wrote no JSON — almost always an argument it
+        // didn't recognise, in which case it dumps help to stderr. Surface that
+        // tail instead of a bare "No such file" so the cause is visible.
+        Err(_) => {
+            return Err(WhisperError::Failed(
+                status.code(),
+                format!(
+                    "whisper produced no JSON output. Last output:\n{}",
+                    tail.join("\n")
+                ),
+            ))
+        }
+    };
+    parse_whisper_json(&json, &opts.model_id, normalized.as_deref())
+}
+
+/// Normalize a language hint into a code whisper.cpp accepts (ISO-639-1, two
+/// letters) or `None` to auto-detect. The media player reports ISO-639-2 track
+/// tags ("eng", "fra", …) which whisper-cli rejects — passing one makes it print
+/// help and write no JSON. Anything unrecognised maps to `None` (auto-detect) so
+/// a stray tag can never break a run.
+pub fn normalize_whisper_lang(code: &str) -> Option<String> {
+    let c = code.trim().to_ascii_lowercase();
+    if c.is_empty() || c == "und" || c == "auto" || c == "mul" || c == "zxx" {
+        return None;
+    }
+    // Already ISO-639-1 (whisper's native code form).
+    if c.len() == 2 && c.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return Some(c);
+    }
+    // Common ISO-639-2 (bibliographic /B and terminological /T) → 639-1.
+    let mapped = match c.as_str() {
+        "eng" => "en",
+        "fre" | "fra" => "fr",
+        "ger" | "deu" => "de",
+        "spa" => "es",
+        "ita" => "it",
+        "por" => "pt",
+        "rus" => "ru",
+        "jpn" => "ja",
+        "kor" => "ko",
+        "chi" | "zho" => "zh",
+        "ara" => "ar",
+        "hin" => "hi",
+        "nld" | "dut" => "nl",
+        "swe" => "sv",
+        "nor" => "no",
+        "dan" => "da",
+        "fin" => "fi",
+        "pol" => "pl",
+        "tur" => "tr",
+        "heb" => "he",
+        "ell" | "gre" => "el",
+        "ces" | "cze" => "cs",
+        "ron" | "rum" => "ro",
+        "ukr" => "uk",
+        "vie" => "vi",
+        "tha" => "th",
+        "ind" => "id",
+        "msa" | "may" => "ms",
+        "hun" => "hu",
+        "bul" => "bg",
+        "hrv" => "hr",
+        "srp" => "sr",
+        "slk" | "slo" => "sk",
+        "slv" => "sl",
+        "lit" => "lt",
+        "lav" => "lv",
+        "est" => "et",
+        "fas" | "per" => "fa",
+        "urd" => "ur",
+        "ben" => "bn",
+        "tam" => "ta",
+        "tel" => "te",
+        "cat" => "ca",
+        "isl" | "ice" => "is",
+        _ => return None,
+    };
+    Some(mapped.to_string())
 }
 
 /// Parse a "progress = NN%" line from whisper-cli's stderr.
@@ -365,6 +444,21 @@ mod tests {
         // The fixture has a blank middle segment; seqs must stay 0,1 contiguous.
         let seqs: Vec<i64> = t.segments.iter().map(|s| s.seq).collect();
         assert_eq!(seqs, vec![0, 1]);
+    }
+
+    #[test]
+    fn normalizes_language_codes() {
+        // ISO-639-2 (what the player reports) → ISO-639-1.
+        assert_eq!(normalize_whisper_lang("eng").as_deref(), Some("en"));
+        assert_eq!(normalize_whisper_lang("fra").as_deref(), Some("fr"));
+        assert_eq!(normalize_whisper_lang("FRE").as_deref(), Some("fr"));
+        assert_eq!(normalize_whisper_lang("ara").as_deref(), Some("ar"));
+        // Already 639-1 → unchanged.
+        assert_eq!(normalize_whisper_lang("en").as_deref(), Some("en"));
+        // Unknown / sentinel → auto-detect.
+        assert_eq!(normalize_whisper_lang("und"), None);
+        assert_eq!(normalize_whisper_lang(""), None);
+        assert_eq!(normalize_whisper_lang("qqq"), None);
     }
 
     #[test]
