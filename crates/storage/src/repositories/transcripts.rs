@@ -19,6 +19,7 @@ pub struct StoredTranscript {
     pub id: i64,
     pub media_kind: String,
     pub media_id: i64,
+    pub audio_track: i64,
     pub language: String,
     pub model: String,
     pub vtt_path: String,
@@ -32,41 +33,86 @@ impl<'a> TranscriptRepository<'a> {
         Self { pool }
     }
 
-    /// Find or create the transcript row for `(media_kind, media_id, language,
-    /// model)`, returning its id. Used by the streaming pipeline, which appends
-    /// windows over multiple sessions rather than writing the whole file at once.
+    /// Find or create the transcript row for a specific audio track, returning
+    /// its id. Identity is the stable `content_key` (a hash of the stream URL)
+    /// plus `audio_track` and `model` — so a playlist refresh that renumbers
+    /// `media_id` still resolves the same cached transcript, and each audio
+    /// track is cached independently. Falls back to `(media_id, audio_track)`
+    /// for legacy rows written before `content_key` existed, backfilling it.
     #[allow(clippy::too_many_arguments)]
     pub async fn get_or_create_transcript(
         &self,
+        content_key: &str,
         media_kind: &str,
         media_id: i64,
+        audio_track: i64,
         language: &str,
         model: &str,
         vtt_path: &str,
         json_path: &str,
     ) -> Result<i64, StorageError> {
+        // 1. Stable lookup by content key + track. Re-point media_id to the live
+        //    row when it changed (the title was re-imported under a new id).
+        if !content_key.is_empty() {
+            if let Some(row) = sqlx::query!(
+                r#"SELECT id as "id!: i64", media_id as "media_id!: i64" FROM transcripts
+                   WHERE content_key = ? AND audio_track = ? AND model = ?"#,
+                content_key,
+                audio_track,
+                model,
+            )
+            .fetch_optional(self.pool)
+            .await?
+            {
+                if row.media_id != media_id {
+                    sqlx::query!(
+                        "UPDATE transcripts SET media_id = ? WHERE id = ?",
+                        media_id,
+                        row.id
+                    )
+                    .execute(self.pool)
+                    .await?;
+                }
+                return Ok(row.id);
+            }
+        }
+
+        // 2. Legacy / just-created row keyed by media + track; backfill the key.
         if let Some(row) = sqlx::query!(
             r#"SELECT id as "id!: i64" FROM transcripts
-               WHERE media_kind = ? AND media_id = ? AND language = ? AND model = ?"#,
+               WHERE media_kind = ? AND media_id = ? AND audio_track = ? AND model = ?"#,
             media_kind,
             media_id,
-            language,
+            audio_track,
             model,
         )
         .fetch_optional(self.pool)
         .await?
         {
+            if !content_key.is_empty() {
+                sqlx::query!(
+                    "UPDATE transcripts SET content_key = ? WHERE id = ?",
+                    content_key,
+                    row.id
+                )
+                .execute(self.pool)
+                .await?;
+            }
             return Ok(row.id);
         }
 
+        // 3. Create it.
         let now = now_ts();
         let row = sqlx::query!(
             r#"INSERT INTO transcripts
-                 (media_kind, media_id, language, model, vtt_path, json_path, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+                 (content_key, media_kind, media_id, audio_track, language, model,
+                  vtt_path, json_path, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                RETURNING id as "id!: i64""#,
+            content_key,
             media_kind,
             media_id,
+            audio_track,
             language,
             model,
             vtt_path,
@@ -153,18 +199,61 @@ impl<'a> TranscriptRepository<'a> {
         Ok(())
     }
 
-    /// The most recent transcript for a media item, in any language. Used by
-    /// the player to decide whether captions are ready.
-    pub async fn get_for_media(
+    /// The cached transcript for a specific audio track, if any. Resolves by the
+    /// stable `content_key` first (survives a media re-import) and falls back to
+    /// `(media_kind, media_id)` for rows written before content keys existed.
+    /// Used by the caption session to replay cached cues on (re)start.
+    pub async fn get_for_media_track(
         &self,
+        content_key: &str,
         media_kind: &str,
         media_id: i64,
+        audio_track: i64,
     ) -> Result<Option<StoredTranscript>, StorageError> {
+        if !content_key.is_empty() {
+            let row = sqlx::query!(
+                r#"SELECT
+                     id                     as "id!: i64",
+                     media_kind,
+                     media_id               as "media_id!: i64",
+                     audio_track            as "audio_track!: i64",
+                     language,
+                     model,
+                     vtt_path,
+                     json_path,
+                     created_at             as "created_at!: i64",
+                     duration_processed_sec as "duration_processed_sec?: f64"
+                   FROM transcripts
+                   WHERE content_key = ? AND audio_track = ?
+                   ORDER BY created_at DESC
+                   LIMIT 1"#,
+                content_key,
+                audio_track,
+            )
+            .fetch_optional(self.pool)
+            .await?;
+            if let Some(r) = row {
+                return Ok(Some(StoredTranscript {
+                    id: r.id,
+                    media_kind: r.media_kind,
+                    media_id: r.media_id,
+                    audio_track: r.audio_track,
+                    language: r.language,
+                    model: r.model,
+                    vtt_path: r.vtt_path,
+                    json_path: r.json_path,
+                    created_at: r.created_at,
+                    duration_processed_sec: r.duration_processed_sec,
+                }));
+            }
+        }
+
         let row = sqlx::query!(
             r#"SELECT
                  id                     as "id!: i64",
                  media_kind,
                  media_id               as "media_id!: i64",
+                 audio_track            as "audio_track!: i64",
                  language,
                  model,
                  vtt_path,
@@ -172,11 +261,12 @@ impl<'a> TranscriptRepository<'a> {
                  created_at             as "created_at!: i64",
                  duration_processed_sec as "duration_processed_sec?: f64"
                FROM transcripts
-               WHERE media_kind = ? AND media_id = ?
+               WHERE media_kind = ? AND media_id = ? AND audio_track = ?
                ORDER BY created_at DESC
                LIMIT 1"#,
             media_kind,
             media_id,
+            audio_track,
         )
         .fetch_optional(self.pool)
         .await?;
@@ -185,6 +275,7 @@ impl<'a> TranscriptRepository<'a> {
             id: r.id,
             media_kind: r.media_kind,
             media_id: r.media_id,
+            audio_track: r.audio_track,
             language: r.language,
             model: r.model,
             vtt_path: r.vtt_path,
@@ -231,5 +322,70 @@ impl<'a> TranscriptRepository<'a> {
             });
         }
         Ok(segments)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::init_profile_db;
+
+    async fn temp_pool() -> (tempfile::TempDir, SqlitePool) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profile.db");
+        let pool = init_profile_db(path.to_str().unwrap()).await.unwrap();
+        (dir, pool)
+    }
+
+    #[tokio::test]
+    async fn content_key_identity_per_track_and_refresh_stable() {
+        let (_dir, pool) = temp_pool().await;
+        let repo = TranscriptRepository::new(&pool);
+
+        // Track 0 and track 1 of the same content get distinct transcripts.
+        let t0 = repo
+            .get_or_create_transcript("keyA", "vod", 1, 0, "en", "m", "/a0.vtt", "/a0.json")
+            .await
+            .unwrap();
+        let t1 = repo
+            .get_or_create_transcript("keyA", "vod", 1, 1, "fr", "m", "/a1.vtt", "/a1.json")
+            .await
+            .unwrap();
+        assert_ne!(t0, t1, "different tracks → different transcripts");
+
+        // Same content key + track resolves to the same row even when media_id
+        // changed (post-refresh re-import), and re-points media_id to the live row.
+        let again = repo
+            .get_or_create_transcript("keyA", "vod", 999, 0, "en", "m", "/a0.vtt", "/a0.json")
+            .await
+            .unwrap();
+        assert_eq!(again, t0, "stable content key survives media_id change");
+        let found = repo
+            .get_for_media_track("keyA", "vod", 999, 0)
+            .await
+            .unwrap()
+            .expect("found by content key");
+        assert_eq!(found.id, t0);
+        assert_eq!(found.media_id, 999, "media_id re-pointed to the live row");
+    }
+
+    #[tokio::test]
+    async fn legacy_row_backfills_content_key() {
+        let (_dir, pool) = temp_pool().await;
+        let repo = TranscriptRepository::new(&pool);
+
+        // A row created before content keys existed (empty key).
+        let legacy = repo
+            .get_or_create_transcript("", "vod", 7, 0, "en", "m", "/l.vtt", "/l.json")
+            .await
+            .unwrap();
+        // Re-opening with a real key backfills it onto the same row (no dup).
+        let same = repo
+            .get_or_create_transcript("keyB", "vod", 7, 0, "en", "m", "/l.vtt", "/l.json")
+            .await
+            .unwrap();
+        assert_eq!(legacy, same);
+        let by_key = repo.get_for_media_track("keyB", "vod", 7, 0).await.unwrap();
+        assert!(by_key.is_some(), "now resolvable by the backfilled key");
     }
 }

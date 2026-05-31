@@ -75,14 +75,24 @@ function mergeCues(existing: Cue[], incoming: Cue[]): Cue[] {
   return out;
 }
 
+/// The selected audio track to transcribe. `index` is the 0-based position among
+/// audio tracks (maps to ffmpeg `0:a:<index>`); `lang` is its language tag.
+export interface AudioTrackSelection {
+  index: number;
+  lang: string | null;
+}
+
 /// Drive streaming source captions for `media` while `active` is true.
 /// `getPlayhead`/`getDuration` read the live player clock without re-subscribing.
+/// Changing `audioTrack` re-targets transcription to that track (its cached cues,
+/// if any, replay instantly).
 export function useSourceCaptions(
   profileId: string,
   media: { kind: string; id: number },
   active: boolean,
   getPlayhead: () => number,
-  getDuration: () => number
+  getDuration: () => number,
+  audioTrack: AudioTrackSelection | null
 ): SourceCaptionsState {
   const [cues, setCues] = useState<Cue[]>([]);
   const [status, setStatus] = useState<SourceCaptionStatus>("idle");
@@ -90,7 +100,10 @@ export function useSourceCaptions(
   const [language, setLanguage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const mediaKey = `${media.kind}:${media.id}`;
+  const trackIndex = audioTrack?.index ?? 0;
+  const trackLang = audioTrack?.lang ?? null;
+  // Re-key the session on (media, track): switching either tears down + restarts.
+  const sessionKey = `${media.kind}:${media.id}:${trackIndex}`;
   const eligible = active && media.kind !== "live";
 
   // Keep the latest clock getters in refs so the lifecycle effect need not
@@ -110,12 +123,14 @@ export function useSourceCaptions(
         mediaId: media.id,
         fromSec: playheadRef.current(),
         durationSec: dur > 0 ? dur : null,
+        audioTrackIndex: trackIndex,
+        trackLang,
       });
     } catch (e) {
       setStatus("failed");
       setError(String(e));
     }
-  }, [profileId, media.kind, media.id]);
+  }, [profileId, media.kind, media.id, trackIndex, trackLang]);
 
   const downloadModel = useCallback(() => {
     void (async () => {
@@ -131,14 +146,14 @@ export function useSourceCaptions(
     })();
   }, [startSession]);
 
-  // Reset everything when the media changes.
+  // Reset everything when the media or selected audio track changes.
   useEffect(() => {
     setCues([]);
     setStatus("idle");
     setModelPct(null);
     setLanguage(null);
     setError(null);
-  }, [mediaKey]);
+  }, [sessionKey]);
 
   useEffect(() => {
     if (!eligible) return;
@@ -209,7 +224,7 @@ export function useSourceCaptions(
       unlisteners.forEach((u) => u());
       void invoke("stop_caption_session").catch(() => undefined);
     };
-  }, [eligible, profileId, mediaKey, startSession, media.kind, media.id]);
+  }, [eligible, profileId, sessionKey, startSession, media.kind, media.id]);
 
   return { cues, status, modelPct, language, error, downloadModel };
 }

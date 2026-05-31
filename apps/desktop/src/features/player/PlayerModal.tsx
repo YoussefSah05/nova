@@ -268,12 +268,22 @@ export function PlayerModal({
 
   // Source-language captions (Phase 6): a streaming session transcribes ~30s
   // windows at the playhead and emits cues, rendered through CaptionOverlay.
+  // The selected audio track as a 0-based index among audio tracks (ffmpeg
+  // `0:a:<index>`) + its language, so captions transcribe the track the viewer
+  // is hearing and re-target when they switch it.
+  const selectedAudioTrack = useMemo(() => {
+    const idx = audioTracks.findIndex((t) => t.id === audioTrackId);
+    const i = idx >= 0 ? idx : 0;
+    return { index: i, lang: audioTracks[i]?.lang ?? null };
+  }, [audioTracks, audioTrackId]);
+
   const sourceCaptions = useSourceCaptions(
     profileId,
     { kind: media.kind, id: media.id },
     captionMode === "source",
     () => latestPlaybackRef.current.currentTime,
-    () => latestPlaybackRef.current.duration
+    () => latestPlaybackRef.current.duration,
+    selectedAudioTrack
   );
   const sourceCues: Cue[] = sourceCaptions.cues;
   const translatedCues: Cue[] = [];

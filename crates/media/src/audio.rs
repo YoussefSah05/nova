@@ -46,22 +46,49 @@ pub async fn extract_audio_16k_mono(
 /// WAV — the unit of the streaming caption pipeline. `-ss` is placed **before**
 /// `-i` for a fast input seek (keyframe-accurate is unnecessary for audio).
 /// The caller offsets the resulting transcript timings by `start_sec`.
+///
+/// `audio_track` selects which audio stream to transcribe (`-map 0:a:<n>`,
+/// 0-based among audio streams) for multi-track content; `None` lets ffmpeg pick
+/// its default stream. The index is expected to match the player's audio-track
+/// order (true for typical MKV/MP4 containers).
 pub async fn extract_audio_window(
     input: &str,
     out_wav: &Path,
     start_sec: f64,
     dur_sec: f64,
+    audio_track: Option<u32>,
     deadline: Duration,
 ) -> Result<(), AudioError> {
     let mut cmd = base_ffmpeg();
-    cmd.arg("-ss")
-        .arg(format!("{:.3}", start_sec.max(0.0)))
-        .arg("-i")
-        .arg(input)
-        .arg("-t")
-        .arg(format!("{:.3}", dur_sec.max(0.0)));
-    pcm_output(&mut cmd, out_wav);
+    cmd.args(window_args(input, out_wav, start_sec, dur_sec, audio_track));
     run(cmd, deadline).await
+}
+
+/// Build the ffmpeg arguments (after the common base flags) for a windowed
+/// extraction. Pure so the `-ss`/`-t`/`-map` wiring is unit-testable without
+/// spawning ffmpeg.
+fn window_args(
+    input: &str,
+    out_wav: &Path,
+    start_sec: f64,
+    dur_sec: f64,
+    audio_track: Option<u32>,
+) -> Vec<String> {
+    let mut args = vec![
+        "-ss".to_string(),
+        format!("{:.3}", start_sec.max(0.0)),
+        "-i".to_string(),
+        input.to_string(),
+        "-t".to_string(),
+        format!("{:.3}", dur_sec.max(0.0)),
+    ];
+    if let Some(track) = audio_track {
+        args.push("-map".to_string());
+        args.push(format!("0:a:{track}"));
+    }
+    args.extend(PCM_ARGS.iter().map(|s| s.to_string()));
+    args.push(out_wav.to_string_lossy().into_owned());
+    args
 }
 
 /// ffmpeg invocation common to both extractors: quiet, reconnecting (IPTV CDNs
@@ -86,22 +113,24 @@ fn base_ffmpeg() -> Command {
     cmd
 }
 
+/// Whisper's required output format (mono 16 kHz signed-16 PCM WAV). `-y` is
+/// safe: the caller owns the temp output path.
+const PCM_ARGS: &[&str] = &[
+    "-vn",
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    "-c:a",
+    "pcm_s16le",
+    "-f",
+    "wav",
+    "-y",
+];
+
 /// Append Whisper's required output format (mono 16 kHz signed-16 PCM WAV).
 fn pcm_output(cmd: &mut Command, out_wav: &Path) {
-    cmd.args([
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "pcm_s16le",
-        "-f",
-        "wav",
-        // Safe to overwrite: the caller owns this temp path.
-        "-y",
-    ])
-    .arg(out_wav);
+    cmd.args(PCM_ARGS).arg(out_wav);
 }
 
 /// Run `cmd` with a timeout and surface a clean error on non-zero exit.
@@ -120,6 +149,28 @@ async fn run(mut cmd: Command, deadline: Duration) -> Result<(), AudioError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_args_map_selected_track() {
+        let out = Path::new("/tmp/win.wav");
+        let args = window_args("http://x/movie.mkv", out, 30.0, 32.0, Some(1));
+        // `-map 0:a:1` must appear as an adjacent flag/value pair.
+        let pos = args.iter().position(|a| a == "-map").expect("has -map");
+        assert_eq!(args[pos + 1], "0:a:1");
+        // Seek before input, duration present.
+        assert_eq!(args[0], "-ss");
+        assert!(args.contains(&"-i".to_string()));
+    }
+
+    #[test]
+    fn window_args_default_track_has_no_map() {
+        let out = Path::new("/tmp/win.wav");
+        let args = window_args("in.mkv", out, 0.0, 30.0, None);
+        assert!(
+            !args.iter().any(|a| a == "-map"),
+            "no -map when track is None"
+        );
+    }
 
     #[tokio::test]
     async fn missing_input_fails_cleanly() {

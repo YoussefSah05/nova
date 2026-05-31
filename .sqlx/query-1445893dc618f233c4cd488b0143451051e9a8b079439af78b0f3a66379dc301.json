@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!: i64\" FROM transcripts\n               WHERE media_kind = ? AND media_id = ? AND language = ? AND model = ?",
+  "query": "SELECT id as \"id!: i64\" FROM transcripts\n               WHERE media_kind = ? AND media_id = ? AND audio_track = ? AND model = ?",
   "describe": {
     "columns": [
       {
@@ -16,5 +16,5 @@
       true
     ]
   },
-  "hash": "067d82b21f2bb5534d429098662aa737d4a21aba907c1cfa0a8438735bd81722"
+  "hash": "1445893dc618f233c4cd488b0143451051e9a8b079439af78b0f3a66379dc301"
 }

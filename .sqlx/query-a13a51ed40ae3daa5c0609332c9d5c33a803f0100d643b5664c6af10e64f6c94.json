@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE transcripts SET content_key = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a13a51ed40ae3daa5c0609332c9d5c33a803f0100d643b5664c6af10e64f6c94"
+}

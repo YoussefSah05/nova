@@ -58,7 +58,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `get_proxy_port` | `{}` | `number` (deprecated - use `resolve_stream`) | 5 |
 | `get_model_status` | `{}` | `{ installed: boolean, modelId: string }` | 6 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
-| `start_caption_session` | `{ profileId, mediaKind, mediaId, fromSec, durationSec? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
+| `start_caption_session` | `{ profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
 | `set_caption_playhead` | `{ sec: number }` | `void` | 6 |
 | `stop_caption_session` | `{}` | `void` | 6 |
 | `get_caption_style` | `{ profileId }` | `CaptionStyle` (defaults if unsaved) | 6 |

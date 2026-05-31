@@ -69,6 +69,7 @@ pub async fn download_whisper_model(app: AppHandle) -> Result<(), ApiError> {
 
 // ── Streaming caption session commands ──────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn start_caption_session(
     profile_id: String,
@@ -76,6 +77,8 @@ pub async fn start_caption_session(
     media_id: i64,
     from_sec: f64,
     duration_sec: Option<f64>,
+    audio_track_index: Option<u32>,
+    track_lang: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), ApiError> {
@@ -87,6 +90,8 @@ pub async fn start_caption_session(
         media_id,
         from_sec,
         duration_sec,
+        audio_track: audio_track_index,
+        track_lang,
         models_dir: whisper_models_dir(&app)?,
         transcripts_dir: transcripts_dir(&app)?,
     };

@@ -40,6 +40,7 @@ use nova_transcribe::{
     ModelDownloadProgress, TranscribeOptions,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
@@ -90,6 +91,12 @@ pub struct StartCtx {
     pub media_id: i64,
     pub from_sec: f64,
     pub duration_sec: Option<f64>,
+    /// 0-based audio-stream index to transcribe (multi-track content). `None`
+    /// uses ffmpeg's default stream and the default track slot (0).
+    pub audio_track: Option<u32>,
+    /// Language of the chosen audio track (from the player's track metadata),
+    /// used as the transcription hint. `None` lets whisper auto-detect.
+    pub track_lang: Option<String>,
     pub models_dir: PathBuf,
     pub transcripts_dir: PathBuf,
 }
@@ -215,19 +222,28 @@ async fn run_session_inner(
         .await
         .map_err(|e| format!("resolve stream: {e}"))?;
 
+    // Stable cache identity (survives a media re-import) + the per-track slot.
+    let content_key = content_key(&resolved.upstream_url);
+    let track_slot = ctx.audio_track.unwrap_or(0) as i64;
+    // Per-track language hint: prefer the chosen track's tag, else the media's.
+    let lang_hint = ctx
+        .track_lang
+        .clone()
+        .or_else(|| resolved.source_lang.clone());
+
     let repo = TranscriptRepository::new(&ctx.pool);
     let duration = ctx
         .duration_sec
         .filter(|d| *d > 0.0)
         .unwrap_or(f64::INFINITY);
 
-    // Load any cached transcript and replay its cues immediately.
+    // Load any cached transcript for this track and replay its cues immediately.
     let mut transcript_id: Option<i64> = None;
-    let mut language = resolved.source_lang.clone().unwrap_or_default();
+    let mut language = lang_hint.clone().unwrap_or_default();
     let mut covered: Vec<(f64, f64)> = Vec::new();
     let mut prompt_tail: Option<String> = None;
     if let Some(existing) = repo
-        .get_for_media(&ctx.media_kind, ctx.media_id)
+        .get_for_media_track(&content_key, &ctx.media_kind, ctx.media_id, track_slot)
         .await
         .map_err(|e| e.to_string())?
     {
@@ -288,6 +304,7 @@ async fn run_session_inner(
             &wav,
             audio_start,
             audio_dur,
+            ctx.audio_track,
             EXTRACT_DEADLINE,
         )
         .await
@@ -311,7 +328,7 @@ async fn run_session_inner(
 
         let out_base = work.path().join("win");
         let opts = TranscribeOptions {
-            language: resolved.source_lang.clone(),
+            language: lang_hint.clone(),
             model_id: model.id.to_string(),
             dtw_preset: model.dtw_preset.to_string(),
             initial_prompt: prompt_tail.clone(),
@@ -360,14 +377,16 @@ async fn run_session_inner(
             if raw.language != "und" && !raw.language.is_empty() {
                 language = raw.language.clone();
             }
-            let base = format!("{}-{}-{}", ctx.media_kind, ctx.media_id, language);
+            let base = transcript_basename(&ctx.media_kind, ctx.media_id, track_slot, &language);
             let vtt_path = ctx.transcripts_dir.join(format!("{base}.vtt"));
             let json_path = ctx.transcripts_dir.join(format!("{base}.json"));
             let _ = std::fs::create_dir_all(&ctx.transcripts_dir);
             let id = repo
                 .get_or_create_transcript(
+                    &content_key,
                     &ctx.media_kind,
                     ctx.media_id,
+                    track_slot,
                     &language,
                     model.id,
                     &vtt_path.to_string_lossy(),
@@ -391,6 +410,7 @@ async fn run_session_inner(
                 &ctx.transcripts_dir,
                 &ctx.media_kind,
                 ctx.media_id,
+                track_slot,
                 &language,
             )
             .await;
@@ -570,13 +590,45 @@ async fn refresh_vtt(
     dir: &std::path::Path,
     media_kind: &str,
     media_id: i64,
+    audio_track: i64,
     language: &str,
 ) {
     if let Ok(segments) = repo.get_segments(transcript_id).await {
         let vtt = segments_to_vtt(&segments);
-        let path = dir.join(format!("{media_kind}-{media_id}-{language}.vtt"));
+        let path = dir.join(format!(
+            "{}.vtt",
+            transcript_basename(media_kind, media_id, audio_track, language)
+        ));
         let _ = std::fs::write(path, vtt);
     }
+}
+
+/// On-disk artifact basename, namespaced by audio track so multi-track
+/// transcripts don't clobber each other.
+fn transcript_basename(
+    media_kind: &str,
+    media_id: i64,
+    audio_track: i64,
+    language: &str,
+) -> String {
+    format!("{media_kind}-{media_id}-t{audio_track}-{language}")
+}
+
+/// Stable cache key for a media item: a SHA-256 of its upstream stream URL.
+/// Survives a playlist refresh (which renumbers `media_id`) as long as the
+/// provider keeps the URL stable, and keeps any credentials in the URL opaque.
+fn content_key(upstream_url: &str) -> String {
+    let digest = Sha256::digest(upstream_url.as_bytes());
+    hex_lower(&digest)
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 fn emit_cues(ctx: &StartCtx, language: &str, segments: &[TranscriptSegment]) {

@@ -584,11 +584,12 @@ We drive the Homebrew `whisper-cpp` CLI as a subprocess (same pattern as ffmpeg/
 ### VOD transcription flow (streaming, playback-anchored)
 Rather than transcribing the whole file before showing anything, a **caption session**
 (`apps/desktop/.../caption_session.rs`) streams cues from the playhead:
-1. `start_caption_session{profileId, mediaKind, mediaId, fromSec, durationSec?}` ensures the model,
-   replays any cached coverage instantly, then runs a **segment-aligned sliding cursor**.
-2. Per window: `extract_audio_window` (ffmpeg `-ss/-t`, 16 kHz mono WAV) pulls up to 30s with a ~3s
-   overlap → `transcribe_wav` (DTW + prompt + `--max-len`/`--split-on-word` for caption-sized cues)
-   → `shift_transcript` to absolute time.
+1. `start_caption_session{profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?,
+   trackLang?}` ensures the model, replays any cached coverage instantly, then runs a
+   **segment-aligned sliding cursor**.
+2. Per window: `extract_audio_window` (ffmpeg `-ss/-t`, 16 kHz mono WAV, `-map 0:a:<n>` for the
+   selected audio track) pulls up to 30s with a ~3s overlap → `transcribe_wav` (DTW + prompt +
+   `--max-len`/`--split-on-word` for caption-sized cues) → `shift_transcript` to absolute time.
 3. **Overlap stitch (LocalAgreement-style, Phase 6.3):** segments are kept by where they *end*
    (anything past the confirmed frontier `gap_start`), then their already-shown leading words are
    trimmed off — so a segment that spans the boundary in pauseless dialogue keeps its new content
@@ -601,6 +602,15 @@ Rather than transcribing the whole file before showing anything, a **caption ses
 4. Cues emit incrementally via `transcription:cues`; WebVTT + rows land in `transcripts` /
    `transcript_segments`. The session prefetches ~90s ahead and covers only what's watched (lazy).
 5. One active session at a time (the open player); a new `start` cancels the previous.
+
+### Per-track + refresh-stable cache (Phase 6.4)
+A transcript is keyed by **`content_key` (a SHA-256 of the upstream stream URL) + `audio_track` +
+`model`** (migration `0010`), not the DB `media_id`. So each audio track of multi-track content is
+cached independently — switching the audio track re-targets transcription to that track from the
+playhead and a previously-watched track replays instantly — and a playlist refresh that renumbers
+`media_id` still resolves the same cached transcript (the row's `media_id` is lazily re-pointed; a
+legacy row's empty `content_key` is backfilled on next watch). On-disk VTT/JSON are namespaced
+`{kind}-{id}-t{track}-{lang}`.
 
 ### Caption appearance (Phase 6.2, per profile)
 Caption styling is personalizable like Netflix (font size / family / colour / backdrop), stored in

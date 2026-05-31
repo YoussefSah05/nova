@@ -30,6 +30,7 @@ nova-transcribe = { path = "../../../crates/transcribe" }
 nova-jobs = { path = "../../../crates/jobs" }
 sqlx = { workspace = true }
 uuid = { workspace = true }
+sha2 = { workspace = true }
 dirs = "5"
 reqwest = { workspace = true }
 tempfile = "3"
