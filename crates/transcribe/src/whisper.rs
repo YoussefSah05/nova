@@ -80,6 +80,11 @@ pub struct TranscribeOptions {
     /// Initial prompt fed via `--prompt` — the tail of the previous window so
     /// the model keeps lexical context across the boundary. `None` to omit.
     pub initial_prompt: Option<String>,
+    /// Max characters per segment (`--max-len`, split at word boundaries via
+    /// `--split-on-word`). `0` = unlimited (whisper's natural segmentation).
+    /// A caption-sized value (~60) keeps cues short in dense, pauseless speech
+    /// and gives the windowed session finer stitch boundaries.
+    pub max_len: u32,
 }
 
 /// Transcribe `wav` (16 kHz mono) using the GGML weights at `ggml_model`.
@@ -122,6 +127,13 @@ pub async fn transcribe_wav(
         if !prompt.trim().is_empty() {
             cmd.args(["--prompt", prompt]);
         }
+    }
+
+    // Caption-sized segments split at word boundaries. Keeps cues short in
+    // dense speech and gives the windowed session finer stitch boundaries.
+    if opts.max_len > 0 {
+        cmd.args(["--max-len", &opts.max_len.to_string()]);
+        cmd.arg("--split-on-word");
     }
 
     let language = opts.language.as_deref().unwrap_or("auto");

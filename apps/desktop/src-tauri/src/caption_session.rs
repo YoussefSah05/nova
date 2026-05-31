@@ -14,6 +14,15 @@
 //! Coverage is tracked as real `[start, end)` intervals, so windows align to
 //! speech, not the clock. Token timestamps are DTW-aligned (see `whisper.rs`).
 //!
+//! **Overlap stitch (6.3):** segments are kept by where they *end* (anything
+//! past the confirmed frontier `gap_start`), not where they start, then their
+//! already-shown leading words are trimmed off — a LocalAgreement-style stable
+//! prefix. A start-based drop loses boundary-spanning segments in long,
+//! pauseless dialogue (the new content past the boundary vanishes); the
+//! end-based keep is lossless. Whisper emits caption-sized segments via
+//! `--max-len`/`--split-on-word` ([`MAX_LEN_CHARS`]) so cues stay short and the
+//! stitch boundaries are fine-grained.
+//!
 //! Cues are emitted via `transcription:cues` and rendered by the React
 //! `CaptionOverlay` (never mpv's native renderer), so Phase 7's translation
 //! card can reuse the same stream.
@@ -38,8 +47,12 @@ use tokio::sync::Mutex;
 /// Max audio handed to whisper per window. 30s is whisper's native context length.
 const WINDOW_SEC: f64 = 30.0;
 /// Audio pulled before each window's start so the model has lexical context and
-/// the first word isn't clipped. The overlap is de-duplicated on append.
-const OVERLAP_SEC: f64 = 2.0;
+/// boundary words are heard twice (2–3s is the long-form best practice). The
+/// overlap is trimmed off on append so nothing is duplicated.
+const OVERLAP_SEC: f64 = 3.0;
+/// Caption-sized segment cap (chars) passed to whisper as `--max-len` (split on
+/// word). Keeps cues short in dense speech and yields finer stitch boundaries.
+const MAX_LEN_CHARS: u32 = 60;
 /// Segments ending within this of the window's tail are treated as possibly
 /// truncated by the hard 30s cut, so they're left for the next window to re-read.
 const TRAILING_GUARD_SEC: f64 = 1.5;
@@ -302,6 +315,7 @@ async fn run_session_inner(
             model_id: model.id.to_string(),
             dtw_preset: model.dtw_preset.to_string(),
             initial_prompt: prompt_tail.clone(),
+            max_len: MAX_LEN_CHARS,
         };
         let mut raw = match transcribe_wav(&wav, &paths.ggml, &out_base, &opts, |_pct| {}).await {
             Ok(t) => t,
@@ -318,10 +332,19 @@ async fn run_session_inner(
         }
 
         shift_transcript(&mut raw, audio_start);
-        // Drop the lead-in overlap and anything already covered, keeping only
-        // new segments at/after the gap.
+        // Overlap stitch (LocalAgreement-style confirmed prefix). Keep any
+        // segment that reaches past the confirmed frontier `gap_start` — even
+        // one that *starts* inside the lead-in overlap and *extends* into new
+        // dialogue (common in pauseless speech) — then trim the already-shown
+        // leading words off it. A start-based drop here loses that new content.
         raw.segments
-            .retain(|s| s.start_sec >= gap_start - 0.25 && !point_covered(&covered, midpoint(s)));
+            .retain(|s| s.end_sec > gap_start + EPS && !point_covered(&covered, midpoint(s)));
+        for s in &mut raw.segments {
+            if s.start_sec < gap_start {
+                trim_leading_words(s, gap_start);
+            }
+        }
+        raw.segments.retain(|s| !s.text.trim().is_empty());
 
         // Decide which segments are "complete" and how far the cursor advances.
         let (keep, advance_to) = split_complete(&raw.segments, gap_start, window_end);
@@ -408,6 +431,33 @@ fn point_covered(covered: &[(f64, f64)], x: f64) -> bool {
 
 fn midpoint(s: &TranscriptSegment) -> f64 {
     (s.start_sec + s.end_sec) / 2.0
+}
+
+/// Trim the overlap off a boundary-spanning segment: drop leading words that end
+/// at/before `gap_start` (already shown by the previous window) and re-base the
+/// segment on the survivors. Uses DTW word timings when present; otherwise just
+/// clips `start_sec` (the text may repeat ~1 word — rare and harmless). Leaves
+/// the segment's `text` empty if every word was trimmed, so the caller drops it.
+fn trim_leading_words(s: &mut TranscriptSegment, gap_start: f64) {
+    match &mut s.words {
+        Some(words) => {
+            words.retain(|w| w.end_sec > gap_start + EPS);
+            if let Some(first) = words.first() {
+                s.start_sec = first.start_sec;
+                s.text = words
+                    .iter()
+                    .map(|w| w.word.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+            } else {
+                s.text.clear();
+            }
+        }
+        None => {
+            // No word timings: keep the text, just clip the displayed start.
+            s.start_sec = s.start_sec.max(gap_start);
+        }
+    }
 }
 
 /// Split a window's (already-deduped) segments into the ones to keep/emit now
@@ -649,6 +699,65 @@ mod tests {
         let (keep, advance) = split_complete(&[], 10.0, 40.0);
         assert!(keep.is_empty());
         assert!((advance - 40.0).abs() < 1e-9);
+    }
+
+    fn word(start: f64, end: f64, w: &str) -> nova_core::TranscriptWord {
+        nova_core::TranscriptWord {
+            start_sec: start,
+            end_sec: end,
+            word: w.to_string(),
+        }
+    }
+
+    #[test]
+    fn trim_leading_words_drops_overlap_and_rebases() {
+        // Segment [26→30] spanning the boundary at gap_start=28.
+        let mut s = TranscriptSegment {
+            seq: 0,
+            start_sec: 26.0,
+            end_sec: 30.0,
+            text: "already shown brand new words".to_string(),
+            words: Some(vec![
+                word(26.0, 26.8, "already"),
+                word(26.8, 27.6, "shown"),
+                word(28.2, 28.9, "brand"),
+                word(29.0, 29.5, "new"),
+                word(29.6, 30.0, "words"),
+            ]),
+        };
+        trim_leading_words(&mut s, 28.0);
+        assert_eq!(s.text, "brand new words");
+        assert!(
+            (s.start_sec - 28.2).abs() < 1e-9,
+            "re-based to first surviving word"
+        );
+    }
+
+    #[test]
+    fn trim_leading_words_empties_when_all_overlap() {
+        let mut s = TranscriptSegment {
+            seq: 0,
+            start_sec: 26.0,
+            end_sec: 27.5,
+            text: "all old".to_string(),
+            words: Some(vec![word(26.0, 26.8, "all"), word(26.9, 27.5, "old")]),
+        };
+        trim_leading_words(&mut s, 28.0);
+        assert!(
+            s.text.is_empty(),
+            "fully-overlapped segment is emptied so the caller drops it"
+        );
+    }
+
+    #[test]
+    fn trim_leading_words_clips_start_without_word_timings() {
+        let mut s = seg(26.0, 30.0, "no word timings here");
+        trim_leading_words(&mut s, 28.0);
+        assert!((s.start_sec - 28.0).abs() < 1e-9);
+        assert_eq!(
+            s.text, "no word timings here",
+            "text kept when no words to trim"
+        );
     }
 
     #[test]

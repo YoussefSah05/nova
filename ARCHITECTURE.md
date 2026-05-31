@@ -586,12 +586,18 @@ Rather than transcribing the whole file before showing anything, a **caption ses
 (`apps/desktop/.../caption_session.rs`) streams cues from the playhead:
 1. `start_caption_session{profileId, mediaKind, mediaId, fromSec, durationSec?}` ensures the model,
    replays any cached coverage instantly, then runs a **segment-aligned sliding cursor**.
-2. Per window: `extract_audio_window` (ffmpeg `-ss/-t`, 16 kHz mono WAV) pulls up to 30s with a 2s
-   overlap → `transcribe_wav` (DTW + prompt) → `shift_transcript` to absolute time.
-3. Only **complete** segments are kept (the trailing segment within ~1.5s of the hard 30s cut is
-   left for the next window to re-read with context), and the cursor advances to the last complete
-   segment's end — so a sentence is never hard-cut. Coverage is tracked as `[start,end)` intervals
-   (persisted in `transcript_windows`, migration 0008) so a re-watch replays instantly.
+2. Per window: `extract_audio_window` (ffmpeg `-ss/-t`, 16 kHz mono WAV) pulls up to 30s with a ~3s
+   overlap → `transcribe_wav` (DTW + prompt + `--max-len`/`--split-on-word` for caption-sized cues)
+   → `shift_transcript` to absolute time.
+3. **Overlap stitch (LocalAgreement-style, Phase 6.3):** segments are kept by where they *end*
+   (anything past the confirmed frontier `gap_start`), then their already-shown leading words are
+   trimmed off — so a segment that spans the boundary in pauseless dialogue keeps its new content
+   instead of being dropped (a start-based drop silently loses it). Only **complete** segments are
+   committed (the trailing segment within ~1.5s of the hard 30s cut is held for the next window,
+   re-read with context and re-admitted by the end-based keep — lossless), and the cursor advances
+   to the last complete segment's end so a sentence is never hard-cut. Coverage is tracked as
+   `[start,end)` intervals (persisted in `transcript_windows`, migration 0008) so a re-watch
+   replays instantly.
 4. Cues emit incrementally via `transcription:cues`; WebVTT + rows land in `transcripts` /
    `transcript_segments`. The session prefetches ~90s ahead and covers only what's watched (lazy).
 5. One active session at a time (the open player); a new `start` cancels the previous.
