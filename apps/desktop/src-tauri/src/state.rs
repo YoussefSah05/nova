@@ -5,6 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
 use crate::airplay::AirPlayEngine;
+use crate::caption_session::CaptionSessionManager;
 
 pub struct AppState {
     /// Pool for app.db (profiles, app_settings).
@@ -22,6 +23,9 @@ pub struct AppState {
     /// AVFoundation engine used only while an AirPlay route is active. On macOS
     /// it wraps an `AVPlayer` + route picker; elsewhere it's an inert stub.
     pub airplay: Arc<AirPlayEngine>,
+    /// Drives streaming caption transcription for the open player (one active
+    /// session at a time).
+    pub caption_sessions: Arc<CaptionSessionManager>,
 }
 
 impl AppState {
@@ -34,6 +38,7 @@ impl AppState {
             hls_sessions,
             mpv_engine: MpvEngine::new(),
             airplay: AirPlayEngine::new(),
+            caption_sessions: Arc::new(CaptionSessionManager::new()),
         }
     }
 

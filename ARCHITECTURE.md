@@ -566,21 +566,57 @@ Xtream pattern: `.../streaming/timeshift.php?username=X&password=Y&stream=<id>&s
 - Cache compiled `.mlmodelc` at `~/Library/Application Support/Stream/models/whisper/`.
 - Advanced users can also download `large-v3` (full, ~1.5 GB) for archival-quality.
 
-### Whisper invocation rules
-- `--task transcribe` always (we use the dedicated translation pipeline for cross-language, not Whisper's translate task — see §9 rationale).
-- `--language <bcp47>` when channel/VOD has known expected language; otherwise auto-detect on first 30s.
-- `--word-timestamps true` always (enables word-level alignment for the dual-mode UI and transcript-deep-link search).
-- `--no-context true` for Arabic specifically (reduces hallucinations across silence).
-- VAD enabled to skip silent regions.
+### Whisper invocation rules (as implemented — `whisper-cli` subprocess)
+We drive the Homebrew `whisper-cpp` CLI as a subprocess (same pattern as ffmpeg/mpv), not FFI.
+- **No `--task` flag** — transcription is whisper.cpp's default; passing `--task` prints help and
+  exits. Cross-language uses the dedicated translation pipeline (§9), never Whisper's translate task.
+- `--output-json-full` always (segments **and** per-token offsets → word-level timing for dual-mode
+  and transcript-deep-link search).
+- `--dtw <preset>` always (e.g. `large.v3.turbo`): DTW-aligned token timestamps. This is the
+  timestamp-accuracy lever; without it token offsets are coarse heuristics and cue timing drifts.
+- `--prompt "<tail>"` carries the previous window's last words for cross-boundary lexical context.
+- `--language <bcp47>` when known; otherwise auto-detect (learned from the first window and persisted).
+- `--no-context` for Arabic specifically (reduces hallucinations across silence).
+- **VAD is deliberately disabled.** whisper.cpp's `--vad` remaps *segment* offsets to the original
+  timeline but leaves *token* DTW offsets in the VAD-compressed timeline, corrupting the word timing
+  we depend on. We chunk on whisper's natural pause-aligned segment boundaries instead (see below).
 
-### VOD transcription flow
-1. Job enqueued: `{vod_id, language: "auto"|<bcp47>}`.
-2. Worker pulls job. FFmpeg extracts audio: `ffmpeg -i <url> -ac 1 -ar 16000 -f s16le -`.
-3. whisper.cpp consumes PCM, emits segments with word-level timestamps.
-4. Output: WebVTT + segments JSON. Both written to disk; rows inserted into `transcripts` + `transcript_segments` + FTS5 index.
-5. Progress event every 5% of duration processed.
-6. On completion: if user's preferences ask for translation into a target language for this source, automatically enqueue a `translate_transcript` job.
-7. Concurrency: max 2 transcription jobs on 16GB+ M3, 1 on 8GB M3 (auto-detected at startup).
+### VOD transcription flow (streaming, playback-anchored)
+Rather than transcribing the whole file before showing anything, a **caption session**
+(`apps/desktop/.../caption_session.rs`) streams cues from the playhead:
+1. `start_caption_session{profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?,
+   trackLang?}` ensures the model, replays any cached coverage instantly, then runs a
+   **segment-aligned sliding cursor**.
+2. Per window: `extract_audio_window` (ffmpeg `-ss/-t`, 16 kHz mono WAV, `-map 0:a:<n>` for the
+   selected audio track) pulls up to 30s with a ~3s overlap → `transcribe_wav` (DTW + prompt +
+   `--max-len`/`--split-on-word` for caption-sized cues) → `shift_transcript` to absolute time.
+3. **Overlap stitch (LocalAgreement-style, Phase 6.3):** segments are kept by where they *end*
+   (anything past the confirmed frontier `gap_start`), then their already-shown leading words are
+   trimmed off — so a segment that spans the boundary in pauseless dialogue keeps its new content
+   instead of being dropped (a start-based drop silently loses it). Only **complete** segments are
+   committed (the trailing segment within ~1.5s of the hard 30s cut is held for the next window,
+   re-read with context and re-admitted by the end-based keep — lossless), and the cursor advances
+   to the last complete segment's end so a sentence is never hard-cut. Coverage is tracked as
+   `[start,end)` intervals (persisted in `transcript_windows`, migration 0008) so a re-watch
+   replays instantly.
+4. Cues emit incrementally via `transcription:cues`; WebVTT + rows land in `transcripts` /
+   `transcript_segments`. The session prefetches ~90s ahead and covers only what's watched (lazy).
+5. One active session at a time (the open player); a new `start` cancels the previous.
+
+### Per-track + refresh-stable cache (Phase 6.4)
+A transcript is keyed by **`content_key` (a SHA-256 of the upstream stream URL) + `audio_track` +
+`model`** (migration `0010`), not the DB `media_id`. So each audio track of multi-track content is
+cached independently — switching the audio track re-targets transcription to that track from the
+playhead and a previously-watched track replays instantly — and a playlist refresh that renumbers
+`media_id` still resolves the same cached transcript (the row's `media_id` is lazily re-pointed; a
+legacy row's empty `content_key` is backfilled on next watch). On-disk VTT/JSON are namespaced
+`{kind}-{id}-t{track}-{lang}`.
+
+### Caption appearance (Phase 6.2, per profile)
+Caption styling is personalizable like Netflix (font size / family / colour / backdrop), stored in
+the profile DB (`caption_style`, migration 0009; `nova_core::CaptionStyle`) via
+`get_caption_style` / `set_caption_style`, and applied by the React `CaptionOverlay` (the
+`CaptionStylePanel` "Aa" control). Pure presentation — it does not affect the transcript.
 
 ### Live transcription flow
 1. User toggles captions on a channel.
@@ -933,13 +969,28 @@ Each step ends with something runnable.
 9. Refresh playlist (atomic re-fetch + reload) preserving favorites/watchlist/continue-watching.
    (Deferred to a follow-up: cross-platform render handlers for Windows/Linux.)
 
-**Phase 6 — Transcription (VOD)**
-1. Bundle FFmpeg.
-2. Build whisper.cpp with Core ML enabled.
-3. `transcribe` crate batch transcription with word timestamps.
-4. First-run model download + Core ML compile.
-5. Job queue runs transcriptions.
-6. Source-language VTT injected into manifest, picker reflects state.
+**Phase 6 — Transcription (VOD)** — 🟡 implemented (`feat/phase-6-transcription`)
+1. **Decision update:** `whisper-cli` is driven as a **subprocess** (Homebrew `whisper-cpp`,
+   Core ML), not linked via FFI — same external-binary pattern as ffmpeg/mpv. The `transcribe`
+   crate downloads the prebuilt **GGML + Core ML** model on first run (no Python conversion; the
+   UI prompts for the one-time ~500MB download). whisper.cpp has **no `--task` flag** (transcribe
+   is the default); word timestamps come from `--output-json-full`.
+2. **Streaming, playback-anchored captions (Phase 6.1):** rather than batch-transcribing the whole
+   file (which left the user at 0% for minutes), a **caption session** transcribes ~30s windows
+   starting at the playhead (`nova_media::extract_audio_window` + `transcribe_wav` +
+   `shift_transcript`), emits cues incrementally, prefetches ~90s ahead, and **lazily** covers only
+   what's watched. First caption appears in seconds. One session at a time
+   (`apps/desktop/.../caption_session.rs`).
+3. Persistence/cache: `transcripts` + `transcript_segments` (migration 0007) plus `transcript_windows`
+   coverage + `complete` flag (migration 0008). Cached windows replay instantly on re-watch; the
+   on-disk VTT is refreshed per window.
+4. Commands: `start_caption_session` / `set_caption_playhead` / `stop_caption_session`,
+   `get_model_status`, `download_whisper_model`; events `transcription:cues` / `transcription:status`,
+   `model:download:progress`.
+5. **Caption delivery (continues the Phase 5 libmpv switch):** cues render through the React
+   `CaptionOverlay`, **not** mpv's native renderer and **not** the proxy `/captions` manifest path
+   (so the Phase 7 translation card reuses the same cue stream). The proxy `/captions` endpoint
+   stays a stub (relevant only to the AirPlay/AVPlayer path).
 
 **Phase 7 — Translation (VOD)**
 1. `translate` crate with NLLB-200 distilled 600M via CTranslate2.

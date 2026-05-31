@@ -35,6 +35,9 @@ import type { Channel } from "@/types";
 
 import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
 import { CaptionButton } from "./CaptionPicker";
+import { CaptionStyleButton } from "./CaptionStylePanel";
+import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
+import { useCaptionStyle } from "./useCaptionStyle";
 import { useAirPlay } from "./useAirPlay";
 import { AirPlayButton, AirPlayOverlay } from "./AirPlay";
 
@@ -241,6 +244,8 @@ export function PlayerModal({
   // -- caption state (Phase 5: inert; Phase 6/7 will populate the cue arrays) --
   const [captionMode, setCaptionMode] = useState<CaptionMode>("off");
   const [captionMenuOpen, setCaptionMenuOpen] = useState(false);
+  const [captionStyleOpen, setCaptionStyleOpen] = useState(false);
+  const captionStyleState = useCaptionStyle(profileId);
 
   // -- track / speed state (driven by mpv:state) -------------------------
   const [tracks, setTracks] = useState<NativeTrack[]>([]);
@@ -252,13 +257,40 @@ export function PlayerModal({
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
   const audioTracks = tracks.filter((t) => t.kind === "audio");
   const videoTracks = tracks.filter((t) => t.kind === "video");
-  const sourceCues: Cue[] = [];
-  const translatedCues: Cue[] = [];
   const latestPlaybackRef = useRef({ currentTime: 0, duration: 0, playing: false });
+  // Mirror the caption selection into a ref so the watch-progress interval
+  // (which captures its closure once) always records the current mode.
+  const captionModeRef = useRef<CaptionMode>("off");
 
   useEffect(() => {
     latestPlaybackRef.current = { currentTime, duration, playing };
   }, [currentTime, duration, playing]);
+
+  // Source-language captions (Phase 6): a streaming session transcribes ~30s
+  // windows at the playhead and emits cues, rendered through CaptionOverlay.
+  // The selected audio track as a 0-based index among audio tracks (ffmpeg
+  // `0:a:<index>`) + its language, so captions transcribe the track the viewer
+  // is hearing and re-target when they switch it.
+  const selectedAudioTrack = useMemo(() => {
+    const idx = audioTracks.findIndex((t) => t.id === audioTrackId);
+    const i = idx >= 0 ? idx : 0;
+    return { index: i, lang: audioTracks[i]?.lang ?? null };
+  }, [audioTracks, audioTrackId]);
+
+  const sourceCaptions = useSourceCaptions(
+    profileId,
+    { kind: media.kind, id: media.id },
+    captionMode === "source",
+    () => latestPlaybackRef.current.currentTime,
+    () => latestPlaybackRef.current.duration,
+    selectedAudioTrack
+  );
+  const sourceCues: Cue[] = sourceCaptions.cues;
+  const translatedCues: Cue[] = [];
+
+  useEffect(() => {
+    captionModeRef.current = captionMode;
+  }, [captionMode]);
 
   // -- AirPlay (parallel AVPlayer route) ----------------------------------
   // When an AirPlay device is selected, the backend AVPlayer streams the proxy
@@ -826,7 +858,7 @@ export function PlayerModal({
           positionSec: latest.currentTime,
           durationSec: dur,
           completed,
-          captionMode: "off",
+          captionMode: captionModeRef.current,
         }).catch(() => {
           /* progress writes are best-effort */
         });
@@ -855,10 +887,7 @@ export function PlayerModal({
         positionSec: video.currentTime,
         durationSec: dur,
         completed,
-        // Always 'off' in Phase 5. Phase 6/7 will read the active selection
-        // from the caption picker and pass it through here so it persists
-        // per (media_kind, media_id).
-        captionMode: "off",
+        captionMode: captionModeRef.current,
       }).catch(() => {
         /* progress writes are best-effort */
       });
@@ -1406,14 +1435,59 @@ export function PlayerModal({
           />
         )}
 
-        {/* Caption overlay - inert in Phase 5; Phase 6/7 populate the cues. */}
+        {/* Caption overlay - Phase 6 source captions; Phase 7 adds translation. */}
         <CaptionOverlay
           mode={captionMode}
           sourceCues={sourceCues}
           translatedCues={translatedCues}
           currentTime={currentTime}
           sourceLang={resolved?.sourceLang}
+          captionStyle={captionStyleState.style}
         />
+
+        {/* Caption status banner: model-download prompt, preparing, or error.
+            Hidden once cues are streaming (status "streaming" with cues). */}
+        {captionMode === "source" &&
+          sourceCaptions.status !== "idle" &&
+          sourceCaptions.status !== "complete" &&
+          !(sourceCaptions.status === "streaming" && sourceCues.length > 0) && (
+            <div className="absolute inset-x-0 bottom-[22%] z-10 flex justify-center px-6">
+              <div
+                className={cn(
+                  "flex items-center gap-3 rounded-full bg-black/75 px-4 py-1.5 text-sm text-white/90",
+                  "border border-white/10 shadow-lg backdrop-blur-md"
+                )}
+              >
+                {sourceCaptions.status === "needsModel" ? (
+                  <>
+                    <span>Captions need a one-time model download (~500MB)</span>
+                    <button
+                      type="button"
+                      onClick={sourceCaptions.downloadModel}
+                      className="rounded-full bg-[var(--color-accent)] px-3 py-0.5 text-xs font-semibold text-white hover:brightness-110"
+                    >
+                      Download
+                    </button>
+                  </>
+                ) : sourceCaptions.status === "failed" ? (
+                  <>
+                    <span className="text-rose-300">
+                      Captions failed{sourceCaptions.error ? `: ${sourceCaptions.error}` : ""}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={sourceCaptions.downloadModel}
+                      className="rounded-full bg-white/15 px-3 py-0.5 text-xs font-semibold hover:bg-white/25"
+                    >
+                      Retry
+                    </button>
+                  </>
+                ) : (
+                  <span>Preparing captions — {sourceCaptionNote(sourceCaptions) ?? "working…"}</span>
+                )}
+              </div>
+            </div>
+          )}
 
         {/* Skip indicator (+-10s) */}
         {skipIndicator && (
@@ -1630,7 +1704,19 @@ export function PlayerModal({
               open={captionMenuOpen}
               onToggle={() => setCaptionMenuOpen((v) => !v)}
               onClose={() => setCaptionMenuOpen(false)}
+              sourceNote={sourceCaptionNote(sourceCaptions)}
             />
+
+            {/* Caption-style ("Aa") controls — only while captions are showing. */}
+            {captionMode !== "off" && (
+              <CaptionStyleButton
+                style={captionStyleState.style}
+                onChange={captionStyleState.setStyle}
+                open={captionStyleOpen}
+                onToggle={() => setCaptionStyleOpen((v) => !v)}
+                onClose={() => setCaptionStyleOpen(false)}
+              />
+            )}
 
             <IconButton
               onClick={() => setCinema((v) => !v)}

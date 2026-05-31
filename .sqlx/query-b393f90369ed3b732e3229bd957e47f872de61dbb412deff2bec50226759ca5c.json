@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO transcripts\n                 (content_key, media_kind, media_id, audio_track, language, model,\n                  vtt_path, json_path, created_at)\n               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)\n               RETURNING id as \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b393f90369ed3b732e3229bd957e47f872de61dbb412deff2bec50226759ca5c"
+}

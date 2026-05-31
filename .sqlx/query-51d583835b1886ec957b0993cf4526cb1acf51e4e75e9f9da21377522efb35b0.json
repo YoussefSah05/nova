@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                 font_scale  as \"font_scale!: f64\",\n                 font_family as \"font_family!: String\",\n                 text_color  as \"text_color!: String\",\n                 background   as \"background!: String\",\n                 bg_opacity  as \"bg_opacity!: f64\"\n               FROM caption_style WHERE id = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "font_scale!: f64",
+        "ordinal": 0,
+        "type_info": "Float"
+      },
+      {
+        "name": "font_family!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "text_color!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "background!: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "bg_opacity!: f64",
+        "ordinal": 4,
+        "type_info": "Float"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "51d583835b1886ec957b0993cf4526cb1acf51e4e75e9f9da21377522efb35b0"
+}

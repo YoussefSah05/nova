@@ -1,4 +1,5 @@
 pub mod airplay;
+pub mod caption_session;
 pub mod commands;
 pub mod ipc;
 #[cfg(target_os = "macos")]
@@ -121,6 +122,15 @@ pub fn run() {
             commands::playback::mpv_set_video_rect,
             commands::playback::record_watch_progress,
             commands::playback::get_resume_position,
+            // Phase 6 — Transcription (VOD), streaming caption sessions
+            commands::transcription::get_model_status,
+            commands::transcription::download_whisper_model,
+            commands::transcription::start_caption_session,
+            commands::transcription::set_caption_playhead,
+            commands::transcription::stop_caption_session,
+            // Phase 6.2 — per-profile caption styling
+            commands::caption_style::get_caption_style,
+            commands::caption_style::set_caption_style,
             // Phase 5 — AirPlay (parallel AVPlayer route)
             commands::playback::airplay_set_picker_rect,
             commands::playback::airplay_engage,

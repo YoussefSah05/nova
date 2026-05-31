@@ -157,6 +157,30 @@ export interface EpgRefreshProgress {
   error: string | null;
 }
 
+// ── Caption styling (Phase 6.2) ───────────────────────────────────────────────
+
+export type CaptionFontFamily = "sans" | "serif" | "mono" | "dyslexic";
+export type CaptionTextColor = "white" | "yellow" | "cyan";
+export type CaptionBackground = "shadow" | "outline" | "box";
+
+export interface CaptionStyle {
+  /// Multiplier on the base caption font size (e.g. 0.85 / 1.0 / 1.25 / 1.5).
+  fontScale: number;
+  fontFamily: CaptionFontFamily;
+  textColor: CaptionTextColor;
+  background: CaptionBackground;
+  /// Box-background opacity 0..1, used when `background === "box"`.
+  bgOpacity: number;
+}
+
+export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
+  fontScale: 1.0,
+  fontFamily: "sans",
+  textColor: "white",
+  background: "shadow",
+  bgOpacity: 0.6,
+};
+
 // ── IPC errors ────────────────────────────────────────────────────────────────
 
 export type ApiError =

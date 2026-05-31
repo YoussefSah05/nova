@@ -191,6 +191,89 @@ pub struct ImportProgress {
     pub warning: Option<String>,
 }
 
+// ── Transcription (Phase 6) ───────────────────────────────────────────────────
+
+/// One word with its timing, when Whisper emits word/token timestamps.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptWord {
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub word: String,
+}
+
+/// A single caption-sized unit of a transcript. `words` is `None` when the
+/// engine did not provide word-level timing. Persisted as a row in
+/// `transcript_segments` (with `words` flattened to the `words_json` column).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptSegment {
+    /// Segment ordinal within the transcript, starting at 0.
+    pub seq: i64,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub text: String,
+    pub words: Option<Vec<TranscriptWord>>,
+}
+
+/// The output of a transcription run, before it is persisted. Maps onto a
+/// `transcripts` row plus its `transcript_segments`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawTranscript {
+    /// BCP-47 source language (detected or supplied).
+    pub language: String,
+    /// Model identifier, e.g. `large-v3-turbo-q5_0`.
+    pub model: String,
+    pub segments: Vec<TranscriptSegment>,
+    /// Seconds of audio actually processed, if known.
+    pub duration_processed_sec: Option<f64>,
+}
+
+/// Lifecycle state of a transcript for a media item, surfaced to the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TranscriptState {
+    /// No transcript and no job.
+    None,
+    Queued,
+    Running,
+    Done,
+    Failed,
+}
+
+/// Personalizable caption appearance, persisted per profile (Phase 6.2). Pure
+/// presentation — applied by the React `CaptionOverlay`. String enums are kept
+/// as `String` so the frontend can map them to its own class/style tables and
+/// new presets don't require a schema change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionStyle {
+    /// Multiplier on the base caption font size (e.g. 0.85 / 1.0 / 1.25 / 1.5).
+    pub font_scale: f64,
+    /// `sans` | `serif` | `mono` | `dyslexic`.
+    pub font_family: String,
+    /// `white` | `yellow` | `cyan`.
+    pub text_color: String,
+    /// Readability backdrop: `shadow` | `outline` | `box`.
+    pub background: String,
+    /// Box-background opacity in 0..=1, used when `background == "box"`.
+    pub bg_opacity: f64,
+}
+
+impl Default for CaptionStyle {
+    fn default() -> Self {
+        // Matches the player's pre-6.2 look: medium sans, white, drop-shadow.
+        Self {
+            font_scale: 1.0,
+            font_family: "sans".to_string(),
+            text_color: "white".to_string(),
+            background: "shadow".to_string(),
+            bg_opacity: 0.6,
+        }
+    }
+}
+
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 pub fn now_ts() -> i64 {

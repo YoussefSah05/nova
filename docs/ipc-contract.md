@@ -56,7 +56,13 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `record_watch_progress` | `{ profileId, mediaKind, mediaId, positionSec, durationSec?, completed, captionMode? }` | `void` | 5 |
 | `get_resume_position` | `{ profileId, mediaKind, mediaId }` | `ResumeInfo \| null` | 5 |
 | `get_proxy_port` | `{}` | `number` (deprecated - use `resolve_stream`) | 5 |
-| `enqueue_transcription` | `{ media_kind: MediaKind, media_id: number, lang?: string }` | `JobId` | 6 |
+| `get_model_status` | `{}` | `{ installed: boolean, modelId: string }` | 6 |
+| `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
+| `start_caption_session` | `{ profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
+| `set_caption_playhead` | `{ sec: number }` | `void` | 6 |
+| `stop_caption_session` | `{}` | `void` | 6 |
+| `get_caption_style` | `{ profileId }` | `CaptionStyle` (defaults if unsaved) | 6 |
+| `set_caption_style` | `{ profileId, style: CaptionStyle }` | `void` | 6 |
 | `enqueue_translation` | `{ transcript_id: number, target_lang: string, backend: TranslationBackend }` | `JobId` | 7 |
 | `get_transcript` | `{ transcript_id: number }` | `Transcript` | 6 |
 | `search` | `{ query: string, lang_filter?: string }` | `SearchResult[]` | 8 |
@@ -88,8 +94,9 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | Event | Payload | Phase |
 |---|---|---|
 | `playlist:import:progress` | `{ sourceId, stage, parsed, inserted, liveCount, movieCount, seriesCount, failedCount, skippedCount, elapsedMs, done, error?, warning? }` | 2 |
-| `transcription:progress` | `{ job_id: number, pct: number }` | 6 |
-| `transcription:complete` | `{ job_id: number, transcript_id: number }` | 6 |
+| `transcription:cues` | `{ mediaKind, mediaId, language, cues: [{start,end,text}] }` (incremental, absolute times) | 6 |
+| `transcription:status` | `{ mediaKind, mediaId, state: 'preparing'\|'streaming'\|'complete'\|'failed', coveredSec?, error? }` | 6 |
+| `model:download:progress` | `{ artifact: 'weights'\|'coreml', downloadedBytes, totalBytes? }` | 6 |
 | `translation:progress` | `{ job_id: number, pct: number }` | 7 |
 | `translation:complete` | `{ job_id: number, transcript_id: number, target_lang: string }` | 7 |
 | `live:caption` | `{ channel_id: number, cue: VttCue }` | 9 |
@@ -118,6 +125,15 @@ standalone mpv window.
 type PlaybackKind = "hls" | "file";
 type PlaybackRoute = "hls_passthrough" | "file_passthrough" | "remux_hls" | "transcode_hls";
 type CaptionAssetState = "unavailable" | "pending" | "ready";
+
+// Per-profile caption appearance (Phase 6.2). Persisted in the profile DB.
+type CaptionStyle = {
+  fontScale: number; // 0.85 | 1.0 | 1.25 | 1.5
+  fontFamily: "sans" | "serif" | "mono" | "dyslexic";
+  textColor: "white" | "yellow" | "cyan";
+  background: "shadow" | "outline" | "box";
+  bgOpacity: number; // 0..1, used when background === "box"
+};
 type MpvPlayerPhase = "opening" | "buffering" | "playing" | "paused" | "ended" | "error";
 
 type MpvOpenResult = {

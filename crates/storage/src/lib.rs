@@ -11,7 +11,8 @@ pub mod repositories;
 pub use db::{init_app_db, init_profile_db};
 pub use error::StorageError;
 pub use repositories::{
-    ChannelRepository, EpgSource, EpgSourcesRepository, JobRepository, NowAndNext,
-    PlaybackRepository, ProfileRepository, ProgramsRepository, ResolvedStreamUrl, ResumePosition,
-    SeriesRepository, SourceRepository, VodRepository, WatchHistoryRepository, WatchSnapshot,
+    CaptionStyleRepository, ChannelRepository, EpgSource, EpgSourcesRepository, Job, JobRepository,
+    NowAndNext, PlaybackRepository, ProfileRepository, ProgramsRepository, ResolvedStreamUrl,
+    ResumePosition, SeriesRepository, SourceRepository, StoredTranscript, TranscriptRepository,
+    VodRepository, WatchHistoryRepository, WatchSnapshot,
 };

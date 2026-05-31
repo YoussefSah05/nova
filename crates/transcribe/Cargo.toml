@@ -2,7 +2,7 @@
 name = "nova-transcribe"
 version = "0.1.0"
 edition = "2021"
-description = "whisper.cpp FFI + streaming ASR with Core ML backend"
+description = "whisper-cli subprocess driver + model management for on-device ASR"
 
 [dependencies]
 nova-core = { path = "../core" }
@@ -11,3 +11,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+reqwest = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

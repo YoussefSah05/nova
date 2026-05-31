@@ -7,16 +7,19 @@
 //!   arbitrary upstream content into fMP4-HLS in a temp dir. The proxy
 //!   serves the resulting manifest/segments verbatim.
 //!
-//! Future (Phase 6+): audio extraction to 16 kHz mono PCM for Whisper, VOD
-//! thumbnail sprite generation. The binary is bundled at install time via
+//! Phase 6 adds [`audio::extract_audio_16k_mono`] — 16 kHz mono WAV extraction
+//! for Whisper. Future: VOD thumbnail sprite generation. The binary is bundled
+//! at install time via
 //! `scripts/bundle-ffmpeg.sh`; for now we resolve `ffmpeg`/`ffprobe` from
 //! `PATH` (overrideable via `NOVA_FFMPEG_BIN` / `NOVA_FFPROBE_BIN`).
 //!
 //! See `docs/reference/ffmpeg.md` for canonical FFmpeg invocations.
 
+pub mod audio;
 pub mod probe;
 pub mod remux;
 
+pub use audio::{extract_audio_16k_mono, extract_audio_window, AudioError};
 pub use probe::{
     probe_stream, url_looks_like_browser_file, url_looks_like_hls_playlist,
     url_looks_like_transport_stream, PlaybackRoute, ProbeError, StreamProbe, StreamProfile,

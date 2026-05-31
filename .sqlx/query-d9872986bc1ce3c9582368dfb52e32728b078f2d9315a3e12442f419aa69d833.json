@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                 seq        as \"seq!: i64\",\n                 start_sec  as \"start_sec!: f64\",\n                 end_sec    as \"end_sec!: f64\",\n                 text,\n                 words_json as \"words_json?: String\"\n               FROM transcript_segments\n               WHERE transcript_id = ?\n               ORDER BY start_sec ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "seq!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "start_sec!: f64",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "end_sec!: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "text",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "words_json?: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "d9872986bc1ce3c9582368dfb52e32728b078f2d9315a3e12442f419aa69d833"
+}

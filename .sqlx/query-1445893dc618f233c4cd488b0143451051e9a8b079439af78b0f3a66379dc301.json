@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\" FROM transcripts\n               WHERE media_kind = ? AND media_id = ? AND audio_track = ? AND model = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "1445893dc618f233c4cd488b0143451051e9a8b079439af78b0f3a66379dc301"
+}

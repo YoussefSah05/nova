@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO transcript_segments\n                     (transcript_id, seq, start_sec, end_sec, text, words_json)\n                   VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "ea75404ecc7a9e4792717f4f0c4a70faf3c1ae9ff263086af7c1d7e0b42ccdb9"
+}
