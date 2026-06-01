@@ -1,9 +1,9 @@
-import { useDeferredValue, useEffect, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircleIcon,
-  ChevronRightIcon,
   DatabaseIcon,
   ListFilterIcon,
   PlusIcon,
@@ -12,60 +12,49 @@ import {
   SettingsIcon,
   XIcon,
 } from "lucide-react";
-import type { Channel, ImportProgress, Profile, SeriesSummary, Source, VodItem } from "@/types";
+import type { ImportProgress, Profile, SeriesSummary, Source } from "@/types";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SettingsModal } from "@/features/settings/SettingsModal";
 import { SeriesDetail } from "@/features/browse/SeriesDetail";
-import { Shelves } from "@/features/browse/Shelves";
-import { FavoriteButton } from "@/features/browse/FavoriteButton";
-import { WatchlistButton } from "@/features/browse/WatchlistButton";
-import { NowAndNextChip } from "@/features/browse/NowAndNextChip";
-import { useNowAndNext } from "@/features/browse/useNowAndNext";
+import { BrowseRails } from "@/features/browse/BrowseRails";
+import { BrowseGrid } from "@/features/browse/BrowseGrid";
+import { BrowseBoundary } from "@/features/browse/BrowseBoundary";
+import {
+  browseKeys,
+  invalidateMembershipRails,
+  invalidateSource,
+  patchItemEverywhere,
+  prefetchPersonalRails,
+  prefetchSourceOverview,
+  useBrowseCount,
+  useCategories,
+  useCountries,
+  type BrowseFilters,
+  type BrowseItem,
+  type BrowseTab,
+} from "@/features/browse/queries";
 import { PlayerModal, type PlayMedia } from "@/features/player/PlayerModal";
 import { cn } from "@/lib/utils";
 
-type Tab = "live" | "movies" | "series";
-
-const SERIES_PAGE_LIMIT = 10_000;
+type Tab = BrowseTab;
 
 interface HomeProps {
   profile: Profile;
   onSwitchProfile: () => void;
 }
 
-interface ContentCounts {
-  live: number;
-  movies: number;
-  series: number;
-}
-
-interface FilterOptions {
-  channelCountries: string[];
-  channelCategories: string[];
-  vodCategories: string[];
-  seriesCategories: string[];
-}
-
-const PAGE_SIZE = 200;
 const TABS: Tab[] = ["live", "movies", "series"];
-const EMPTY_COUNTS: ContentCounts = { live: 0, movies: 0, series: 0 };
-const EMPTY_FILTER_OPTIONS: FilterOptions = {
-  channelCountries: [],
-  channelCategories: [],
-  vodCategories: [],
-  seriesCategories: [],
-};
 
 export function Home({ profile, onSwitchProfile }: HomeProps) {
+  const qc = useQueryClient();
   const [sources, setSources] = useState<Source[]>([]);
   const [sourceTotals, setSourceTotals] = useState<Record<number, number>>({});
   const [activeSourceId, setActiveSourceId] = useState<number | null>(null);
   const [tab, setTab] = useState<Tab>("live");
-  const [counts, setCounts] = useState<ContentCounts>(EMPTY_COUNTS);
-  const [filterOptions, setFilterOptions] = useState<FilterOptions>(EMPTY_FILTER_OPTIONS);
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [vod, setVod] = useState<VodItem[]>([]);
-  const [series, setSeries] = useState<SeriesSummary[]>([]);
   const [selectedSeries, setSelectedSeries] = useState<SeriesSummary | null>(null);
   const [playingMedia, setPlayingMedia] = useState<PlayMedia | null>(null);
   const [showAddSource, setShowAddSource] = useState(false);
@@ -78,38 +67,42 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
-  const [activeTotal, setActiveTotal] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [sourceError, setSourceError] = useState<string | null>(null);
-  const [contentError, setContentError] = useState<string | null>(null);
-  const [shelvesKey, setShelvesKey] = useState(0);
-  // Bumped to force every data loader to re-run (used by the Refresh button and
-  // after a re-import completes, so the home screen reflects changes).
+  // Reloads the non-query bits (source list + per-source totals) after a refresh.
   const [reloadKey, setReloadKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
-  const activeSource = sources.find((source) => source.id === activeSourceId) ?? null;
-  const visibleCount =
-    tab === "live" ? channels.length : tab === "movies" ? vod.length : series.length;
-  const hasMore = tab !== "series" && visibleCount < activeTotal;
-  const categoryOptions =
-    tab === "live"
-      ? filterOptions.channelCategories
-      : tab === "movies"
-        ? filterOptions.vodCategories
-        : filterOptions.seriesCategories;
+  // Shared scroll container; we remember each tab's scrollTop so switching
+  // sections feels continuous.
+  const scrollRef = useRef<HTMLElement>(null);
+  const scrollByTabRef = useRef<Record<Tab, number>>({ live: 0, movies: 0, series: 0 });
 
+  const activeSource = sources.find((source) => source.id === activeSourceId) ?? null;
+
+  const counts: Record<Tab, number> = {
+    live: useBrowseCount("live", profile.id, activeSourceId).data ?? 0,
+    movies: useBrowseCount("movies", profile.id, activeSourceId).data ?? 0,
+    series: useBrowseCount("series", profile.id, activeSourceId).data ?? 0,
+  };
+
+  const categoryOptions = useCategories(tab, profile.id, activeSourceId).data ?? [];
+  const countryOptions = useCountries(profile.id, activeSourceId).data ?? [];
+
+  const query = filterParam(deferredSearchQuery);
+  const category = filterParam(categoryFilter);
+  const country = tab === "live" ? filterParam(countryFilter) : null;
+  const filters: BrowseFilters = { query, category, country };
+  const searchOrFilterActive = Boolean(query || category || country);
+
+  // ── Sources ────────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
-
     async function loadSources() {
       try {
         setSourceError(null);
         const nextSources = await invoke<Source[]>("list_sources", { profileId: profile.id });
         if (cancelled) return;
-
         setSources(nextSources);
         setActiveSourceId((current) => {
           if (current !== null && nextSources.some((source) => source.id === current)) {
@@ -118,55 +111,35 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           return nextSources[0]?.id ?? null;
         });
       } catch (error: unknown) {
-        if (!cancelled) {
-          setSourceError(errorMessage(error));
-        }
+        if (!cancelled) setSourceError(errorMessage(error));
       }
     }
-
     void loadSources();
     return () => {
       cancelled = true;
     };
-  }, [profile.id]);
+  }, [profile.id, reloadKey]);
 
+  // Per-source totals for the playlist dropdown labels.
   useEffect(() => {
     if (sources.length === 0) {
       setSourceTotals({});
       return;
     }
-
     let cancelled = false;
-
     async function loadSourceTotals() {
       const entries = await Promise.all(
         sources.map(async (source) => {
           const [live, movies, nextSeries] = await Promise.all([
-            invoke<number>("count_channels", {
-              profileId: profile.id,
-              sourceId: source.id,
-              filters: null,
-            }),
-            invoke<number>("count_vod", {
-              profileId: profile.id,
-              sourceId: source.id,
-              filters: null,
-            }),
-            invoke<number>("count_series", {
-              profileId: profile.id,
-              sourceId: source.id,
-              filters: null,
-            }),
+            invoke<number>("count_channels", { profileId: profile.id, sourceId: source.id, filters: null }),
+            invoke<number>("count_vod", { profileId: profile.id, sourceId: source.id, filters: null }),
+            invoke<number>("count_series", { profileId: profile.id, sourceId: source.id, filters: null }),
           ]);
           return [source.id, live + movies + nextSeries] as const;
         })
       );
-
-      if (!cancelled) {
-        setSourceTotals(Object.fromEntries(entries));
-      }
+      if (!cancelled) setSourceTotals(Object.fromEntries(entries));
     }
-
     void loadSourceTotals().catch(() => {
       /* counts are decoration; ignore errors */
     });
@@ -175,216 +148,64 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     };
   }, [profile.id, sources, reloadKey]);
 
+  // Warm the cache for instant tab switches: counts + categories for every tab
+  // up front, then the personal rails (the old Shelves cost) on idle.
   useEffect(() => {
-    if (activeSourceId === null) {
-      setCounts(EMPTY_COUNTS);
-      return;
-    }
+    if (activeSourceId === null) return;
+    prefetchSourceOverview(qc, profile.id, activeSourceId);
+    const cancel = onIdle(() => {
+      for (const t of TABS) prefetchPersonalRails(qc, profile.id, activeSourceId, t);
+    });
+    return cancel;
+  }, [qc, profile.id, activeSourceId, reloadKey]);
 
+  // While a refresh runs, watch import progress; on completion repaint.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
     let cancelled = false;
-
-    async function loadCounts() {
-      try {
-        const [live, movies, nextSeries] = await Promise.all([
-          invoke<number>("count_channels", {
-            profileId: profile.id,
-            sourceId: activeSourceId,
-            filters: null,
-          }),
-          invoke<number>("count_vod", {
-            profileId: profile.id,
-            sourceId: activeSourceId,
-            filters: null,
-          }),
-          invoke<number>("count_series", {
-            profileId: profile.id,
-            sourceId: activeSourceId,
-            filters: null,
-          }),
-        ]);
-
-        if (!cancelled) {
-          setCounts({ live, movies, series: nextSeries });
-        }
-      } catch (error: unknown) {
-        if (!cancelled) {
-          setContentError(errorMessage(error));
-        }
+    void listen<ImportProgress>("playlist:import:progress", (event) => {
+      const p = event.payload;
+      if (p.sourceId !== activeSourceId) return;
+      if (p.error) setSourceError(p.error);
+      if (p.done) {
+        setRefreshing(false);
+        setReloadKey((k) => k + 1);
+        if (activeSourceId !== null) invalidateSource(qc, profile.id, activeSourceId);
       }
-    }
-
-    void loadCounts();
+    }).then((un) => {
+      if (cancelled) un();
+      else unlisten = un;
+    });
     return () => {
       cancelled = true;
+      unlisten?.();
     };
-  }, [profile.id, activeSourceId, reloadKey]);
+  }, [qc, profile.id, activeSourceId]);
 
+  // Restore the saved scroll position when entering a tab.
   useEffect(() => {
-    if (activeSourceId === null) {
-      setFilterOptions(EMPTY_FILTER_OPTIONS);
-      return;
-    }
+    const el = scrollRef.current;
+    if (el) el.scrollTop = scrollByTabRef.current[tab] ?? 0;
+  }, [tab]);
 
-    let cancelled = false;
+  // ── Actions ──────────────────────────────────────────────────────────────────
+  function handleTabChange(nextTab: Tab) {
+    if (nextTab === tab) return;
+    setTab(nextTab);
+    resetBrowseState();
+  }
 
-    async function loadFilterOptions() {
-      try {
-        const [channelCountries, channelCategories, vodCategories, seriesCategories] =
-          await Promise.all([
-            invoke<string[]>("list_channel_countries", {
-              profileId: profile.id,
-              sourceId: activeSourceId,
-            }),
-            invoke<string[]>("list_channel_categories", {
-              profileId: profile.id,
-              sourceId: activeSourceId,
-            }),
-            invoke<string[]>("list_vod_categories", {
-              profileId: profile.id,
-              sourceId: activeSourceId,
-            }),
-            invoke<string[]>("list_series_categories", {
-              profileId: profile.id,
-              sourceId: activeSourceId,
-            }),
-          ]);
+  function handleSourceChange(value: string) {
+    setActiveSourceId(Number(value));
+    resetBrowseState();
+  }
 
-        if (!cancelled) {
-          setFilterOptions({
-            channelCountries,
-            channelCategories,
-            vodCategories,
-            seriesCategories,
-          });
-        }
-      } catch (error: unknown) {
-        if (!cancelled) {
-          setContentError(errorMessage(error));
-        }
-      }
-    }
-
-    void loadFilterOptions();
-    return () => {
-      cancelled = true;
-    };
-  }, [profile.id, activeSourceId, reloadKey]);
-
-  useEffect(() => {
-    if (activeSourceId === null) {
-      clearContent();
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadContent() {
-      setIsLoading(true);
-      setContentError(null);
-
-      try {
-        const query = filterParam(deferredSearchQuery);
-        const category = filterParam(categoryFilter);
-
-        if (tab === "live") {
-          const [nextChannels, total] = await Promise.all([
-            invoke<Channel[]>("list_channels", {
-              profileId: profile.id,
-              sourceId: activeSourceId,
-              limit: PAGE_SIZE,
-              offset: 0,
-              filters: {
-                country: filterParam(countryFilter),
-                category,
-                query,
-              },
-            }),
-            invoke<number>("count_channels", {
-              profileId: profile.id,
-              sourceId: activeSourceId,
-              filters: {
-                country: filterParam(countryFilter),
-                category,
-                query,
-              },
-            }),
-          ]);
-
-          if (!cancelled) {
-            setChannels(nextChannels);
-            setActiveTotal(total);
-          }
-        } else if (tab === "movies") {
-          const [nextVod, total] = await Promise.all([
-            invoke<VodItem[]>("list_vod", {
-              profileId: profile.id,
-              sourceId: activeSourceId,
-              limit: PAGE_SIZE,
-              offset: 0,
-              filters: {
-                category,
-                query,
-              },
-            }),
-            invoke<number>("count_vod", {
-              profileId: profile.id,
-              sourceId: activeSourceId,
-              filters: {
-                category,
-                query,
-              },
-            }),
-          ]);
-
-          if (!cancelled) {
-            setVod(nextVod);
-            setActiveTotal(total);
-          }
-        } else {
-          const [nextSeries, total] = await Promise.all([
-            invoke<SeriesSummary[]>("list_series", {
-              profileId: profile.id,
-              sourceId: activeSourceId,
-              limit: SERIES_PAGE_LIMIT,
-              offset: 0,
-              filters: {
-                category,
-                query,
-              },
-            }),
-            invoke<number>("count_series", {
-              profileId: profile.id,
-              sourceId: activeSourceId,
-              filters: {
-                category,
-                query,
-              },
-            }),
-          ]);
-
-          if (!cancelled) {
-            setSeries(nextSeries);
-            setActiveTotal(total);
-          }
-        }
-      } catch (error: unknown) {
-        if (!cancelled) {
-          clearContentForTab(tab);
-          setActiveTotal(0);
-          setContentError(errorMessage(error));
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
-    }
-
-    void loadContent();
-    return () => {
-      cancelled = true;
-    };
-  }, [profile.id, activeSourceId, tab, deferredSearchQuery, countryFilter, categoryFilter, reloadKey]);
+  function resetBrowseState() {
+    setSearchQuery("");
+    setCountryFilter("");
+    setCategoryFilter("");
+    setSelectedSeries(null);
+  }
 
   async function handleSourceAdded() {
     setShowAddSource(false);
@@ -399,25 +220,11 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     }
   }
 
-  function handleTabChange(nextTab: Tab) {
-    if (nextTab === tab) return;
-    setTab(nextTab);
-    resetBrowseState();
-  }
-
-  function handleSourceChange(value: string) {
-    setActiveSourceId(Number(value));
-    resetBrowseState();
-  }
-
   async function handleRefresh() {
     if (activeSourceId === null || refreshing) return;
     setRefreshing(true);
     setSourceError(null);
-    setContentError(null);
     try {
-      // Re-imports the source from its provider; completion arrives via the
-      // playlist:import:progress listener, which reloads the home screen.
       await invoke("refresh_source", { profileId: profile.id, sourceId: activeSourceId });
     } catch (error: unknown) {
       setRefreshing(false);
@@ -425,249 +232,68 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     }
   }
 
-  // While a refresh runs, watch import progress for the active source. On
-  // completion, repaint the home screen with the refreshed catalog.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listen<ImportProgress>("playlist:import:progress", (event) => {
-      const p = event.payload;
-      if (p.sourceId !== activeSourceId) return;
-      if (p.error) setSourceError(p.error);
-      if (p.done) {
-        setRefreshing(false);
-        setReloadKey((k) => k + 1);
-        setShelvesKey((k) => k + 1);
-      }
-    }).then((un) => {
-      if (cancelled) un();
-      else unlisten = un;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [activeSourceId]);
-
-  async function handleLoadMore() {
-    if (activeSourceId === null || tab === "series" || isLoading || isLoadingMore || !hasMore) {
+  const activate = useCallback((item: BrowseItem) => {
+    if (item.kind === "series" && item.series) {
+      setSelectedSeries(item.series);
       return;
     }
+    setPlayingMedia({
+      kind: item.kind === "live" ? "live" : "vod",
+      id: item.id,
+      title: item.title,
+      subtitle: item.subtitle,
+      posterUrl: item.posterUrl,
+    });
+  }, []);
 
-    setIsLoadingMore(true);
-    setContentError(null);
-
-    try {
-      const query = filterParam(deferredSearchQuery);
-      const category = filterParam(categoryFilter);
-
-      if (tab === "live") {
-        const nextChannels = await invoke<Channel[]>("list_channels", {
-          profileId: profile.id,
-          sourceId: activeSourceId,
-          limit: PAGE_SIZE,
-          offset: channels.length,
-          filters: {
-            country: filterParam(countryFilter),
-            category,
-            query,
-          },
-        });
-        setChannels((current) => [...current, ...nextChannels]);
-      } else {
-        const nextVod = await invoke<VodItem[]>("list_vod", {
-          profileId: profile.id,
-          sourceId: activeSourceId,
-          limit: PAGE_SIZE,
-          offset: vod.length,
-          filters: {
-            category,
-            query,
-          },
-        });
-        setVod((current) => [...current, ...nextVod]);
-      }
-    } catch (error: unknown) {
-      setContentError(errorMessage(error));
-    } finally {
-      setIsLoadingMore(false);
-    }
-  }
-
-  function resetBrowseState() {
-    setSearchQuery("");
-    setCountryFilter("");
-    setCategoryFilter("");
-    setSelectedSeries(null);
-    setContentError(null);
-  }
-
-  async function handleToggleChannelFavorite(channel: Channel, next: boolean) {
-    setChannels((current) =>
-      current.map((c) => (c.id === channel.id ? { ...c, isFavorite: next } : c))
-    );
-    try {
-      await invoke<void>("set_channel_favorite", {
-        profileId: profile.id,
-        channelId: channel.id,
+  const toggleFavorite = useCallback(
+    async (item: BrowseItem, next: boolean) => {
+      if (activeSourceId === null) return;
+      const rollback = patchItemEverywhere(qc, profile.id, activeSourceId, item.key, {
         isFavorite: next,
       });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
-      setChannels((current) =>
-        current.map((c) => (c.id === channel.id ? { ...c, isFavorite: !next } : c))
-      );
-      setContentError(errorMessage(error));
-    }
-  }
-
-  async function handleToggleVodFavorite(item: VodItem, next: boolean) {
-    setVod((current) => current.map((v) => (v.id === item.id ? { ...v, isFavorite: next } : v)));
-    try {
-      await invoke<void>("set_vod_favorite", {
-        profileId: profile.id,
-        vodId: item.id,
-        isFavorite: next,
-      });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
-      setVod((current) => current.map((v) => (v.id === item.id ? { ...v, isFavorite: !next } : v)));
-      setContentError(errorMessage(error));
-    }
-  }
-
-  async function handleToggleSeriesFavorite(item: SeriesSummary, next: boolean) {
-    setSeries((current) =>
-      current.map((s) =>
-        s.seriesTitle === item.seriesTitle && s.sourceId === item.sourceId
-          ? { ...s, isFavorite: next }
-          : s
-      )
-    );
-    if (
-      selectedSeries?.seriesTitle === item.seriesTitle &&
-      selectedSeries.sourceId === item.sourceId
-    ) {
-      setSelectedSeries({ ...selectedSeries, isFavorite: next });
-    }
-    try {
-      await invoke<void>("set_series_favorite", {
-        profileId: profile.id,
-        sourceId: item.sourceId,
-        seriesTitle: item.seriesTitle,
-        isFavorite: next,
-      });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
-      setSeries((current) =>
-        current.map((s) =>
-          s.seriesTitle === item.seriesTitle && s.sourceId === item.sourceId
-            ? { ...s, isFavorite: !next }
-            : s
-        )
-      );
-      if (
-        selectedSeries?.seriesTitle === item.seriesTitle &&
-        selectedSeries.sourceId === item.sourceId
-      ) {
-        setSelectedSeries({ ...selectedSeries, isFavorite: !next });
+      if (item.kind === "series") setSelectedSeries(patchSelected(item, { isFavorite: next }));
+      try {
+        await invokeFavorite(item, profile.id, next);
+        invalidateMembershipRails(qc, profile.id, activeSourceId, tabForKind(item.kind));
+        void qc.invalidateQueries({ queryKey: browseKeys.continueWatching(profile.id) });
+      } catch (error: unknown) {
+        rollback();
+        if (item.kind === "series") setSelectedSeries(patchSelected(item, { isFavorite: !next }));
+        setSourceError(errorMessage(error));
       }
-      setContentError(errorMessage(error));
-    }
-  }
+    },
+    [qc, profile.id, activeSourceId]
+  );
 
-  async function handleToggleChannelWatchlist(channel: Channel, next: boolean) {
-    setChannels((current) =>
-      current.map((c) => (c.id === channel.id ? { ...c, isInWatchlist: next } : c))
-    );
-    try {
-      await invoke<void>("set_channel_in_watchlist", {
-        profileId: profile.id,
-        channelId: channel.id,
-        inWatchlist: next,
+  const toggleWatchlist = useCallback(
+    async (item: BrowseItem, next: boolean) => {
+      if (activeSourceId === null) return;
+      const rollback = patchItemEverywhere(qc, profile.id, activeSourceId, item.key, {
+        isInWatchlist: next,
       });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
-      setChannels((current) =>
-        current.map((c) => (c.id === channel.id ? { ...c, isInWatchlist: !next } : c))
-      );
-      setContentError(errorMessage(error));
-    }
-  }
-
-  async function handleToggleVodWatchlist(item: VodItem, next: boolean) {
-    setVod((current) => current.map((v) => (v.id === item.id ? { ...v, isInWatchlist: next } : v)));
-    try {
-      await invoke<void>("set_vod_in_watchlist", {
-        profileId: profile.id,
-        vodId: item.id,
-        inWatchlist: next,
-      });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
-      setVod((current) =>
-        current.map((v) => (v.id === item.id ? { ...v, isInWatchlist: !next } : v))
-      );
-      setContentError(errorMessage(error));
-    }
-  }
-
-  async function handleToggleSeriesWatchlist(item: SeriesSummary, next: boolean) {
-    setSeries((current) =>
-      current.map((s) =>
-        s.seriesTitle === item.seriesTitle && s.sourceId === item.sourceId
-          ? { ...s, isInWatchlist: next }
-          : s
-      )
-    );
-    if (
-      selectedSeries?.seriesTitle === item.seriesTitle &&
-      selectedSeries.sourceId === item.sourceId
-    ) {
-      setSelectedSeries({ ...selectedSeries, isInWatchlist: next });
-    }
-    try {
-      await invoke<void>("set_series_in_watchlist", {
-        profileId: profile.id,
-        sourceId: item.sourceId,
-        seriesTitle: item.seriesTitle,
-        inWatchlist: next,
-      });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
-      setSeries((current) =>
-        current.map((s) =>
-          s.seriesTitle === item.seriesTitle && s.sourceId === item.sourceId
-            ? { ...s, isInWatchlist: !next }
-            : s
-        )
-      );
-      if (
-        selectedSeries?.seriesTitle === item.seriesTitle &&
-        selectedSeries.sourceId === item.sourceId
-      ) {
-        setSelectedSeries({ ...selectedSeries, isInWatchlist: !next });
+      if (item.kind === "series") setSelectedSeries(patchSelected(item, { isInWatchlist: next }));
+      try {
+        await invokeWatchlist(item, profile.id, next);
+        invalidateMembershipRails(qc, profile.id, activeSourceId, tabForKind(item.kind));
+      } catch (error: unknown) {
+        rollback();
+        if (item.kind === "series") setSelectedSeries(patchSelected(item, { isInWatchlist: !next }));
+        setSourceError(errorMessage(error));
       }
-      setContentError(errorMessage(error));
-    }
-  }
+    },
+    [qc, profile.id, activeSourceId]
+  );
 
-  function clearContent() {
-    setChannels([]);
-    setVod([]);
-    setSeries([]);
-    setActiveTotal(0);
-  }
-
-  function clearContentForTab(nextTab: Tab) {
-    if (nextTab === "live") {
-      setChannels([]);
-    } else if (nextTab === "movies") {
-      setVod([]);
-    } else {
-      setSeries([]);
-    }
-  }
+  // Series-detail toggles operate on the selected SeriesSummary directly.
+  const toggleSeriesFavorite = useCallback(
+    (s: SeriesSummary, next: boolean) => toggleFavorite(seriesItem(s), next),
+    [toggleFavorite]
+  );
+  const toggleSeriesWatchlist = useCallback(
+    (s: SeriesSummary, next: boolean) => toggleWatchlist(seriesItem(s), next),
+    [toggleWatchlist]
+  );
 
   if (selectedSeries) {
     return (
@@ -677,8 +303,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             profileId={profile.id}
             series={selectedSeries}
             onBack={() => setSelectedSeries(null)}
-            onToggleFavorite={(next) => handleToggleSeriesFavorite(selectedSeries, next)}
-            onToggleWatchlist={(next) => handleToggleSeriesWatchlist(selectedSeries, next)}
+            onToggleFavorite={(next) => toggleSeriesFavorite(selectedSeries, next)}
+            onToggleWatchlist={(next) => toggleSeriesWatchlist(selectedSeries, next)}
             onPlayEpisode={(episode) =>
               setPlayingMedia({
                 kind: "episode",
@@ -704,31 +330,34 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-neutral-950">
+    <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header
         data-tauri-drag-region
-        className="flex items-center justify-between border-b border-white/5 py-4 pl-20 pr-6"
+        className="flex items-center justify-between border-b border-border py-4 pl-20 pr-6"
       >
         <div>
-          <span className="text-lg font-semibold text-white">Nova</span>
+          <span className="text-lg font-semibold tracking-tight text-foreground">Nova</span>
           {activeSource && (
-            <p className="mt-0.5 text-xs text-white/35">
+            <p className="mt-0.5 text-xs text-muted-foreground">
               Browsing {formatCount(counts.live + counts.movies + counts.series)} imported items
             </p>
           )}
         </div>
         <div className="flex items-center gap-1">
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={() => setShowSettings(true)}
             aria-label="Settings"
             title="Settings"
-            className="flex h-9 w-9 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+            className="rounded-full text-muted-foreground"
           >
             <SettingsIcon className="h-5 w-5" aria-hidden />
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
             onClick={onSwitchProfile}
-            className="flex items-center gap-2 text-sm text-white/50 transition-colors hover:text-white"
+            className="gap-2 px-2 text-sm text-muted-foreground"
           >
             <div
               className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold text-white"
@@ -737,36 +366,31 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               {profileView.name.slice(0, 2).toUpperCase()}
             </div>
             {profileView.name}
-          </button>
+          </Button>
         </div>
       </header>
 
       {sources.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-          <DatabaseIcon className="h-10 w-10 text-white/20" aria-hidden />
+          <DatabaseIcon className="h-10 w-10 text-muted-foreground" aria-hidden />
           <div>
-            <p className="text-sm font-medium text-white">No playlists yet</p>
-            <p className="mt-1 max-w-sm text-sm text-white/40">
+            <p className="text-sm font-medium text-foreground">No playlists yet</p>
+            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
               Import an M3U or Xtream playlist to browse live channels, movies, and series.
             </p>
           </div>
           {sourceError && <ErrorMessage message={sourceError} />}
-          <button
-            onClick={() => setShowAddSource(true)}
-            className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950"
-          >
-            Add playlist
-          </button>
+          <Button onClick={() => setShowAddSource(true)}>Add playlist</Button>
         </div>
       ) : (
         <main className="flex flex-1 flex-col">
           <section className="flex flex-col gap-3 px-6 pb-3 pt-4 md:flex-row md:items-center md:justify-between">
-            <label className="flex min-w-0 flex-col gap-1 text-xs text-white/35">
+            <label className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
               Playlist
               <select
                 value={activeSourceId ?? ""}
                 onChange={(event) => handleSourceChange(event.target.value)}
-                className="h-10 rounded-xl border border-white/10 bg-neutral-900 px-3 text-sm font-medium text-white outline-none transition-colors hover:border-white/20 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/30"
+                className="h-10 rounded-md border border-input bg-card px-3 text-sm font-medium text-foreground outline-none transition-colors hover:border-border-strong focus:border-primary focus:ring-2 focus:ring-ring/40"
               >
                 {sources.map((source) => {
                   const total = sourceTotals[source.id];
@@ -780,61 +404,38 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               </select>
             </label>
             <div className="flex items-center gap-2">
-              <button
+              <Button
+                variant="outline"
                 onClick={handleRefresh}
                 disabled={activeSourceId === null || refreshing}
                 title="Re-fetch this playlist from the provider"
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-sm font-medium text-white/80 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <RotateCwIcon className={cn("h-4 w-4", refreshing && "animate-spin")} aria-hidden />
                 {refreshing ? "Refreshing…" : "Refresh"}
-              </button>
-              <button
-                onClick={() => setShowAddSource(true)}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-indigo-400/30 bg-indigo-500/10 px-4 text-sm font-semibold text-indigo-200 transition-colors hover:bg-indigo-500/20 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950"
-              >
+              </Button>
+              <Button onClick={() => setShowAddSource(true)}>
                 <PlusIcon className="h-4 w-4" aria-hidden />
                 Add playlist
-              </button>
+              </Button>
             </div>
           </section>
 
-          {activeSourceId !== null && (
-            <Shelves
-              profileId={profile.id}
-              sourceId={activeSourceId}
-              tab={tab}
-              refreshKey={shelvesKey}
-              onSelectSeries={setSelectedSeries}
-              onPlay={setPlayingMedia}
-            />
-          )}
-
           <section className="px-6 pb-3">
-            <div className="flex gap-2 overflow-x-auto rounded-2xl border border-white/5 bg-white/[0.03] p-1">
-              {TABS.map((nextTab) => (
-                <button
-                  key={nextTab}
-                  onClick={() => handleTabChange(nextTab)}
-                  className={cn(
-                    "flex min-w-fit items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium capitalize transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400",
-                    tab === nextTab
-                      ? "bg-white text-black"
-                      : "text-white/50 hover:bg-white/5 hover:text-white"
-                  )}
-                >
-                  {nextTab}
-                  <span
-                    className={cn(
-                      "rounded-full px-2 py-0.5 text-xs",
-                      tab === nextTab ? "bg-black/10 text-black/70" : "bg-white/5 text-white/35"
-                    )}
-                  >
-                    {formatCount(counts[nextTab])}
-                  </span>
-                </button>
-              ))}
-            </div>
+            <Tabs value={tab} onValueChange={(v) => handleTabChange(v as Tab)}>
+              <TabsList>
+                {TABS.map((nextTab) => (
+                  <TabsTrigger key={nextTab} value={nextTab}>
+                    {nextTab}
+                    <Badge
+                      variant={tab === nextTab ? "secondary" : "muted"}
+                      className="ml-0.5 px-1.5 py-0 text-[11px]"
+                    >
+                      {formatCount(counts[nextTab])}
+                    </Badge>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
           </section>
 
           <section className="px-6 pb-3">
@@ -844,145 +445,89 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                 tab === "live" ? "md:grid-cols-[minmax(0,1fr)_220px]" : "md:grid-cols-1"
               )}
             >
-              <label className="relative">
-                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
-                <input
+              <div className="relative">
+                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder={`Search ${tab}`}
-                  className="h-10 w-full rounded-xl border border-white/10 bg-neutral-900 pl-9 pr-3 text-sm text-white outline-none transition-colors placeholder:text-white/25 hover:border-white/20 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/30"
+                  className="pl-9"
                 />
-              </label>
+              </div>
 
               {tab === "live" && (
                 <FilterSelect
                   label="Country"
                   value={countryFilter}
-                  options={filterOptions.channelCountries}
+                  options={countryOptions}
                   onChange={setCountryFilter}
                 />
               )}
             </div>
 
             {categoryOptions.length > 0 && (
-              <GenreChips
-                options={categoryOptions}
-                value={categoryFilter}
-                onChange={setCategoryFilter}
-              />
+              <GenreChips options={categoryOptions} value={categoryFilter} onChange={setCategoryFilter} />
+            )}
+
+            {searchOrFilterActive && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                {searchQuery && (
+                  <FilterChip label="Search" value={searchQuery} onClear={() => setSearchQuery("")} />
+                )}
+                {countryFilter && (
+                  <FilterChip label="Country" value={countryFilter} onClear={() => setCountryFilter("")} />
+                )}
+                {categoryFilter && (
+                  <FilterChip label="Category" value={categoryFilter} onClear={() => setCategoryFilter("")} />
+                )}
+                <Button
+                  variant="link"
+                  size="sm"
+                  onClick={resetBrowseState}
+                  className="h-auto px-1 py-0 text-xs"
+                >
+                  Clear all
+                </Button>
+              </div>
             )}
           </section>
 
-          <section className="flex-1 overflow-y-auto px-6 pb-6">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-white/35">
-              <span>
-                Showing {formatCount(visibleCount)} of {formatCount(activeTotal)} {tab}
-              </span>
-              {(countryFilter || categoryFilter || searchQuery) && (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {searchQuery && (
-                    <FilterChip
-                      label="Search"
-                      value={searchQuery}
-                      onClear={() => setSearchQuery("")}
+          <section
+            ref={scrollRef}
+            onScroll={(event) => {
+              scrollByTabRef.current[tab] = event.currentTarget.scrollTop;
+            }}
+            className="relative flex-1 overflow-y-auto px-6 pb-6"
+          >
+            {sourceError && <ErrorMessage message={sourceError} />}
+            {activeSourceId !== null && (
+              <BrowseBoundary resetKey={`${tab}-${activeSourceId}-${searchOrFilterActive}`}>
+                <div key={`${tab}-${searchOrFilterActive}`} className="nova-fade-in">
+                  {searchOrFilterActive ? (
+                    <BrowseGrid
+                      tab={tab}
+                      profileId={profile.id}
+                      sourceId={activeSourceId}
+                      filters={filters}
+                      scrollRef={scrollRef}
+                      onActivate={activate}
+                      onToggleFavorite={toggleFavorite}
+                      onToggleWatchlist={toggleWatchlist}
+                    />
+                  ) : (
+                    <BrowseRails
+                      tab={tab}
+                      profileId={profile.id}
+                      sourceId={activeSourceId}
+                      onPlay={setPlayingMedia}
+                      onSelectCategory={setCategoryFilter}
+                      onActivate={activate}
+                      onToggleFavorite={toggleFavorite}
+                      onToggleWatchlist={toggleWatchlist}
                     />
                   )}
-                  {countryFilter && (
-                    <FilterChip
-                      label="Country"
-                      value={countryFilter}
-                      onClear={() => setCountryFilter("")}
-                    />
-                  )}
-                  {categoryFilter && (
-                    <FilterChip
-                      label="Category"
-                      value={categoryFilter}
-                      onClear={() => setCategoryFilter("")}
-                    />
-                  )}
-                  <button
-                    onClick={resetBrowseState}
-                    className="rounded-full px-2 py-1 text-indigo-300 transition-colors hover:text-indigo-200 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  >
-                    Clear all
-                  </button>
                 </div>
-              )}
-            </div>
-
-            {contentError && <ErrorMessage message={contentError} />}
-
-            {isLoading ? (
-              <SkeletonRows variant={tab} />
-            ) : (
-              <>
-                {tab === "live" && (
-                  <ChannelList
-                    profileId={profile.id}
-                    channels={channels}
-                    onToggleFavorite={handleToggleChannelFavorite}
-                    onToggleWatchlist={handleToggleChannelWatchlist}
-                    onPlay={(channel) =>
-                      setPlayingMedia({
-                        kind: "live",
-                        id: channel.id,
-                        title: channel.name,
-                        subtitle:
-                          [channel.country, channel.category].filter(Boolean).join(" / ") || null,
-                        posterUrl: channel.logoUrl,
-                      })
-                    }
-                  />
-                )}
-                {tab === "movies" && (
-                  <VodList
-                    items={vod}
-                    onToggleFavorite={handleToggleVodFavorite}
-                    onToggleWatchlist={handleToggleVodWatchlist}
-                    onPlay={(item) =>
-                      setPlayingMedia({
-                        kind: "vod",
-                        id: item.id,
-                        title: item.cleanTitle ?? item.name,
-                        subtitle:
-                          [item.year?.toString(), item.category].filter(Boolean).join(" / ") ||
-                          null,
-                        posterUrl: item.logoUrl,
-                      })
-                    }
-                  />
-                )}
-                {tab === "series" && (
-                  <SeriesList
-                    items={series}
-                    onSelect={(item) => setSelectedSeries(item)}
-                    onToggleFavorite={handleToggleSeriesFavorite}
-                    onToggleWatchlist={handleToggleSeriesWatchlist}
-                  />
-                )}
-
-                {!contentError && visibleCount === 0 && (
-                  <EmptyContent
-                    tab={tab}
-                    hasFilters={Boolean(countryFilter || categoryFilter || searchQuery)}
-                  />
-                )}
-
-                {hasMore && (
-                  <div className="flex justify-center pt-5">
-                    <button
-                      onClick={handleLoadMore}
-                      disabled={isLoadingMore}
-                      className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-2 text-sm font-semibold text-white/75 transition-colors hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950"
-                    >
-                      {isLoadingMore
-                        ? "Loading more..."
-                        : `Load ${Math.min(PAGE_SIZE, activeTotal - visibleCount)} more`}
-                    </button>
-                  </div>
-                )}
-              </>
+              </BrowseBoundary>
             )}
           </section>
         </main>
@@ -1019,170 +564,75 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   );
 }
 
-function ChannelList({
-  profileId,
-  channels,
-  onToggleFavorite,
-  onToggleWatchlist,
-  onPlay,
-}: {
-  profileId: string;
-  channels: Channel[];
-  onToggleFavorite: (channel: Channel, next: boolean) => Promise<void> | void;
-  onToggleWatchlist: (channel: Channel, next: boolean) => Promise<void> | void;
-  onPlay: (channel: Channel) => void;
-}) {
-  const nowMap = useNowAndNext(profileId, channels);
-  if (channels.length === 0) return null;
+// ── Toggle plumbing ─────────────────────────────────────────────────────────
 
-  return (
-    <div className="flex flex-col divide-y divide-white/5 rounded-2xl border border-white/5 bg-white/[0.02]">
-      {channels.map((channel) => (
-        <div key={channel.id} className="flex items-center gap-3 px-3 py-2.5">
-          <button
-            onClick={() => onPlay(channel)}
-            className="flex min-w-0 flex-1 items-center gap-3 text-left transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 rounded-lg"
-            aria-label={`Play ${channel.name}`}
-          >
-            <MediaThumb src={channel.logoUrl} className="h-9 w-9 rounded-lg object-contain" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-white">{channel.name}</p>
-              <p className="truncate text-xs text-white/30">
-                {[channel.country, channel.category].filter(Boolean).join(" / ") || "Live channel"}
-              </p>
-              {channel.tvgId && <NowAndNextChip data={nowMap[channel.tvgId]} />}
-            </div>
-          </button>
-          <WatchlistButton
-            inWatchlist={channel.isInWatchlist}
-            onToggle={(next) => onToggleWatchlist(channel, next)}
-            label={channel.name}
-            size="sm"
-          />
-          <FavoriteButton
-            isFavorite={channel.isFavorite}
-            onToggle={(next) => onToggleFavorite(channel, next)}
-            label={channel.name}
-            size="sm"
-          />
-        </div>
-      ))}
-    </div>
-  );
+function invokeFavorite(item: BrowseItem, profileId: string, next: boolean): Promise<void> {
+  if (item.kind === "live")
+    return invoke("set_channel_favorite", { profileId, channelId: item.id, isFavorite: next });
+  if (item.kind === "vod")
+    return invoke("set_vod_favorite", { profileId, vodId: item.id, isFavorite: next });
+  return invoke("set_series_favorite", {
+    profileId,
+    sourceId: item.series!.sourceId,
+    seriesTitle: item.series!.seriesTitle,
+    isFavorite: next,
+  });
 }
 
-function VodList({
-  items,
-  onToggleFavorite,
-  onToggleWatchlist,
-  onPlay,
-}: {
-  items: VodItem[];
-  onToggleFavorite: (item: VodItem, next: boolean) => Promise<void> | void;
-  onToggleWatchlist: (item: VodItem, next: boolean) => Promise<void> | void;
-  onPlay: (item: VodItem) => void;
-}) {
-  if (items.length === 0) return null;
-
-  return (
-    <div className="flex flex-col divide-y divide-white/5 rounded-2xl border border-white/5 bg-white/[0.02]">
-      {items.map((item) => (
-        <div key={item.id} className="flex items-center gap-3 px-3 py-2.5">
-          <button
-            onClick={() => onPlay(item)}
-            className="flex min-w-0 flex-1 items-center gap-3 text-left transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 rounded-lg"
-            aria-label={`Play ${item.cleanTitle ?? item.name}`}
-          >
-            <MediaThumb src={item.logoUrl} className="h-14 w-10 rounded-lg object-cover" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-white">{item.cleanTitle ?? item.name}</p>
-              <p className="truncate text-xs text-white/30">
-                {[item.year?.toString(), item.category].filter(Boolean).join(" / ") || "Movie"}
-              </p>
-            </div>
-          </button>
-          <WatchlistButton
-            inWatchlist={item.isInWatchlist}
-            onToggle={(next) => onToggleWatchlist(item, next)}
-            label={item.cleanTitle ?? item.name}
-            size="sm"
-          />
-          <FavoriteButton
-            isFavorite={item.isFavorite}
-            onToggle={(next) => onToggleFavorite(item, next)}
-            label={item.cleanTitle ?? item.name}
-            size="sm"
-          />
-        </div>
-      ))}
-    </div>
-  );
+function invokeWatchlist(item: BrowseItem, profileId: string, next: boolean): Promise<void> {
+  if (item.kind === "live")
+    return invoke("set_channel_in_watchlist", { profileId, channelId: item.id, inWatchlist: next });
+  if (item.kind === "vod")
+    return invoke("set_vod_in_watchlist", { profileId, vodId: item.id, inWatchlist: next });
+  return invoke("set_series_in_watchlist", {
+    profileId,
+    sourceId: item.series!.sourceId,
+    seriesTitle: item.series!.seriesTitle,
+    inWatchlist: next,
+  });
 }
 
-function SeriesList({
-  items,
-  onSelect,
-  onToggleFavorite,
-  onToggleWatchlist,
-}: {
-  items: SeriesSummary[];
-  onSelect: (item: SeriesSummary) => void;
-  onToggleFavorite: (item: SeriesSummary, next: boolean) => Promise<void> | void;
-  onToggleWatchlist: (item: SeriesSummary, next: boolean) => Promise<void> | void;
-}) {
-  if (items.length === 0) return null;
-
-  return (
-    <div className="flex flex-col divide-y divide-white/5 rounded-2xl border border-white/5 bg-white/[0.02]">
-      {items.map((item) => (
-        <div
-          key={`${item.sourceId}-${item.seriesTitle}`}
-          className="flex w-full items-center gap-3 px-3 py-2.5 transition-colors hover:bg-white/5 focus-within:bg-white/[0.04]"
-        >
-          <button
-            type="button"
-            onClick={() => onSelect(item)}
-            className="flex min-w-0 flex-1 items-center gap-3 text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-400"
-          >
-            <MediaThumb src={item.posterUrl} className="h-14 w-10 rounded-lg object-cover" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-white">{item.seriesTitle}</p>
-              <p className="truncate text-xs text-white/30">{item.category || "Series"}</p>
-            </div>
-            <ChevronRightIcon className="h-4 w-4 flex-shrink-0 text-white/20" aria-hidden />
-          </button>
-          <WatchlistButton
-            inWatchlist={item.isInWatchlist}
-            onToggle={(next) => onToggleWatchlist(item, next)}
-            label={item.seriesTitle}
-            size="sm"
-          />
-          <FavoriteButton
-            isFavorite={item.isFavorite}
-            onToggle={(next) => onToggleFavorite(item, next)}
-            label={item.seriesTitle}
-            size="sm"
-          />
-        </div>
-      ))}
-    </div>
-  );
+function tabForKind(kind: BrowseItem["kind"]): BrowseTab {
+  return kind === "live" ? "live" : kind === "vod" ? "movies" : "series";
 }
 
-function MediaThumb({ src, className }: { src: string | null; className: string }) {
-  if (!src) {
-    return <div className={cn("flex-shrink-0 bg-neutral-800", className)} />;
+function seriesItem(s: SeriesSummary): BrowseItem {
+  return {
+    key: `series-${s.sourceId}-${s.seriesTitle}`,
+    kind: "series",
+    id: s.sourceId,
+    title: s.seriesTitle,
+    subtitle: s.category,
+    posterUrl: s.posterUrl,
+    tvgId: null,
+    isFavorite: s.isFavorite,
+    isInWatchlist: s.isInWatchlist,
+    series: s,
+  };
+}
+
+function patchSelected(
+  item: BrowseItem,
+  patch: Partial<Pick<SeriesSummary, "isFavorite" | "isInWatchlist">>
+): (cur: SeriesSummary | null) => SeriesSummary | null {
+  return (cur) =>
+    cur && item.series && cur.seriesTitle === item.series.seriesTitle && cur.sourceId === item.series.sourceId
+      ? { ...cur, ...patch }
+      : cur;
+}
+
+// ── Idle scheduling (WebKit has no requestIdleCallback) ───────────────────────
+
+function onIdle(cb: () => void): () => void {
+  if (typeof requestIdleCallback === "function") {
+    const id = requestIdleCallback(cb);
+    return () => cancelIdleCallback(id);
   }
-
-  return (
-    <img
-      src={src}
-      alt=""
-      loading="lazy"
-      className={cn("flex-shrink-0 bg-neutral-800", className)}
-    />
-  );
+  const id = setTimeout(cb, 200);
+  return () => clearTimeout(id);
 }
+
+// ── Filter chrome (presentational) ────────────────────────────────────────────
 
 function FilterSelect({
   label,
@@ -1197,11 +647,11 @@ function FilterSelect({
 }) {
   return (
     <label className="relative">
-      <ListFilterIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
+      <ListFilterIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-xl border border-white/10 bg-neutral-900 pl-9 pr-3 text-sm text-white outline-none transition-colors hover:border-white/20 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/30"
+        className="h-10 w-full rounded-md border border-input bg-card pl-9 pr-3 text-sm text-foreground outline-none transition-colors hover:border-border-strong focus:border-primary focus:ring-2 focus:ring-ring/40"
       >
         <option value="">All {label.toLowerCase()}s</option>
         {options.map((option) => (
@@ -1214,10 +664,8 @@ function FilterSelect({
   );
 }
 
-// Horizontal, scrollable genre chip-bar. Categories are canonical genres after
-// import normalization (nova_core::normalize_category), so each option is a
-// one-tap filter. Tapping the active chip (or "All") clears the filter.
-function GenreChips({
+// Horizontal, scrollable genre chip-bar; tapping a chip filters and opens the grid.
+const GenreChips = memo(function GenreChips({
   options,
   value,
   onChange,
@@ -1228,10 +676,10 @@ function GenreChips({
 }) {
   const chip = (active: boolean) =>
     cn(
-      "shrink-0 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400/40",
+      "shrink-0 rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
       active
-        ? "bg-indigo-500 text-white"
-        : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+        ? "border-transparent bg-primary text-primary-foreground"
+        : "border-border bg-secondary text-secondary-foreground hover:bg-accent hover:text-accent-foreground"
     );
   return (
     <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -1253,43 +701,7 @@ function GenreChips({
       })}
     </div>
   );
-}
-
-function SkeletonRows({ variant }: { variant: Tab }) {
-  const thumbClass = variant === "live" ? "h-9 w-9" : "h-14 w-10";
-
-  return (
-    <div className="flex flex-col divide-y divide-white/5 rounded-2xl border border-white/5 bg-white/[0.02]">
-      {Array.from({ length: 8 }, (_, index) => (
-        <div key={index} className="flex items-center gap-3 px-3 py-2.5">
-          <div className={cn("animate-pulse rounded-lg bg-white/10", thumbClass)} />
-          <div className="min-w-0 flex-1">
-            <div className="h-3 w-2/5 animate-pulse rounded bg-white/10" />
-            <div className="mt-2 h-2 w-1/4 animate-pulse rounded bg-white/5" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function EmptyContent({ tab, hasFilters }: { tab: Tab; hasFilters: boolean }) {
-  const label = tab === "live" ? "channels" : tab;
-
-  return (
-    <div className="flex flex-col items-center justify-center rounded-2xl border border-white/5 bg-white/[0.02] px-6 py-14 text-center">
-      <DatabaseIcon className="h-9 w-9 text-white/20" aria-hidden />
-      <p className="mt-3 text-sm font-medium text-white">
-        {hasFilters ? `No ${label} match this view` : `No ${label} imported`}
-      </p>
-      <p className="mt-1 max-w-sm text-sm text-white/35">
-        {hasFilters
-          ? "Clear filters or try a broader search."
-          : "Import another playlist or check the selected source."}
-      </p>
-    </div>
-  );
-}
+});
 
 function FilterChip({
   label,
@@ -1301,24 +713,24 @@ function FilterChip({
   onClear: () => void;
 }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.06] py-1 pl-2.5 pr-1 text-xs text-white/80">
-      <span className="text-white/45">{label}:</span>
-      <span className="max-w-[10rem] truncate font-medium">{value}</span>
+    <Badge variant="outline" className="gap-1 py-1 pl-2.5 pr-1 font-normal">
+      <span className="text-muted-foreground">{label}:</span>
+      <span className="max-w-[10rem] truncate font-medium text-foreground">{value}</span>
       <button
         type="button"
         onClick={onClear}
         aria-label={`Clear ${label} filter`}
-        className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full text-white/45 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+        className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <XIcon className="h-3 w-3" aria-hidden />
       </button>
-    </span>
+    </Badge>
   );
 }
 
 function ErrorMessage({ message }: { message: string }) {
   return (
-    <div className="mb-3 flex items-start gap-2 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+    <div className="mb-3 flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive-foreground">
       <AlertCircleIcon className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden />
       <span>{message}</span>
     </div>
@@ -1335,16 +747,10 @@ function formatCount(value: number): string {
 }
 
 function errorMessage(error: unknown): string {
-  if (typeof error === "string") {
-    return error;
-  }
-
+  if (typeof error === "string") return error;
   if (typeof error === "object" && error !== null) {
     const maybeMessage = "message" in error ? error.message : null;
-    if (typeof maybeMessage === "string") {
-      return maybeMessage;
-    }
+    if (typeof maybeMessage === "string") return maybeMessage;
   }
-
   return "Something went wrong while loading imported content.";
 }

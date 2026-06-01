@@ -1,21 +1,77 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Channel, Profile, SeriesSummary, Source, VodItem } from "@/types";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Channel, Profile, Source } from "@/types";
 import { Home } from "./Home";
+
+// The browse grid is windowed (@tanstack/react-virtual), rails lazy-mount via
+// IntersectionObserver, and the grid sizes columns via ResizeObserver — none of
+// which jsdom provides. Stub them so content actually renders: IO reports
+// "intersecting" immediately (rails fetch), RO is a no-op, and virtual-core's
+// offsetHeight/offsetWidth measurements return a viewport + row height.
+const ROW_HEIGHT = 64;
+const VIEWPORT_HEIGHT = 800;
+const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+
+beforeAll(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  );
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(private cb: IntersectionObserverCallback) {}
+      observe(el: Element) {
+        this.cb(
+          [{ isIntersecting: true, target: el } as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver
+        );
+      }
+      unobserve() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    }
+  );
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+    configurable: true,
+    get() {
+      return 600;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.dataset?.index !== undefined ? ROW_HEIGHT : VIEWPORT_HEIGHT;
+    },
+  });
+});
+
+afterAll(() => {
+  if (originalOffsetHeight) {
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", originalOffsetHeight);
+  }
+  if (originalOffsetWidth) {
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", originalOffsetWidth);
+  }
+  vi.unstubAllGlobals();
+});
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   listen: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: mocks.invoke,
-}));
-
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: mocks.listen,
-}));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
 
 type InvokeArgs = Record<string, unknown> | undefined;
 
@@ -28,14 +84,7 @@ const profile: Profile = {
 };
 
 const sources: Source[] = [
-  {
-    id: 1,
-    kind: "m3u",
-    name: "Primary",
-    url: "http://example.com/one.m3u",
-    lastRefreshedAt: 1,
-    autoRefreshHours: 24,
-  },
+  { id: 1, kind: "m3u", name: "Primary", url: "http://example.com/one.m3u", lastRefreshedAt: 1, autoRefreshHours: 24 },
 ];
 
 function channel(id: number): Channel {
@@ -47,7 +96,7 @@ function channel(id: number): Channel {
     country: "US",
     category: "News",
     rawGroup: "US News",
-    logoUrl: null,
+    logoUrl: `http://example.com/${id}.png`,
     streamUrl: `http://example.com/${id}.m3u8`,
     isFavorite: false,
     isInWatchlist: false,
@@ -56,13 +105,13 @@ function channel(id: number): Channel {
   };
 }
 
-function setupInvoke(totalChannels: number, firstPage: Channel[], nextPage: Channel[] = []) {
+function setupInvoke(channelsFor: (args: InvokeArgs) => Channel[]) {
   mocks.invoke.mockImplementation((command: string, args?: InvokeArgs): Promise<unknown> => {
     switch (command) {
       case "list_sources":
         return Promise.resolve(sources);
       case "count_channels":
-        return Promise.resolve(totalChannels);
+        return Promise.resolve(250);
       case "count_vod":
         return Promise.resolve(12);
       case "count_series":
@@ -75,14 +124,12 @@ function setupInvoke(totalChannels: number, firstPage: Channel[], nextPage: Chan
         return Promise.resolve(["Movies"]);
       case "list_series_categories":
         return Promise.resolve(["Series"]);
-      case "list_channels":
-        if (isShelfRequest(args)) return Promise.resolve([] satisfies Channel[]);
-        return Promise.resolve(numberArg(args, "offset") === 0 ? firstPage : nextPage);
-      case "list_vod":
-        return Promise.resolve([] satisfies VodItem[]);
-      case "list_series":
-        return Promise.resolve([] satisfies SeriesSummary[]);
       case "list_continue_watching":
+        return Promise.resolve([]);
+      case "list_channels":
+        return Promise.resolve(channelsFor(args));
+      case "list_vod":
+      case "list_series":
         return Promise.resolve([]);
       default:
         throw new Error(`Unexpected command: ${command}`);
@@ -90,57 +137,50 @@ function setupInvoke(totalChannels: number, firstPage: Channel[], nextPage: Chan
   });
 }
 
-function numberArg(args: InvokeArgs, key: string): number {
-  const value = args?.[key];
-  if (typeof value !== "number") {
-    throw new Error(`Expected numeric arg: ${key}`);
-  }
-  return value;
-}
-
-function isShelfRequest(args: InvokeArgs): boolean {
-  const filters = args?.filters as Record<string, unknown> | undefined;
-  if (!filters) return false;
-  return (
-    filters.sort === "recentlyAdded" ||
-    filters.favoritesOnly === true ||
-    filters.watchlistOnly === true
+function renderHome() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <Home profile={profile} onSwitchProfile={vi.fn()} />
+    </QueryClientProvider>
   );
 }
 
 describe("Home", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Refresh progress listener — resolve to a no-op unlisten fn.
     mocks.listen.mockResolvedValue(() => {});
   });
 
-  it("shows imported counts and the first page for the selected source", async () => {
-    setupInvoke(250, [channel(1), channel(2)]);
+  it("shows per-tab counts for the selected source", async () => {
+    setupInvoke(() => [channel(1)]);
 
-    render(<Home profile={profile} onSwitchProfile={vi.fn()} />);
+    renderHome();
 
-    expect(await screen.findByText("Channel 1")).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: /live\s+250/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /movies\s+12/i })).toBeInTheDocument();
     expect(screen.getByLabelText("Playlist")).toHaveValue("1");
-    expect(screen.getByRole("button", { name: /live\s+250/i })).toBeInTheDocument();
-    expect(screen.getByText("Showing 2 of 250 live")).toBeInTheDocument();
   });
 
-  it("loads the next live page with the current item count as the offset", async () => {
-    const firstPage = Array.from({ length: 200 }, (_, index) => channel(index + 1));
-    const nextPage = [channel(201)];
-    setupInvoke(201, firstPage, nextPage);
+  it("switches to the search grid and queries with the typed text", async () => {
+    setupInvoke((args) => {
+      const filters = args?.filters as Record<string, unknown> | undefined;
+      // Only the grid query carries a `query`; rails pass sort/favorites/etc.
+      return filters?.query ? [channel(1)] : [];
+    });
 
-    render(<Home profile={profile} onSwitchProfile={vi.fn()} />);
+    renderHome();
+    await screen.findByRole("tab", { name: /live\s+250/i });
 
-    await screen.findByText("Channel 200");
-    await userEvent.click(screen.getByRole("button", { name: /load 1 more/i }));
+    // Type a term distinct from the result title so the active-filter chip
+    // (which echoes the query) doesn't collide with the card's title text.
+    await userEvent.type(screen.getByPlaceholderText("Search live"), "news");
 
-    expect(await screen.findByText("Channel 201")).toBeInTheDocument();
+    expect(await screen.findByText("Channel 1")).toBeInTheDocument();
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith(
         "list_channels",
-        expect.objectContaining({ offset: 200 })
+        expect.objectContaining({ filters: expect.objectContaining({ query: "news" }) })
       )
     );
   });

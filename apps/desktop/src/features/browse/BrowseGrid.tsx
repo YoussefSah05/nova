@@ -1,0 +1,129 @@
+//! Search / filter / see-all surface: a responsive poster grid backed by an
+//! infinite query and windowed by row. Column count is derived from the live
+//! container width; items are chunked into rows and only on-screen rows mount,
+//! so the grid stays smooth across tens of thousands of results.
+
+import { useEffect, useMemo, useState, type RefObject } from "react";
+import { RotateCwIcon, SearchXIcon } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { VirtualRows } from "./VirtualRows";
+import { PosterCard, type PosterCardHandlers } from "./PosterCard";
+import { useBrowseCount, useBrowseGrid, type BrowseFilters, type BrowseItem, type BrowseTab } from "./queries";
+
+interface BrowseGridProps extends PosterCardHandlers {
+  tab: BrowseTab;
+  profileId: string;
+  sourceId: number;
+  filters: BrowseFilters;
+  scrollRef: RefObject<HTMLElement | null>;
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  if (size <= 1) return items.map((it) => [it]);
+  const rows: T[][] = [];
+  for (let i = 0; i < items.length; i += size) rows.push(items.slice(i, i + size));
+  return rows;
+}
+
+/// Live container width (drives responsive column count) via ResizeObserver.
+function useElementWidth(ref: RefObject<HTMLElement | null>): number {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    const observer = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w) setWidth(w);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+  return width;
+}
+
+export function BrowseGrid({
+  tab,
+  profileId,
+  sourceId,
+  filters,
+  scrollRef,
+  ...handlers
+}: BrowseGridProps) {
+  const { data, isLoading, isError, refetch, hasNextPage, isFetchingNextPage, fetchNextPage } =
+    useBrowseGrid(tab, profileId, sourceId, filters);
+  const { data: total } = useBrowseCount(tab, profileId, sourceId, filters);
+
+  const items = useMemo<BrowseItem[]>(() => data?.pages.flat() ?? [], [data]);
+  const live = tab === "live";
+  const width = useElementWidth(scrollRef);
+  const cardMin = live ? 200 : 168;
+  const columns = Math.max(1, Math.floor((width - 48) / cardMin));
+  const rows = useMemo(() => chunk(items, columns), [items, columns]);
+
+  if (isError) {
+    return (
+      <Card className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+        <SearchXIcon className="h-8 w-8 text-muted-foreground" aria-hidden />
+        <p className="text-sm font-medium text-foreground">Search failed</p>
+        <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2">
+          <RotateCwIcon className="h-4 w-4" aria-hidden /> Retry
+        </Button>
+      </Card>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+        {Array.from({ length: columns * 4 }, (_, i) => (
+          <Skeleton key={i} className={live ? "aspect-video" : "aspect-[2/3]"} />
+        ))}
+      </div>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <Card className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+        <SearchXIcon className="h-8 w-8 text-muted-foreground" aria-hidden />
+        <p className="text-sm font-medium text-foreground">Nothing matches this view</p>
+        <p className="max-w-sm text-sm text-muted-foreground">Clear filters or try a broader search.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {total !== undefined && (
+        <p className="text-xs text-muted-foreground">
+          Showing {items.length.toLocaleString()} of {total.toLocaleString()} {tab}
+        </p>
+      )}
+      <VirtualRows
+        items={rows}
+        scrollRef={scrollRef}
+        estimateSize={live ? 150 : 280}
+        overscan={3}
+        className="rounded-none border-0 bg-transparent"
+        keyFor={(_, index) => index}
+        onEndReached={() => {
+          if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+        }}
+        renderRow={(row) => (
+          <div
+            className="grid gap-3 pb-3"
+            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+          >
+            {row.map((item) => (
+              <PosterCard key={item.key} item={item} {...handlers} />
+            ))}
+          </div>
+        )}
+      />
+    </div>
+  );
+}

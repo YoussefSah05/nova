@@ -29,5 +29,13 @@ export default tseslint.config(
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
     },
+  },
+  {
+    // shadcn/ui primitives export their cva variant fns alongside the component
+    // by convention; that's intentional, not a fast-refresh hazard.
+    files: ["src/components/ui/**/*.{ts,tsx}"],
+    rules: {
+      "react-refresh/only-export-components": "off",
+    },
   }
 );
