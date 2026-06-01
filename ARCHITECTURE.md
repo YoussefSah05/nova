@@ -525,27 +525,37 @@ NOVA_PROBE_URL='<playlist url>' cargo run -p nova-xtream --example probe
 ```
 
 ### Imported content browse flow
-1. Home loads all sources for the active profile and keeps an explicit selected source.
-2. Counts are fetched with `count_channels`, `count_vod`, and `count_series` so tabs reflect the full import.
-3. Filter options come from persisted country/category values per source. Country and category
-   filtering are both index-backed (`idx_channels_source_country`, `idx_channels_category`) so the
-   chip-bar stays fast on large playlists.
-4. Live, Movie **and** Series rows load in 200-item pages using `limit` and `offset`; the windowed
-   list prefetches the next page when the tail row nears the viewport (the `Load more` button remains
-   as a manual/a11y fallback). No tab ever loads its whole catalog up front.
-5. All three lists are **windowed** (`@tanstack/react-virtual`, see `features/browse/VirtualRows.tsx`):
-   only the visible rows (plus a small overscan) are mounted, so scrolling stays smooth even at tens
-   of thousands of rows. The list shares the browse `<section>` scroll container and feeds the
-   virtualizer a `scrollMargin` for the filter chrome above it. Rows are memoized (`ChannelRow` /
-   `VodRow` / `SeriesRow`) and fed stable `useCallback` handlers so the 60s EPG tick and
-   favourite/watchlist toggles don't re-render the whole window.
-6. Switching tabs is **stateful, not a refetch**: each tab's array, filtered total, and scroll
-   position are keyed by a `source|tab|query|country|category|reloadKey` signature. Returning to a
-   tab whose signature still matches restores instantly (no skeleton flash, scroll preserved); a
-   refresh/import bumps `reloadKey` and invalidates every tab. Section swaps get a cheap opacity
-   crossfade (`.nova-fade-in`).
-7. Series rows are grouped summaries by title; selecting a series loads its episodes.
-8. Browse errors must surface in the UI and must not leave loading states active indefinitely.
+
+The browse surface is a **Netflix-style rails + grid** view on a **TanStack Query** data layer. All
+catalog reads go through `features/browse/queries.ts` (typed query-key factory + `invoke` fetchers),
+so every read is cached, deduped, and prefetchable; the app root provides the `QueryClient`
+(`lib/queryClient.ts`, `staleTime` 5 min, no refetch-on-focus). All content normalizes to one
+`BrowseItem` so cards/rails/grid stay tab-agnostic.
+
+1. Home loads sources for the active profile and keeps an explicit selected source. Tab badge counts
+   come from cached `count_*` queries; the country/genre filter options from cached
+   `list_channel_countries` / `list_*_categories`. Country and category filtering are both
+   index-backed (`idx_channels_source_country`, `idx_channels_category`).
+2. **Browse mode** (no search/filter) → `BrowseRails`: a vertical stack of horizontal rails —
+   Continue Watching (profile-wide), Your Watchlist, Your Favourites, Recently Added, then one rail
+   per genre (capped on the landing surface; the chip-bar / "See all" opens the grid for the rest).
+   Each `Rail` **lazy-mounts via IntersectionObserver** and only then fires its LIMIT-20 query, so a
+   tab with dozens of genres stays cheap. This replaces the old `Shelves` component, whose per-tab
+   refetch was the tab-switch lag.
+3. **Search / filter / see-all** (query typed or a country/category chip active) → `BrowseGrid`: a
+   responsive poster grid backed by `useInfiniteQuery` (200/page, auto-loads the next page near the
+   end). Column count is derived from container width (ResizeObserver); items are chunked into rows
+   and rows are **windowed** with `@tanstack/react-virtual` (`features/browse/VirtualRows.tsx`), so
+   only on-screen rows mount. `keepPreviousData` means filter changes don't flash skeletons.
+4. **Tab switches are cache reads, not refetches.** On source select, `prefetchSourceOverview` warms
+   counts + categories for all three tabs + Continue Watching; on idle, `prefetchPersonalRails` warms
+   each tab's personal rails. Combined with the 5-min `staleTime`, switching tabs is instant. Per-tab
+   `scrollTop` is remembered for continuity; section swaps get a `.nova-fade-in` crossfade.
+5. Favourite / watchlist toggles optimistically patch the item across every cached rail + grid page
+   (`patchItemEverywhere`, with rollback on error), then invalidate only the membership rails.
+   Refresh / re-import invalidates the whole source subtree.
+6. Series cards open the detail view (episodes); live/movie cards open the player.
+7. Browse errors surface in the UI and must not leave loading states active indefinitely.
 
 ### Live playback flow
 1. User clicks a channel. Frontend calls `play_channel(channel_id, caption_mode)`.
