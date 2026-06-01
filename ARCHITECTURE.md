@@ -526,7 +526,10 @@ NOVA_PROBE_URL='<playlist url>' cargo run -p nova-xtream --example probe
 
 ### Imported content browse flow
 
-The browse surface is a **Netflix-style rails + grid** view on a **TanStack Query** data layer. All
+The browse surface is a **Netflix-style hero + rails + grid** view on a **TanStack Query** data layer,
+built with **shadcn/ui** primitives (`src/components/ui/*`: button, card, badge, input, tabs,
+skeleton — Radix + cva) themed dark via shadcn CSS tokens added to `globals.css` `@theme`
+(`--color-background/-foreground/-card/-primary/-muted/-border/-ring/...`, indigo `--primary`). All
 catalog reads go through `features/browse/queries.ts` (typed query-key factory + `invoke` fetchers),
 so every read is cached, deduped, and prefetchable; the app root provides the `QueryClient`
 (`lib/queryClient.ts`, `staleTime` 5 min, no refetch-on-focus). All content normalizes to one
@@ -536,12 +539,15 @@ so every read is cached, deduped, and prefetchable; the app root provides the `Q
    come from cached `count_*` queries; the country/genre filter options from cached
    `list_channel_countries` / `list_*_categories`. Country and category filtering are both
    index-backed (`idx_channels_source_country`, `idx_channels_category`).
-2. **Browse mode** (no search/filter) → `BrowseRails`: a vertical stack of horizontal rails —
-   Continue Watching (profile-wide), Your Watchlist, Your Favourites, Recently Added, then one rail
-   per genre (capped on the landing surface; the chip-bar / "See all" opens the grid for the rest).
-   Each `Rail` **lazy-mounts via IntersectionObserver** and only then fires its LIMIT-20 query, so a
-   tab with dozens of genres stays cheap. This replaces the old `Shelves` component, whose per-tab
-   refetch was the tab-switch lag.
+2. **Browse mode** (no search/filter) → `BrowseRails`: a featured **`BrowseHero`** (spotlights the
+   first Recently-Added item with a backdrop; reuses that rail's cached query — no extra IPC) above a
+   vertical stack of horizontal rails — Continue Watching (profile-wide), Your Watchlist, Your
+   Favourites, Recently Added, then one rail per genre (capped on the landing surface; the chip-bar /
+   "See all" opens the grid for the rest). The hero + personal rails + first few genre rails are
+   **eager** so the body always shows content immediately; deeper genre `Rail`s lazy-mount via
+   IntersectionObserver. Explicit **loading / empty (`count === 0`) / error (retry)** states plus a
+   `BrowseBoundary` error boundary mean the content area is never a blank void (the prior regression).
+   This replaces the old `Shelves` component, whose per-tab refetch was the tab-switch lag.
 3. **Search / filter / see-all** (query typed or a country/category chip active) → `BrowseGrid`: a
    responsive poster grid backed by `useInfiniteQuery` (200/page, auto-loads the next page near the
    end). Column count is derived from container width (ResizeObserver); items are chunked into rows

@@ -4,10 +4,13 @@
 //! so the grid stays smooth across tens of thousands of results.
 
 import { useEffect, useMemo, useState, type RefObject } from "react";
-import { DatabaseIcon } from "lucide-react";
+import { RotateCwIcon, SearchXIcon } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualRows } from "./VirtualRows";
-import { PosterCard, PosterCardSkeleton, type PosterCardHandlers } from "./PosterCard";
+import { PosterCard, type PosterCardHandlers } from "./PosterCard";
 import { useBrowseCount, useBrowseGrid, type BrowseFilters, type BrowseItem, type BrowseTab } from "./queries";
 
 interface BrowseGridProps extends PosterCardHandlers {
@@ -50,12 +53,8 @@ export function BrowseGrid({
   scrollRef,
   ...handlers
 }: BrowseGridProps) {
-  const { data, isLoading, hasNextPage, isFetchingNextPage, fetchNextPage } = useBrowseGrid(
-    tab,
-    profileId,
-    sourceId,
-    filters
-  );
+  const { data, isLoading, isError, refetch, hasNextPage, isFetchingNextPage, fetchNextPage } =
+    useBrowseGrid(tab, profileId, sourceId, filters);
   const { data: total } = useBrowseCount(tab, profileId, sourceId, filters);
 
   const items = useMemo<BrowseItem[]>(() => data?.pages.flat() ?? [], [data]);
@@ -65,14 +64,23 @@ export function BrowseGrid({
   const columns = Math.max(1, Math.floor((width - 48) / cardMin));
   const rows = useMemo(() => chunk(items, columns), [items, columns]);
 
+  if (isError) {
+    return (
+      <Card className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+        <SearchXIcon className="h-8 w-8 text-muted-foreground" aria-hidden />
+        <p className="text-sm font-medium text-foreground">Search failed</p>
+        <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2">
+          <RotateCwIcon className="h-4 w-4" aria-hidden /> Retry
+        </Button>
+      </Card>
+    );
+  }
+
   if (isLoading) {
     return (
-      <div
-        className="grid gap-3"
-        style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
-      >
+      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
         {Array.from({ length: columns * 4 }, (_, i) => (
-          <PosterCardSkeleton key={i} live={live} />
+          <Skeleton key={i} className={live ? "aspect-video" : "aspect-[2/3]"} />
         ))}
       </div>
     );
@@ -80,18 +88,18 @@ export function BrowseGrid({
 
   if (items.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center rounded-2xl border border-white/5 bg-white/[0.02] px-6 py-14 text-center">
-        <DatabaseIcon className="h-9 w-9 text-white/20" aria-hidden />
-        <p className="mt-3 text-sm font-medium text-white">Nothing matches this view</p>
-        <p className="mt-1 max-w-sm text-sm text-white/35">Clear filters or try a broader search.</p>
-      </div>
+      <Card className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+        <SearchXIcon className="h-8 w-8 text-muted-foreground" aria-hidden />
+        <p className="text-sm font-medium text-foreground">Nothing matches this view</p>
+        <p className="max-w-sm text-sm text-muted-foreground">Clear filters or try a broader search.</p>
+      </Card>
     );
   }
 
   return (
     <div className="flex flex-col gap-3">
       {total !== undefined && (
-        <p className="text-xs text-white/35">
+        <p className="text-xs text-muted-foreground">
           Showing {items.length.toLocaleString()} of {total.toLocaleString()} {tab}
         </p>
       )}

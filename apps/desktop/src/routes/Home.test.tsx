@@ -157,8 +157,8 @@ describe("Home", () => {
 
     renderHome();
 
-    expect(await screen.findByRole("button", { name: /live\s+250/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /movies\s+12/i })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: /live\s+250/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /movies\s+12/i })).toBeInTheDocument();
     expect(screen.getByLabelText("Playlist")).toHaveValue("1");
   });
 
@@ -170,7 +170,7 @@ describe("Home", () => {
     });
 
     renderHome();
-    await screen.findByRole("button", { name: /live\s+250/i });
+    await screen.findByRole("tab", { name: /live\s+250/i });
 
     // Type a term distinct from the result title so the active-filter chip
     // (which echoes the query) doesn't collide with the card's title text.

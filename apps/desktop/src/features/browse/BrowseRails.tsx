@@ -1,27 +1,33 @@
-//! Browse-mode surface for a tab: a vertical stack of horizontal rails
-//! (Netflix-style). Continue Watching + personal rails on top, then one lazy
-//! rail per genre. Rails fetch only when scrolled near, so a tab with dozens of
-//! genres stays cheap.
+//! Browse-mode surface for a tab: a featured hero, then a vertical stack of
+//! horizontal rails. The hero + personal rails + first genre rails are eager
+//! (always render content — never a blank body); deeper genre rails lazy-load.
+//! Explicit empty + error states ensure the area always shows *something*.
 
-import { ClockIcon } from "lucide-react";
+import { ClockIcon, FilmIcon, RotateCwIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import type { ContinueWatchingItem } from "@/types";
 import { type PlayMedia, type PlayMediaKind } from "@/features/player/PlayerModal";
 import { Rail } from "./Rail";
-import { PosterCardSkeleton, type PosterCardHandlers } from "./PosterCard";
+import { BrowseHero } from "./BrowseHero";
+import { type PosterCardHandlers } from "./PosterCard";
 import {
   genreRail,
   PERSONAL_RAILS,
+  RECENTLY_ADDED_RAIL,
+  useBrowseCount,
   useCategories,
   useContinueWatching,
+  useRail,
   type BrowseTab,
   type RailSpec,
 } from "./queries";
 
-/// Cap the number of genre rails on the landing surface; the chip-bar / "See
-/// all" opens the full virtualized grid for anything beyond this.
 const MAX_GENRE_RAILS = 25;
+/// How many genre rails fetch immediately; the rest lazy-load on scroll.
+const EAGER_GENRE_RAILS = 4;
 
 interface BrowseRailsProps extends PosterCardHandlers {
   tab: BrowseTab;
@@ -39,15 +45,46 @@ export function BrowseRails({
   onSelectCategory,
   ...handlers
 }: BrowseRailsProps) {
+  const recently = useRail(tab, profileId, sourceId, RECENTLY_ADDED_RAIL, true);
   const { data: categories } = useCategories(tab, profileId, sourceId);
+  const { data: count } = useBrowseCount(tab, profileId, sourceId);
   const genres = (categories ?? []).slice(0, MAX_GENRE_RAILS);
 
   const handleSeeAll = (spec: RailSpec) => {
     if (spec.filters.category) onSelectCategory(spec.filters.category);
   };
 
+  // Hard error on the primary rail → retry card, never a blank void.
+  if (recently.isError) {
+    return (
+      <StateCard
+        icon={<FilmIcon className="h-8 w-8 text-muted-foreground" aria-hidden />}
+        title="Couldn’t load this playlist"
+        body="Something went wrong fetching content."
+        action={
+          <Button variant="outline" size="sm" onClick={() => recently.refetch()} className="gap-2">
+            <RotateCwIcon className="h-4 w-4" aria-hidden /> Retry
+          </Button>
+        }
+      />
+    );
+  }
+
+  // Source/tab genuinely has nothing.
+  if (count === 0) {
+    return (
+      <StateCard
+        icon={<FilmIcon className="h-8 w-8 text-muted-foreground" aria-hidden />}
+        title={`No ${tab} in this playlist`}
+        body="Try another tab, switch playlist, or refresh from the provider."
+      />
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-7">
+      <BrowseHero tab={tab} profileId={profileId} sourceId={sourceId} {...handlers} />
+
       <ContinueWatchingRail profileId={profileId} onPlay={onPlay} />
 
       {PERSONAL_RAILS.map((spec) => (
@@ -57,33 +94,47 @@ export function BrowseRails({
           profileId={profileId}
           sourceId={sourceId}
           spec={spec}
+          eager
           {...handlers}
         />
       ))}
 
-      {genres.map((category) => (
+      {genres.map((category, i) => (
         <Rail
           key={category}
           tab={tab}
           profileId={profileId}
           sourceId={sourceId}
           spec={genreRail(category)}
+          eager={i < EAGER_GENRE_RAILS}
           onSeeAll={handleSeeAll}
           {...handlers}
         />
       ))}
-
-      {!categories && (
-        <div className="flex flex-col gap-2">
-          <div className="h-4 w-32 animate-pulse rounded bg-white/[0.06]" />
-          <div className="-mx-1 flex gap-3 overflow-hidden px-1">
-            {Array.from({ length: 6 }, (_, i) => (
-              <PosterCardSkeleton key={i} live={tab === "live"} />
-            ))}
-          </div>
-        </div>
-      )}
     </div>
+  );
+}
+
+function StateCard({
+  icon,
+  title,
+  body,
+  action,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <Card className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+      {icon}
+      <div>
+        <p className="text-sm font-medium text-foreground">{title}</p>
+        <p className="mt-1 max-w-sm text-sm text-muted-foreground">{body}</p>
+      </div>
+      {action}
+    </Card>
   );
 }
 
@@ -99,11 +150,11 @@ function ContinueWatchingRail({
 
   return (
     <section className="flex flex-col gap-2">
-      <div className="flex items-center gap-2 text-sm font-semibold text-white/85">
+      <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
         <ClockIcon className="h-4 w-4" aria-hidden />
         Continue Watching
       </div>
-      <div className="-mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]">
+      <div className="-mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {data.map((item) => (
           <ContinueWatchingCard key={`${item.mediaKind}-${item.mediaId}`} item={item} onPlay={onPlay} />
         ))}
@@ -138,19 +189,19 @@ function ContinueWatchingCard({
       }
       className={cn(
         "flex w-48 flex-shrink-0 snap-start flex-col gap-1.5 text-left transition-transform",
-        "hover:-translate-y-1 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950"
+        "hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       )}
     >
-      <div className="relative aspect-video w-48 overflow-hidden rounded-lg bg-neutral-800">
+      <div className="relative aspect-video w-48 overflow-hidden rounded-xl border border-border bg-muted">
         {item.posterUrl && (
           <img src={item.posterUrl} alt="" loading="lazy" className="h-full w-full object-cover" />
         )}
         <div className="absolute inset-x-0 bottom-0 h-1 bg-black/40">
-          <div className="h-full bg-rose-400" style={{ width: `${progress}%` }} />
+          <div className="h-full bg-primary" style={{ width: `${progress}%` }} />
         </div>
       </div>
-      <p className="line-clamp-1 text-xs font-medium text-white">{item.title}</p>
-      {item.subtitle && <p className="truncate text-[11px] text-white/40">{item.subtitle}</p>}
+      <p className="line-clamp-1 text-xs font-medium text-foreground">{item.title}</p>
+      {item.subtitle && <p className="truncate text-[11px] text-muted-foreground">{item.subtitle}</p>}
     </button>
   );
 }

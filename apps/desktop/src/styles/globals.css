@@ -31,8 +31,29 @@
   --color-text-muted: rgba(255, 255, 255, 0.3);
 
   /* Borders */
-  --color-border: rgba(255, 255, 255, 0.08);
   --color-border-strong: rgba(255, 255, 255, 0.16);
+
+  /* shadcn/ui token scale (dark-only). Generates bg-background, text-foreground,
+     bg-card, bg-primary, border-border, border-input, ring-ring, etc. */
+  --color-background: #0a0a0c;
+  --color-foreground: rgba(255, 255, 255, 0.96);
+  --color-card: #131316;
+  --color-card-foreground: rgba(255, 255, 255, 0.96);
+  --color-popover: #18181b;
+  --color-popover-foreground: rgba(255, 255, 255, 0.96);
+  --color-primary: #6366f1;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: rgba(255, 255, 255, 0.08);
+  --color-secondary-foreground: rgba(255, 255, 255, 0.92);
+  --color-muted: rgba(255, 255, 255, 0.06);
+  --color-muted-foreground: rgba(255, 255, 255, 0.45);
+  --color-accent: rgba(255, 255, 255, 0.1);
+  --color-accent-foreground: #ffffff;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-input: rgba(255, 255, 255, 0.14);
+  --color-ring: #6366f1;
 
   /* Radii */
   --radius-sm: 6px;
