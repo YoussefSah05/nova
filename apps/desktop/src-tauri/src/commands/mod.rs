@@ -1149,7 +1149,7 @@ fn push_entry(
             id: 0,
             source_id,
             tvg_id: e.tvg_id.clone(),
-            name: e.clean_title.clone(),
+            name: nova_core::polish_title(&e.clean_title),
             country: e.country_prefix.clone(),
             category: e.category.clone(),
             raw_group: Some(e.group_title.clone()),
@@ -1164,7 +1164,7 @@ fn push_entry(
             id: 0,
             source_id,
             name: e.name.clone(),
-            clean_title: Some(e.clean_title.clone()),
+            clean_title: Some(nova_core::polish_title(&e.clean_title)),
             year: e.year.map(|y| y as i64),
             logo_url: e.logo_url.clone(),
             stream_url: e.stream_url.clone(),
@@ -1176,10 +1176,9 @@ fn push_entry(
         MediaKind::Series => series.push(SeriesEpisode {
             id: 0,
             source_id,
-            series_title: e
-                .series_title
-                .clone()
-                .unwrap_or_else(|| e.clean_title.clone()),
+            series_title: nova_core::polish_title(
+                e.series_title.as_deref().unwrap_or(&e.clean_title),
+            ),
             category: e.category.clone(),
             season: e.season.unwrap_or(1) as i64,
             episode: e.episode.unwrap_or(1) as i64,
