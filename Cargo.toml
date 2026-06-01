@@ -15,6 +15,7 @@ members = [
     "crates/jobs",
     "crates/search",
     "crates/mcp",
+    "crates/enrich",
 ]
 
 [workspace.dependencies]
@@ -50,6 +51,9 @@ bytes = "1"
 
 # Testing
 insta = { version = "1", features = ["json", "yaml"] }
+
+# On-device embeddings (catalog enrichment)
+fastembed = "4"
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }
