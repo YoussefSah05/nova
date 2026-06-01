@@ -1,5 +1,6 @@
 pub mod caption_style;
 pub mod channels;
+pub mod enrich;
 pub mod epg_sources;
 pub mod jobs;
 pub mod playback;
@@ -14,6 +15,7 @@ pub mod watch_history;
 
 pub use caption_style::CaptionStyleRepository;
 pub use channels::ChannelRepository;
+pub use enrich::{EnrichUpdate, UnenrichedRow};
 pub use epg_sources::{EpgSource, EpgSourcesRepository};
 pub use jobs::{Job, JobRepository};
 pub use playback::{PlaybackRepository, ResolvedStreamUrl};

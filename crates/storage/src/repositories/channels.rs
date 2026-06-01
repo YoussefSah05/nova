@@ -2,6 +2,7 @@ use nova_core::{now_ts, Channel, ContentSort};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
+use crate::repositories::enrich::{EnrichUpdate, UnenrichedRow};
 
 pub struct ChannelRepository<'a> {
     pool: &'a SqlitePool,
@@ -250,6 +251,48 @@ impl<'a> ChannelRepository<'a> {
         )
         .execute(self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// Channels for a source that have not yet been through enrichment.
+    pub async fn list_unenriched(
+        &self,
+        source_id: i64,
+    ) -> Result<Vec<UnenrichedRow>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT id as "id!: i64", name, category
+               FROM channels
+               WHERE source_id = ? AND enrich_status IS NULL"#,
+            source_id,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| UnenrichedRow {
+                id: r.id,
+                text: r.name,
+                category: r.category,
+            })
+            .collect())
+    }
+
+    /// Write back enrichment results and mark rows done (idempotent re-run).
+    pub async fn apply_enrichment(&self, updates: &[EnrichUpdate]) -> Result<(), StorageError> {
+        let mut tx = self.pool.begin().await?;
+        for u in updates {
+            sqlx::query!(
+                "UPDATE channels
+                 SET dedup_group = ?, category = COALESCE(?, category), enrich_status = 'done'
+                 WHERE id = ?",
+                u.dedup_group,
+                u.category,
+                u.id,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 

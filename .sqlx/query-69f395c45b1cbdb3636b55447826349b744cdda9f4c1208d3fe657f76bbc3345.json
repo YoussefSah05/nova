@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE vod_items\n                 SET dedup_group = ?, category = COALESCE(?, category), enrich_status = 'done'\n                 WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "69f395c45b1cbdb3636b55447826349b744cdda9f4c1208d3fe657f76bbc3345"
+}

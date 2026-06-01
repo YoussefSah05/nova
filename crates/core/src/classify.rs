@@ -202,6 +202,12 @@ const TAXONOMY: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// The canonical genre labels, in taxonomy order. Used as the zero-shot label
+/// set for embedding-based genre classification (Phase B enrichment).
+pub fn genres() -> Vec<&'static str> {
+    TAXONOMY.iter().map(|(genre, _)| *genre).collect()
+}
+
 /// Best-effort canonical genre for a cleaned label. Substring match against the
 /// ordered taxonomy. `None` when nothing matches (caller keeps the cleaned label).
 pub fn canonical_genre(cleaned_label: &str) -> Option<&'static str> {

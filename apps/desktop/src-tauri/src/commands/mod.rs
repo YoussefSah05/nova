@@ -15,6 +15,7 @@ use crate::state::AppState;
 use std::time::{Duration, Instant};
 
 pub mod caption_style;
+pub mod enrich;
 pub mod epg;
 pub mod playback;
 pub mod profile_settings;
