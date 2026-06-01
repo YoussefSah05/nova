@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 pub mod classify;
+pub mod clean;
 pub use classify::normalize_category;
+pub use clean::polish_title;
 
 // ── Profiles ─────────────────────────────────────────────────────────────────
 

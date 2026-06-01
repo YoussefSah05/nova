@@ -563,6 +563,21 @@ so every read is cached, deduped, and prefetchable; the app root provides the `Q
 6. Series cards open the detail view (episodes); live/movie cards open the player.
 7. Browse errors surface in the UI and must not leave loading states active indefinitely.
 
+### Catalog enrichment
+
+A planned 4-layer pipeline cleans messy IPTV names + taxonomy so the home renders cleanly:
+**(A) rules** (deterministic, offline) → **(B) on-device embeddings** (fastembed-rs: fuzzy de-dup,
+zero-shot genre, semantic match) → **(C) opt-in TMDB** (canonical names, posters, overviews,
+backdrops; cached, attributed) → **(D) tiny local LLM** (llama.cpp, residual disambiguation only).
+Layers are idempotent, incremental, and never destroy raw data — they write a display layer.
+
+Phase A is live: `nova_core::clean::polish_title` (`crates/core/src/clean.rs`) folds decorative
+Unicode (`ᴴᴰ`→`HD`, fullwidth→ASCII) and strips release/quality/codec junk tokens
+(`HD`/`1080p`/`x265`/`WEB-DL`/`MULTI`/`VOSTFR`…), conservatively. It runs at import in `push_entry`
+(both M3U + Xtream) on live `name`, vod `clean_title`, series `series_title`. Phases B–D add
+enrichment columns + a post-import background job (`crates/jobs`) emitting `catalog:enrich:progress`,
+upgrading content in place via React Query invalidation.
+
 ### Live playback flow
 1. User clicks a channel. Frontend calls `play_channel(channel_id, caption_mode)`.
 2. Rust returns a localhost proxy URL: `http://127.0.0.1:<port>/live/<channel_id>/index.m3u8`.
