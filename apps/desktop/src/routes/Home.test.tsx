@@ -1,8 +1,53 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Channel, Profile, SeriesSummary, Source, VodItem } from "@/types";
 import { Home } from "./Home";
+
+// The browse lists are windowed (@tanstack/react-virtual), which needs layout
+// to decide what to mount. jsdom has none, so give it a viewport + row heights
+// and a no-op ResizeObserver. @tanstack/virtual-core measures via offsetHeight/
+// offsetWidth, so those are what we stub. Rows beyond the window aren't in the
+// DOM (as in the real app), so these tests assert on observable state.
+const ROW_HEIGHT = 64;
+const VIEWPORT_HEIGHT = 800;
+const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+
+beforeAll(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  );
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+    configurable: true,
+    get() {
+      return 600;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      // Rows (the windowed wrappers carry data-index) report their height; any
+      // other element stands in as the scroll viewport.
+      return this.dataset?.index !== undefined ? ROW_HEIGHT : VIEWPORT_HEIGHT;
+    },
+  });
+});
+
+afterAll(() => {
+  if (originalOffsetHeight) {
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", originalOffsetHeight);
+  }
+  if (originalOffsetWidth) {
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", originalOffsetWidth);
+  }
+  vi.unstubAllGlobals();
+});
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -133,15 +178,18 @@ describe("Home", () => {
 
     render(<Home profile={profile} onSwitchProfile={vi.fn()} />);
 
-    await screen.findByText("Channel 200");
+    // First page loaded: 200 of 201 shown, with a load-more affordance.
+    expect(await screen.findByText("Showing 200 of 201 live")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /load 1 more/i }));
 
-    expect(await screen.findByText("Channel 201")).toBeInTheDocument();
+    // The next page is requested with the loaded count as the offset…
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith(
         "list_channels",
         expect.objectContaining({ offset: 200 })
       )
     );
+    // …and the appended row updates the count to the full total.
+    expect(await screen.findByText("Showing 201 of 201 live")).toBeInTheDocument();
   });
 });

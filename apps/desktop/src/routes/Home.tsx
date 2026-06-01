@@ -1,4 +1,5 @@
-import { useDeferredValue, useEffect, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -12,7 +13,15 @@ import {
   SettingsIcon,
   XIcon,
 } from "lucide-react";
-import type { Channel, ImportProgress, Profile, SeriesSummary, Source, VodItem } from "@/types";
+import type {
+  Channel,
+  ImportProgress,
+  NowAndNext,
+  Profile,
+  SeriesSummary,
+  Source,
+  VodItem,
+} from "@/types";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SettingsModal } from "@/features/settings/SettingsModal";
 import { SeriesDetail } from "@/features/browse/SeriesDetail";
@@ -21,12 +30,13 @@ import { FavoriteButton } from "@/features/browse/FavoriteButton";
 import { WatchlistButton } from "@/features/browse/WatchlistButton";
 import { NowAndNextChip } from "@/features/browse/NowAndNextChip";
 import { useNowAndNext } from "@/features/browse/useNowAndNext";
+import { VirtualRows } from "@/features/browse/VirtualRows";
 import { PlayerModal, type PlayMedia } from "@/features/player/PlayerModal";
 import { cn } from "@/lib/utils";
 
 type Tab = "live" | "movies" | "series";
 
-const SERIES_PAGE_LIMIT = 10_000;
+type TabTotals = Record<Tab, number>;
 
 interface HomeProps {
   profile: Profile;
@@ -49,6 +59,7 @@ interface FilterOptions {
 const PAGE_SIZE = 200;
 const TABS: Tab[] = ["live", "movies", "series"];
 const EMPTY_COUNTS: ContentCounts = { live: 0, movies: 0, series: 0 };
+const EMPTY_TOTALS: TabTotals = { live: 0, movies: 0, series: 0 };
 const EMPTY_FILTER_OPTIONS: FilterOptions = {
   channelCountries: [],
   channelCategories: [],
@@ -78,7 +89,9 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
-  const [activeTotal, setActiveTotal] = useState(0);
+  // Filtered totals per tab (drives "Showing X of Y" + load-more), so switching
+  // back to an already-loaded tab keeps the right count without a refetch.
+  const [totals, setTotals] = useState<TabTotals>(EMPTY_TOTALS);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [sourceError, setSourceError] = useState<string | null>(null);
@@ -90,10 +103,24 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const [refreshing, setRefreshing] = useState(false);
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
+  // Scroll container shared by the browse content; we drive/restore its
+  // scrollTop per tab so switching sections feels continuous.
+  const scrollRef = useRef<HTMLElement>(null);
+  const scrollByTabRef = useRef<TabTotals>({ live: 0, movies: 0, series: 0 });
+  // The data signature currently materialised into each tab's array. When the
+  // signature for the active tab already matches, we skip the refetch (and the
+  // skeleton flash) entirely — state is the cache.
+  const loadedSigRef = useRef<Record<Tab, string | null>>({
+    live: null,
+    movies: null,
+    series: null,
+  });
+
   const activeSource = sources.find((source) => source.id === activeSourceId) ?? null;
   const visibleCount =
     tab === "live" ? channels.length : tab === "movies" ? vod.length : series.length;
-  const hasMore = tab !== "series" && visibleCount < activeTotal;
+  const activeTotal = totals[tab];
+  const hasMore = visibleCount < activeTotal;
   const categoryOptions =
     tab === "live"
       ? filterOptions.channelCategories
@@ -276,6 +303,21 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       return;
     }
 
+    const query = filterParam(deferredSearchQuery);
+    const category = filterParam(categoryFilter);
+    const country = filterParam(countryFilter);
+    // Identifies exactly what the active tab should be showing. If the tab's
+    // array already holds this signature, switching back is instant: no
+    // refetch, no skeleton — just restore the scroll position we left at.
+    const sig = `${activeSourceId}|${tab}|${query ?? ""}|${category ?? ""}|${country ?? ""}|${reloadKey}`;
+
+    if (loadedSigRef.current[tab] === sig) {
+      setIsLoading(false);
+      const el = scrollRef.current;
+      if (el) el.scrollTop = scrollByTabRef.current[tab];
+      return;
+    }
+
     let cancelled = false;
 
     async function loadContent() {
@@ -283,9 +325,6 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       setContentError(null);
 
       try {
-        const query = filterParam(deferredSearchQuery);
-        const category = filterParam(categoryFilter);
-
         if (tab === "live") {
           const [nextChannels, total] = await Promise.all([
             invoke<Channel[]>("list_channels", {
@@ -293,27 +332,17 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               sourceId: activeSourceId,
               limit: PAGE_SIZE,
               offset: 0,
-              filters: {
-                country: filterParam(countryFilter),
-                category,
-                query,
-              },
+              filters: { country, category, query },
             }),
             invoke<number>("count_channels", {
               profileId: profile.id,
               sourceId: activeSourceId,
-              filters: {
-                country: filterParam(countryFilter),
-                category,
-                query,
-              },
+              filters: { country, category, query },
             }),
           ]);
 
-          if (!cancelled) {
-            setChannels(nextChannels);
-            setActiveTotal(total);
-          }
+          if (!cancelled) setChannels(nextChannels);
+          finalizeLoad(cancelled, sig, total);
         } else if (tab === "movies") {
           const [nextVod, total] = await Promise.all([
             invoke<VodItem[]>("list_vod", {
@@ -321,56 +350,41 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               sourceId: activeSourceId,
               limit: PAGE_SIZE,
               offset: 0,
-              filters: {
-                category,
-                query,
-              },
+              filters: { category, query },
             }),
             invoke<number>("count_vod", {
               profileId: profile.id,
               sourceId: activeSourceId,
-              filters: {
-                category,
-                query,
-              },
+              filters: { category, query },
             }),
           ]);
 
-          if (!cancelled) {
-            setVod(nextVod);
-            setActiveTotal(total);
-          }
+          if (!cancelled) setVod(nextVod);
+          finalizeLoad(cancelled, sig, total);
         } else {
           const [nextSeries, total] = await Promise.all([
             invoke<SeriesSummary[]>("list_series", {
               profileId: profile.id,
               sourceId: activeSourceId,
-              limit: SERIES_PAGE_LIMIT,
+              limit: PAGE_SIZE,
               offset: 0,
-              filters: {
-                category,
-                query,
-              },
+              filters: { category, query },
             }),
             invoke<number>("count_series", {
               profileId: profile.id,
               sourceId: activeSourceId,
-              filters: {
-                category,
-                query,
-              },
+              filters: { category, query },
             }),
           ]);
 
-          if (!cancelled) {
-            setSeries(nextSeries);
-            setActiveTotal(total);
-          }
+          if (!cancelled) setSeries(nextSeries);
+          finalizeLoad(cancelled, sig, total);
         }
       } catch (error: unknown) {
         if (!cancelled) {
           clearContentForTab(tab);
-          setActiveTotal(0);
+          loadedSigRef.current[tab] = null;
+          setTotals((prev) => ({ ...prev, [tab]: 0 }));
           setContentError(errorMessage(error));
         }
       } finally {
@@ -378,6 +392,17 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           setIsLoading(false);
         }
       }
+    }
+
+    // Marks the tab's array as holding `sig`, records the filtered total, and
+    // resets the view to the top — a fresh page always starts at row 0.
+    function finalizeLoad(wasCancelled: boolean, loadedSig: string, total: number) {
+      if (wasCancelled) return;
+      loadedSigRef.current[tab] = loadedSig;
+      setTotals((prev) => ({ ...prev, [tab]: total }));
+      scrollByTabRef.current[tab] = 0;
+      const el = scrollRef.current;
+      if (el) el.scrollTop = 0;
     }
 
     void loadContent();
@@ -450,7 +475,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   }, [activeSourceId]);
 
   async function handleLoadMore() {
-    if (activeSourceId === null || tab === "series" || isLoading || isLoadingMore || !hasMore) {
+    if (activeSourceId === null || isLoading || isLoadingMore || !hasMore) {
       return;
     }
 
@@ -467,25 +492,27 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           sourceId: activeSourceId,
           limit: PAGE_SIZE,
           offset: channels.length,
-          filters: {
-            country: filterParam(countryFilter),
-            category,
-            query,
-          },
+          filters: { country: filterParam(countryFilter), category, query },
         });
         setChannels((current) => [...current, ...nextChannels]);
-      } else {
+      } else if (tab === "movies") {
         const nextVod = await invoke<VodItem[]>("list_vod", {
           profileId: profile.id,
           sourceId: activeSourceId,
           limit: PAGE_SIZE,
           offset: vod.length,
-          filters: {
-            category,
-            query,
-          },
+          filters: { category, query },
         });
         setVod((current) => [...current, ...nextVod]);
+      } else {
+        const nextSeries = await invoke<SeriesSummary[]>("list_series", {
+          profileId: profile.id,
+          sourceId: activeSourceId,
+          limit: PAGE_SIZE,
+          offset: series.length,
+          filters: { category, query },
+        });
+        setSeries((current) => [...current, ...nextSeries]);
       }
     } catch (error: unknown) {
       setContentError(errorMessage(error));
@@ -493,6 +520,15 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       setIsLoadingMore(false);
     }
   }
+
+  // Stable callback for the virtualizer's infinite-scroll trigger: reads the
+  // latest `handleLoadMore` via a ref so the windowed lists don't re-subscribe
+  // (and re-fire) on every render.
+  const handleLoadMoreRef = useRef(handleLoadMore);
+  handleLoadMoreRef.current = handleLoadMore;
+  const triggerLoadMore = useCallback(() => {
+    void handleLoadMoreRef.current();
+  }, []);
 
   function resetBrowseState() {
     setSearchQuery("");
@@ -502,161 +538,176 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     setContentError(null);
   }
 
-  async function handleToggleChannelFavorite(channel: Channel, next: boolean) {
-    setChannels((current) =>
-      current.map((c) => (c.id === channel.id ? { ...c, isFavorite: next } : c))
-    );
-    try {
-      await invoke<void>("set_channel_favorite", {
-        profileId: profile.id,
-        channelId: channel.id,
-        isFavorite: next,
-      });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
+  // Toggle handlers are stable (useCallback) so the memoized list rows don't
+  // re-render when unrelated parent state changes (search text, the 60s EPG
+  // tick). Series handlers use functional setSelectedSeries to avoid depending
+  // on its current value.
+  const handleToggleChannelFavorite = useCallback(
+    async (channel: Channel, next: boolean) => {
       setChannels((current) =>
-        current.map((c) => (c.id === channel.id ? { ...c, isFavorite: !next } : c))
+        current.map((c) => (c.id === channel.id ? { ...c, isFavorite: next } : c))
       );
-      setContentError(errorMessage(error));
-    }
-  }
-
-  async function handleToggleVodFavorite(item: VodItem, next: boolean) {
-    setVod((current) => current.map((v) => (v.id === item.id ? { ...v, isFavorite: next } : v)));
-    try {
-      await invoke<void>("set_vod_favorite", {
-        profileId: profile.id,
-        vodId: item.id,
-        isFavorite: next,
-      });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
-      setVod((current) => current.map((v) => (v.id === item.id ? { ...v, isFavorite: !next } : v)));
-      setContentError(errorMessage(error));
-    }
-  }
-
-  async function handleToggleSeriesFavorite(item: SeriesSummary, next: boolean) {
-    setSeries((current) =>
-      current.map((s) =>
-        s.seriesTitle === item.seriesTitle && s.sourceId === item.sourceId
-          ? { ...s, isFavorite: next }
-          : s
-      )
-    );
-    if (
-      selectedSeries?.seriesTitle === item.seriesTitle &&
-      selectedSeries.sourceId === item.sourceId
-    ) {
-      setSelectedSeries({ ...selectedSeries, isFavorite: next });
-    }
-    try {
-      await invoke<void>("set_series_favorite", {
-        profileId: profile.id,
-        sourceId: item.sourceId,
-        seriesTitle: item.seriesTitle,
-        isFavorite: next,
-      });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
-      setSeries((current) =>
-        current.map((s) =>
-          s.seriesTitle === item.seriesTitle && s.sourceId === item.sourceId
-            ? { ...s, isFavorite: !next }
-            : s
-        )
-      );
-      if (
-        selectedSeries?.seriesTitle === item.seriesTitle &&
-        selectedSeries.sourceId === item.sourceId
-      ) {
-        setSelectedSeries({ ...selectedSeries, isFavorite: !next });
+      try {
+        await invoke<void>("set_channel_favorite", {
+          profileId: profile.id,
+          channelId: channel.id,
+          isFavorite: next,
+        });
+        setShelvesKey((k) => k + 1);
+      } catch (error: unknown) {
+        setChannels((current) =>
+          current.map((c) => (c.id === channel.id ? { ...c, isFavorite: !next } : c))
+        );
+        setContentError(errorMessage(error));
       }
-      setContentError(errorMessage(error));
-    }
-  }
+    },
+    [profile.id]
+  );
 
-  async function handleToggleChannelWatchlist(channel: Channel, next: boolean) {
-    setChannels((current) =>
-      current.map((c) => (c.id === channel.id ? { ...c, isInWatchlist: next } : c))
-    );
-    try {
-      await invoke<void>("set_channel_in_watchlist", {
-        profileId: profile.id,
-        channelId: channel.id,
-        inWatchlist: next,
-      });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
+  const handleToggleVodFavorite = useCallback(
+    async (item: VodItem, next: boolean) => {
+      setVod((current) => current.map((v) => (v.id === item.id ? { ...v, isFavorite: next } : v)));
+      try {
+        await invoke<void>("set_vod_favorite", {
+          profileId: profile.id,
+          vodId: item.id,
+          isFavorite: next,
+        });
+        setShelvesKey((k) => k + 1);
+      } catch (error: unknown) {
+        setVod((current) =>
+          current.map((v) => (v.id === item.id ? { ...v, isFavorite: !next } : v))
+        );
+        setContentError(errorMessage(error));
+      }
+    },
+    [profile.id]
+  );
+
+  const handleToggleSeriesFavorite = useCallback(
+    async (item: SeriesSummary, next: boolean) => {
+      const matches = (s: SeriesSummary) =>
+        s.seriesTitle === item.seriesTitle && s.sourceId === item.sourceId;
+      setSeries((current) => current.map((s) => (matches(s) ? { ...s, isFavorite: next } : s)));
+      setSelectedSeries((cur) => (cur && matches(cur) ? { ...cur, isFavorite: next } : cur));
+      try {
+        await invoke<void>("set_series_favorite", {
+          profileId: profile.id,
+          sourceId: item.sourceId,
+          seriesTitle: item.seriesTitle,
+          isFavorite: next,
+        });
+        setShelvesKey((k) => k + 1);
+      } catch (error: unknown) {
+        setSeries((current) => current.map((s) => (matches(s) ? { ...s, isFavorite: !next } : s)));
+        setSelectedSeries((cur) => (cur && matches(cur) ? { ...cur, isFavorite: !next } : cur));
+        setContentError(errorMessage(error));
+      }
+    },
+    [profile.id]
+  );
+
+  const handleToggleChannelWatchlist = useCallback(
+    async (channel: Channel, next: boolean) => {
       setChannels((current) =>
-        current.map((c) => (c.id === channel.id ? { ...c, isInWatchlist: !next } : c))
+        current.map((c) => (c.id === channel.id ? { ...c, isInWatchlist: next } : c))
       );
-      setContentError(errorMessage(error));
-    }
-  }
+      try {
+        await invoke<void>("set_channel_in_watchlist", {
+          profileId: profile.id,
+          channelId: channel.id,
+          inWatchlist: next,
+        });
+        setShelvesKey((k) => k + 1);
+      } catch (error: unknown) {
+        setChannels((current) =>
+          current.map((c) => (c.id === channel.id ? { ...c, isInWatchlist: !next } : c))
+        );
+        setContentError(errorMessage(error));
+      }
+    },
+    [profile.id]
+  );
 
-  async function handleToggleVodWatchlist(item: VodItem, next: boolean) {
-    setVod((current) => current.map((v) => (v.id === item.id ? { ...v, isInWatchlist: next } : v)));
-    try {
-      await invoke<void>("set_vod_in_watchlist", {
-        profileId: profile.id,
-        vodId: item.id,
-        inWatchlist: next,
-      });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
+  const handleToggleVodWatchlist = useCallback(
+    async (item: VodItem, next: boolean) => {
       setVod((current) =>
-        current.map((v) => (v.id === item.id ? { ...v, isInWatchlist: !next } : v))
+        current.map((v) => (v.id === item.id ? { ...v, isInWatchlist: next } : v))
       );
-      setContentError(errorMessage(error));
-    }
-  }
-
-  async function handleToggleSeriesWatchlist(item: SeriesSummary, next: boolean) {
-    setSeries((current) =>
-      current.map((s) =>
-        s.seriesTitle === item.seriesTitle && s.sourceId === item.sourceId
-          ? { ...s, isInWatchlist: next }
-          : s
-      )
-    );
-    if (
-      selectedSeries?.seriesTitle === item.seriesTitle &&
-      selectedSeries.sourceId === item.sourceId
-    ) {
-      setSelectedSeries({ ...selectedSeries, isInWatchlist: next });
-    }
-    try {
-      await invoke<void>("set_series_in_watchlist", {
-        profileId: profile.id,
-        sourceId: item.sourceId,
-        seriesTitle: item.seriesTitle,
-        inWatchlist: next,
-      });
-      setShelvesKey((k) => k + 1);
-    } catch (error: unknown) {
-      setSeries((current) =>
-        current.map((s) =>
-          s.seriesTitle === item.seriesTitle && s.sourceId === item.sourceId
-            ? { ...s, isInWatchlist: !next }
-            : s
-        )
-      );
-      if (
-        selectedSeries?.seriesTitle === item.seriesTitle &&
-        selectedSeries.sourceId === item.sourceId
-      ) {
-        setSelectedSeries({ ...selectedSeries, isInWatchlist: !next });
+      try {
+        await invoke<void>("set_vod_in_watchlist", {
+          profileId: profile.id,
+          vodId: item.id,
+          inWatchlist: next,
+        });
+        setShelvesKey((k) => k + 1);
+      } catch (error: unknown) {
+        setVod((current) =>
+          current.map((v) => (v.id === item.id ? { ...v, isInWatchlist: !next } : v))
+        );
+        setContentError(errorMessage(error));
       }
-      setContentError(errorMessage(error));
-    }
-  }
+    },
+    [profile.id]
+  );
+
+  const handleToggleSeriesWatchlist = useCallback(
+    async (item: SeriesSummary, next: boolean) => {
+      const matches = (s: SeriesSummary) =>
+        s.seriesTitle === item.seriesTitle && s.sourceId === item.sourceId;
+      setSeries((current) => current.map((s) => (matches(s) ? { ...s, isInWatchlist: next } : s)));
+      setSelectedSeries((cur) => (cur && matches(cur) ? { ...cur, isInWatchlist: next } : cur));
+      try {
+        await invoke<void>("set_series_in_watchlist", {
+          profileId: profile.id,
+          sourceId: item.sourceId,
+          seriesTitle: item.seriesTitle,
+          inWatchlist: next,
+        });
+        setShelvesKey((k) => k + 1);
+      } catch (error: unknown) {
+        setSeries((current) =>
+          current.map((s) => (matches(s) ? { ...s, isInWatchlist: !next } : s))
+        );
+        setSelectedSeries((cur) => (cur && matches(cur) ? { ...cur, isInWatchlist: !next } : cur));
+        setContentError(errorMessage(error));
+      }
+    },
+    [profile.id]
+  );
+
+  // Stable play / select handlers so memoized rows stay cached across renders.
+  const playChannel = useCallback((channel: Channel) => {
+    setPlayingMedia({
+      kind: "live",
+      id: channel.id,
+      title: channel.name,
+      subtitle: [channel.country, channel.category].filter(Boolean).join(" / ") || null,
+      posterUrl: channel.logoUrl,
+    });
+  }, []);
+
+  const playVod = useCallback((item: VodItem) => {
+    setPlayingMedia({
+      kind: "vod",
+      id: item.id,
+      title: item.cleanTitle ?? item.name,
+      subtitle: [item.year?.toString(), item.category].filter(Boolean).join(" / ") || null,
+      posterUrl: item.logoUrl,
+    });
+  }, []);
+
+  const selectSeries = useCallback((item: SeriesSummary) => {
+    setSelectedSeries(item);
+  }, []);
 
   function clearContent() {
     setChannels([]);
     setVod([]);
     setSeries([]);
-    setActiveTotal(0);
+    setTotals(EMPTY_TOTALS);
+    loadedSigRef.current = { live: null, movies: null, series: null };
+    scrollByTabRef.current = { live: 0, movies: 0, series: 0 };
   }
 
   function clearContentForTab(nextTab: Tab) {
@@ -873,7 +924,13 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             )}
           </section>
 
-          <section className="flex-1 overflow-y-auto px-6 pb-6">
+          <section
+            ref={scrollRef}
+            onScroll={(event) => {
+              scrollByTabRef.current[tab] = event.currentTarget.scrollTop;
+            }}
+            className="relative flex-1 overflow-y-auto px-6 pb-6"
+          >
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-white/35">
               <span>
                 Showing {formatCount(visibleCount)} of {formatCount(activeTotal)} {tab}
@@ -916,47 +973,34 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             {isLoading ? (
               <SkeletonRows variant={tab} />
             ) : (
-              <>
+              <div key={tab} className="nova-fade-in">
                 {tab === "live" && (
                   <ChannelList
                     profileId={profile.id}
                     channels={channels}
+                    scrollRef={scrollRef}
+                    onLoadMore={triggerLoadMore}
                     onToggleFavorite={handleToggleChannelFavorite}
                     onToggleWatchlist={handleToggleChannelWatchlist}
-                    onPlay={(channel) =>
-                      setPlayingMedia({
-                        kind: "live",
-                        id: channel.id,
-                        title: channel.name,
-                        subtitle:
-                          [channel.country, channel.category].filter(Boolean).join(" / ") || null,
-                        posterUrl: channel.logoUrl,
-                      })
-                    }
+                    onPlay={playChannel}
                   />
                 )}
                 {tab === "movies" && (
                   <VodList
                     items={vod}
+                    scrollRef={scrollRef}
+                    onLoadMore={triggerLoadMore}
                     onToggleFavorite={handleToggleVodFavorite}
                     onToggleWatchlist={handleToggleVodWatchlist}
-                    onPlay={(item) =>
-                      setPlayingMedia({
-                        kind: "vod",
-                        id: item.id,
-                        title: item.cleanTitle ?? item.name,
-                        subtitle:
-                          [item.year?.toString(), item.category].filter(Boolean).join(" / ") ||
-                          null,
-                        posterUrl: item.logoUrl,
-                      })
-                    }
+                    onPlay={playVod}
                   />
                 )}
                 {tab === "series" && (
                   <SeriesList
                     items={series}
-                    onSelect={(item) => setSelectedSeries(item)}
+                    scrollRef={scrollRef}
+                    onLoadMore={triggerLoadMore}
+                    onSelect={selectSeries}
                     onToggleFavorite={handleToggleSeriesFavorite}
                     onToggleWatchlist={handleToggleSeriesWatchlist}
                   />
@@ -982,7 +1026,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                     </button>
                   </div>
                 )}
-              </>
+              </div>
             )}
           </section>
         </main>
@@ -1022,12 +1066,16 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
 function ChannelList({
   profileId,
   channels,
+  scrollRef,
+  onLoadMore,
   onToggleFavorite,
   onToggleWatchlist,
   onPlay,
 }: {
   profileId: string;
   channels: Channel[];
+  scrollRef: RefObject<HTMLElement | null>;
+  onLoadMore: () => void;
   onToggleFavorite: (channel: Channel, next: boolean) => Promise<void> | void;
   onToggleWatchlist: (channel: Channel, next: boolean) => Promise<void> | void;
   onPlay: (channel: Channel) => void;
@@ -1036,48 +1084,81 @@ function ChannelList({
   if (channels.length === 0) return null;
 
   return (
-    <div className="flex flex-col divide-y divide-white/5 rounded-2xl border border-white/5 bg-white/[0.02]">
-      {channels.map((channel) => (
-        <div key={channel.id} className="flex items-center gap-3 px-3 py-2.5">
-          <button
-            onClick={() => onPlay(channel)}
-            className="flex min-w-0 flex-1 items-center gap-3 text-left transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 rounded-lg"
-            aria-label={`Play ${channel.name}`}
-          >
-            <MediaThumb src={channel.logoUrl} className="h-9 w-9 rounded-lg object-contain" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-white">{channel.name}</p>
-              <p className="truncate text-xs text-white/30">
-                {[channel.country, channel.category].filter(Boolean).join(" / ") || "Live channel"}
-              </p>
-              {channel.tvgId && <NowAndNextChip data={nowMap[channel.tvgId]} />}
-            </div>
-          </button>
-          <WatchlistButton
-            inWatchlist={channel.isInWatchlist}
-            onToggle={(next) => onToggleWatchlist(channel, next)}
-            label={channel.name}
-            size="sm"
-          />
-          <FavoriteButton
-            isFavorite={channel.isFavorite}
-            onToggle={(next) => onToggleFavorite(channel, next)}
-            label={channel.name}
-            size="sm"
-          />
-        </div>
-      ))}
-    </div>
+    <VirtualRows
+      items={channels}
+      scrollRef={scrollRef}
+      estimateSize={64}
+      onEndReached={onLoadMore}
+      keyFor={(channel) => channel.id}
+      renderRow={(channel) => (
+        <ChannelRow
+          channel={channel}
+          now={channel.tvgId ? nowMap[channel.tvgId] : undefined}
+          onPlay={onPlay}
+          onToggleFavorite={onToggleFavorite}
+          onToggleWatchlist={onToggleWatchlist}
+        />
+      )}
+    />
   );
 }
 
+const ChannelRow = memo(function ChannelRow({
+  channel,
+  now,
+  onPlay,
+  onToggleFavorite,
+  onToggleWatchlist,
+}: {
+  channel: Channel;
+  now: NowAndNext | undefined;
+  onPlay: (channel: Channel) => void;
+  onToggleFavorite: (channel: Channel, next: boolean) => Promise<void> | void;
+  onToggleWatchlist: (channel: Channel, next: boolean) => Promise<void> | void;
+}) {
+  return (
+    <div className="flex items-center gap-3 border-b border-white/5 px-3 py-2.5">
+      <button
+        onClick={() => onPlay(channel)}
+        className="flex min-w-0 flex-1 items-center gap-3 text-left transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 rounded-lg"
+        aria-label={`Play ${channel.name}`}
+      >
+        <MediaThumb src={channel.logoUrl} className="h-9 w-9 rounded-lg object-contain" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm text-white">{channel.name}</p>
+          <p className="truncate text-xs text-white/30">
+            {[channel.country, channel.category].filter(Boolean).join(" / ") || "Live channel"}
+          </p>
+          {channel.tvgId && <NowAndNextChip data={now} />}
+        </div>
+      </button>
+      <WatchlistButton
+        inWatchlist={channel.isInWatchlist}
+        onToggle={(next) => onToggleWatchlist(channel, next)}
+        label={channel.name}
+        size="sm"
+      />
+      <FavoriteButton
+        isFavorite={channel.isFavorite}
+        onToggle={(next) => onToggleFavorite(channel, next)}
+        label={channel.name}
+        size="sm"
+      />
+    </div>
+  );
+});
+
 function VodList({
   items,
+  scrollRef,
+  onLoadMore,
   onToggleFavorite,
   onToggleWatchlist,
   onPlay,
 }: {
   items: VodItem[];
+  scrollRef: RefObject<HTMLElement | null>;
+  onLoadMore: () => void;
   onToggleFavorite: (item: VodItem, next: boolean) => Promise<void> | void;
   onToggleWatchlist: (item: VodItem, next: boolean) => Promise<void> | void;
   onPlay: (item: VodItem) => void;
@@ -1085,47 +1166,77 @@ function VodList({
   if (items.length === 0) return null;
 
   return (
-    <div className="flex flex-col divide-y divide-white/5 rounded-2xl border border-white/5 bg-white/[0.02]">
-      {items.map((item) => (
-        <div key={item.id} className="flex items-center gap-3 px-3 py-2.5">
-          <button
-            onClick={() => onPlay(item)}
-            className="flex min-w-0 flex-1 items-center gap-3 text-left transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 rounded-lg"
-            aria-label={`Play ${item.cleanTitle ?? item.name}`}
-          >
-            <MediaThumb src={item.logoUrl} className="h-14 w-10 rounded-lg object-cover" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-white">{item.cleanTitle ?? item.name}</p>
-              <p className="truncate text-xs text-white/30">
-                {[item.year?.toString(), item.category].filter(Boolean).join(" / ") || "Movie"}
-              </p>
-            </div>
-          </button>
-          <WatchlistButton
-            inWatchlist={item.isInWatchlist}
-            onToggle={(next) => onToggleWatchlist(item, next)}
-            label={item.cleanTitle ?? item.name}
-            size="sm"
-          />
-          <FavoriteButton
-            isFavorite={item.isFavorite}
-            onToggle={(next) => onToggleFavorite(item, next)}
-            label={item.cleanTitle ?? item.name}
-            size="sm"
-          />
-        </div>
-      ))}
-    </div>
+    <VirtualRows
+      items={items}
+      scrollRef={scrollRef}
+      estimateSize={76}
+      onEndReached={onLoadMore}
+      keyFor={(item) => item.id}
+      renderRow={(item) => (
+        <VodRow
+          item={item}
+          onPlay={onPlay}
+          onToggleFavorite={onToggleFavorite}
+          onToggleWatchlist={onToggleWatchlist}
+        />
+      )}
+    />
   );
 }
 
+const VodRow = memo(function VodRow({
+  item,
+  onPlay,
+  onToggleFavorite,
+  onToggleWatchlist,
+}: {
+  item: VodItem;
+  onPlay: (item: VodItem) => void;
+  onToggleFavorite: (item: VodItem, next: boolean) => Promise<void> | void;
+  onToggleWatchlist: (item: VodItem, next: boolean) => Promise<void> | void;
+}) {
+  return (
+    <div className="flex items-center gap-3 border-b border-white/5 px-3 py-2.5">
+      <button
+        onClick={() => onPlay(item)}
+        className="flex min-w-0 flex-1 items-center gap-3 text-left transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 rounded-lg"
+        aria-label={`Play ${item.cleanTitle ?? item.name}`}
+      >
+        <MediaThumb src={item.logoUrl} className="h-14 w-10 rounded-lg object-cover" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm text-white">{item.cleanTitle ?? item.name}</p>
+          <p className="truncate text-xs text-white/30">
+            {[item.year?.toString(), item.category].filter(Boolean).join(" / ") || "Movie"}
+          </p>
+        </div>
+      </button>
+      <WatchlistButton
+        inWatchlist={item.isInWatchlist}
+        onToggle={(next) => onToggleWatchlist(item, next)}
+        label={item.cleanTitle ?? item.name}
+        size="sm"
+      />
+      <FavoriteButton
+        isFavorite={item.isFavorite}
+        onToggle={(next) => onToggleFavorite(item, next)}
+        label={item.cleanTitle ?? item.name}
+        size="sm"
+      />
+    </div>
+  );
+});
+
 function SeriesList({
   items,
+  scrollRef,
+  onLoadMore,
   onSelect,
   onToggleFavorite,
   onToggleWatchlist,
 }: {
   items: SeriesSummary[];
+  scrollRef: RefObject<HTMLElement | null>;
+  onLoadMore: () => void;
   onSelect: (item: SeriesSummary) => void;
   onToggleFavorite: (item: SeriesSummary, next: boolean) => Promise<void> | void;
   onToggleWatchlist: (item: SeriesSummary, next: boolean) => Promise<void> | void;
@@ -1133,41 +1244,64 @@ function SeriesList({
   if (items.length === 0) return null;
 
   return (
-    <div className="flex flex-col divide-y divide-white/5 rounded-2xl border border-white/5 bg-white/[0.02]">
-      {items.map((item) => (
-        <div
-          key={`${item.sourceId}-${item.seriesTitle}`}
-          className="flex w-full items-center gap-3 px-3 py-2.5 transition-colors hover:bg-white/5 focus-within:bg-white/[0.04]"
-        >
-          <button
-            type="button"
-            onClick={() => onSelect(item)}
-            className="flex min-w-0 flex-1 items-center gap-3 text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-400"
-          >
-            <MediaThumb src={item.posterUrl} className="h-14 w-10 rounded-lg object-cover" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-white">{item.seriesTitle}</p>
-              <p className="truncate text-xs text-white/30">{item.category || "Series"}</p>
-            </div>
-            <ChevronRightIcon className="h-4 w-4 flex-shrink-0 text-white/20" aria-hidden />
-          </button>
-          <WatchlistButton
-            inWatchlist={item.isInWatchlist}
-            onToggle={(next) => onToggleWatchlist(item, next)}
-            label={item.seriesTitle}
-            size="sm"
-          />
-          <FavoriteButton
-            isFavorite={item.isFavorite}
-            onToggle={(next) => onToggleFavorite(item, next)}
-            label={item.seriesTitle}
-            size="sm"
-          />
-        </div>
-      ))}
-    </div>
+    <VirtualRows
+      items={items}
+      scrollRef={scrollRef}
+      estimateSize={76}
+      onEndReached={onLoadMore}
+      keyFor={(item) => `${item.sourceId}-${item.seriesTitle}`}
+      renderRow={(item) => (
+        <SeriesRow
+          item={item}
+          onSelect={onSelect}
+          onToggleFavorite={onToggleFavorite}
+          onToggleWatchlist={onToggleWatchlist}
+        />
+      )}
+    />
   );
 }
+
+const SeriesRow = memo(function SeriesRow({
+  item,
+  onSelect,
+  onToggleFavorite,
+  onToggleWatchlist,
+}: {
+  item: SeriesSummary;
+  onSelect: (item: SeriesSummary) => void;
+  onToggleFavorite: (item: SeriesSummary, next: boolean) => Promise<void> | void;
+  onToggleWatchlist: (item: SeriesSummary, next: boolean) => Promise<void> | void;
+}) {
+  return (
+    <div className="flex w-full items-center gap-3 border-b border-white/5 px-3 py-2.5 transition-colors hover:bg-white/5 focus-within:bg-white/[0.04]">
+      <button
+        type="button"
+        onClick={() => onSelect(item)}
+        className="flex min-w-0 flex-1 items-center gap-3 text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-400"
+      >
+        <MediaThumb src={item.posterUrl} className="h-14 w-10 rounded-lg object-cover" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm text-white">{item.seriesTitle}</p>
+          <p className="truncate text-xs text-white/30">{item.category || "Series"}</p>
+        </div>
+        <ChevronRightIcon className="h-4 w-4 flex-shrink-0 text-white/20" aria-hidden />
+      </button>
+      <WatchlistButton
+        inWatchlist={item.isInWatchlist}
+        onToggle={(next) => onToggleWatchlist(item, next)}
+        label={item.seriesTitle}
+        size="sm"
+      />
+      <FavoriteButton
+        isFavorite={item.isFavorite}
+        onToggle={(next) => onToggleFavorite(item, next)}
+        label={item.seriesTitle}
+        size="sm"
+      />
+    </div>
+  );
+});
 
 function MediaThumb({ src, className }: { src: string | null; className: string }) {
   if (!src) {
@@ -1217,7 +1351,7 @@ function FilterSelect({
 // Horizontal, scrollable genre chip-bar. Categories are canonical genres after
 // import normalization (nova_core::normalize_category), so each option is a
 // one-tap filter. Tapping the active chip (or "All") clears the filter.
-function GenreChips({
+const GenreChips = memo(function GenreChips({
   options,
   value,
   onChange,
@@ -1253,7 +1387,7 @@ function GenreChips({
       })}
     </div>
   );
-}
+});
 
 function SkeletonRows({ variant }: { variant: Tab }) {
   const thumbClass = variant === "live" ? "h-9 w-9" : "h-14 w-10";

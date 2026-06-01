@@ -82,3 +82,24 @@ html.nova-native-player-active .nova-native-player-shell,
 html.nova-native-player-active .nova-native-player-shell * {
   visibility: visible;
 }
+
+/* Section/tab content crossfade — keyed by `tab` so it replays on switch.
+   Cheap (opacity only, no layout), respects the global enter easing. */
+@keyframes nova-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.nova-fade-in {
+  animation: nova-fade-in var(--duration-fast) var(--ease-enter);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nova-fade-in {
+    animation: none;
+  }
+}

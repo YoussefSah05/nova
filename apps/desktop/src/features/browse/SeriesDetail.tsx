@@ -86,6 +86,7 @@ export function SeriesDetail({
           <img
             src={series.posterUrl}
             alt={series.seriesTitle}
+            loading="lazy"
             className="w-20 h-28 object-cover rounded-lg flex-shrink-0"
           />
         )}
@@ -169,6 +170,7 @@ export function SeriesDetail({
                         <img
                           src={ep.logoUrl}
                           alt=""
+                          loading="lazy"
                           className="w-16 h-9 object-cover rounded flex-shrink-0 bg-neutral-800"
                         />
                       ) : (

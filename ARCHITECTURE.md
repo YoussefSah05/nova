@@ -527,10 +527,25 @@ NOVA_PROBE_URL='<playlist url>' cargo run -p nova-xtream --example probe
 ### Imported content browse flow
 1. Home loads all sources for the active profile and keeps an explicit selected source.
 2. Counts are fetched with `count_channels`, `count_vod`, and `count_series` so tabs reflect the full import.
-3. Filter options come from persisted country/category values per source.
-4. Live and Movie rows load in 200-item pages using `limit` and `offset`; `Load more` appends the next page.
-5. Series rows are grouped summaries by title; selecting a series loads its episodes.
-6. Browse errors must surface in the UI and must not leave loading states active indefinitely.
+3. Filter options come from persisted country/category values per source. Country and category
+   filtering are both index-backed (`idx_channels_source_country`, `idx_channels_category`) so the
+   chip-bar stays fast on large playlists.
+4. Live, Movie **and** Series rows load in 200-item pages using `limit` and `offset`; the windowed
+   list prefetches the next page when the tail row nears the viewport (the `Load more` button remains
+   as a manual/a11y fallback). No tab ever loads its whole catalog up front.
+5. All three lists are **windowed** (`@tanstack/react-virtual`, see `features/browse/VirtualRows.tsx`):
+   only the visible rows (plus a small overscan) are mounted, so scrolling stays smooth even at tens
+   of thousands of rows. The list shares the browse `<section>` scroll container and feeds the
+   virtualizer a `scrollMargin` for the filter chrome above it. Rows are memoized (`ChannelRow` /
+   `VodRow` / `SeriesRow`) and fed stable `useCallback` handlers so the 60s EPG tick and
+   favourite/watchlist toggles don't re-render the whole window.
+6. Switching tabs is **stateful, not a refetch**: each tab's array, filtered total, and scroll
+   position are keyed by a `source|tab|query|country|category|reloadKey` signature. Returning to a
+   tab whose signature still matches restores instantly (no skeleton flash, scroll preserved); a
+   refresh/import bumps `reloadKey` and invalidates every tab. Section swaps get a cheap opacity
+   crossfade (`.nova-fade-in`).
+7. Series rows are grouped summaries by title; selecting a series loads its episodes.
+8. Browse errors must surface in the UI and must not leave loading states active indefinitely.
 
 ### Live playback flow
 1. User clicks a channel. Frontend calls `play_channel(channel_id, caption_mode)`.
