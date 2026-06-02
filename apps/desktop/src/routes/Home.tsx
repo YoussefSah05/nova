@@ -34,6 +34,7 @@ import {
   useBrowseCount,
   useCategories,
   useCountries,
+  useRegions,
   type BrowseFilters,
   type BrowseItem,
   type BrowseTab,
@@ -69,6 +70,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   }, [profile]);
   const [searchQuery, setSearchQuery] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
+  const [regionFilter, setRegionFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [sourceError, setSourceError] = useState<string | null>(null);
   // Reloads the non-query bits (source list + per-source totals) after a refresh.
@@ -91,12 +93,14 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
 
   const categoryOptions = useCategories(tab, profile.id, activeSourceId).data ?? [];
   const countryOptions = useCountries(profile.id, activeSourceId).data ?? [];
+  const regionOptions = useRegions(profile.id, activeSourceId).data ?? [];
 
   const query = filterParam(deferredSearchQuery);
   const category = filterParam(categoryFilter);
   const country = tab === "live" ? filterParam(countryFilter) : null;
-  const filters: BrowseFilters = { query, category, country };
-  const searchOrFilterActive = Boolean(query || category || country);
+  const region = tab === "live" ? filterParam(regionFilter) : null;
+  const filters: BrowseFilters = { query, category, country, region };
+  const searchOrFilterActive = Boolean(query || category || country || region);
 
   // ── Sources ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -230,8 +234,10 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   function resetBrowseState() {
     setSearchQuery("");
     setCountryFilter("");
+    setRegionFilter("");
     setCategoryFilter("");
     setSelectedSeries(null);
+    setSelectedContent(null);
   }
 
   async function handleSourceAdded() {
@@ -518,6 +524,14 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                 />
               </div>
 
+              {tab === "live" && regionOptions.length > 0 && (
+                <FilterSelect
+                  label="Region"
+                  value={regionFilter}
+                  options={regionOptions}
+                  onChange={setRegionFilter}
+                />
+              )}
               {tab === "live" && (
                 <FilterSelect
                   label="Country"
@@ -536,6 +550,9 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
                 {searchQuery && (
                   <FilterChip label="Search" value={searchQuery} onClear={() => setSearchQuery("")} />
+                )}
+                {regionFilter && (
+                  <FilterChip label="Region" value={regionFilter} onClear={() => setRegionFilter("")} />
                 )}
                 {countryFilter && (
                   <FilterChip label="Country" value={countryFilter} onClear={() => setCountryFilter("")} />

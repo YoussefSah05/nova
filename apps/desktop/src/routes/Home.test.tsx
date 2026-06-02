@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Channel, Profile, Source } from "@/types";
+import type { Channel, ChannelGroup, Profile, Source } from "@/types";
 import { Home } from "./Home";
 
 // The browse grid is windowed (@tanstack/react-virtual), rails lazy-mount via
@@ -103,6 +103,23 @@ function channel(id: number): Channel {
     lastPlayedAt: null,
     addedAt: null,
     dedupGroup: null,
+    channelGroup: null,
+    region: "MENA",
+  };
+}
+
+/// Live is grouped server-side now; map a channel to a singleton bundle.
+function groupFrom(c: Channel): ChannelGroup {
+  return {
+    group: c.name.toLowerCase(),
+    memberCount: 1,
+    representativeId: c.id,
+    title: c.name,
+    logoUrl: c.logoUrl,
+    category: c.category,
+    region: c.region,
+    isFavorite: c.isFavorite,
+    isInWatchlist: c.isInWatchlist,
   };
 }
 
@@ -119,6 +136,8 @@ function setupInvoke(channelsFor: (args: InvokeArgs) => Channel[]) {
         return Promise.resolve(3);
       case "list_channel_countries":
         return Promise.resolve(["US"]);
+      case "list_channel_regions":
+        return Promise.resolve(["MENA"]);
       case "list_channel_categories":
         return Promise.resolve(["News"]);
       case "list_vod_categories":
@@ -127,8 +146,9 @@ function setupInvoke(channelsFor: (args: InvokeArgs) => Channel[]) {
         return Promise.resolve(["Series"]);
       case "list_continue_watching":
         return Promise.resolve([]);
+      case "list_channel_groups":
+        return Promise.resolve(channelsFor(args).map(groupFrom));
       case "list_channels":
-        return Promise.resolve(channelsFor(args));
       case "list_vod":
       case "list_series":
         return Promise.resolve([]);
@@ -180,7 +200,7 @@ describe("Home", () => {
     expect(await screen.findByText("Channel 1")).toBeInTheDocument();
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith(
-        "list_channels",
+        "list_channel_groups",
         expect.objectContaining({ filters: expect.objectContaining({ query: "news" }) })
       )
     );

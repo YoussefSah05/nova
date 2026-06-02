@@ -36,6 +36,22 @@ export interface Channel {
   lastPlayedAt: number | null;
   addedAt: number | null;
   dedupGroup: string | null;
+  // Live brand-family grouping (Phase: live grouping).
+  channelGroup: string | null;
+  region: string | null;
+}
+
+/// One live brand-family bundle (e.g. all "beIN Sports N"), from list_channel_groups.
+export interface ChannelGroup {
+  group: string;
+  memberCount: number;
+  representativeId: number;
+  title: string;
+  logoUrl: string | null;
+  category: string | null;
+  region: string | null;
+  isFavorite: boolean;
+  isInWatchlist: boolean;
 }
 
 export interface VodItem {

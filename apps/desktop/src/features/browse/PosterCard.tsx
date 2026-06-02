@@ -52,11 +52,15 @@ export const PosterCard = memo(function PosterCard({
           </div>
         )}
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-        {item.variants && item.variants.length > 0 && (
+        {item.memberCount && item.memberCount > 1 ? (
+          <span className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm">
+            {item.memberCount} channels
+          </span>
+        ) : item.variants && item.variants.length > 0 ? (
           <span className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm">
             {item.variants.length + 1} versions
           </span>
-        )}
+        ) : null}
       </button>
 
       {/* Quick actions — revealed on hover/focus within the card. */}

@@ -12,6 +12,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Channel,
+  ChannelGroup,
   ContentSort,
   ContinueWatchingItem,
   SeriesSummary,
@@ -40,6 +41,10 @@ export interface BrowseItem {
   /// content is never dropped — it rides along on the representative so the
   /// detail screen / player can offer the alternate versions.
   variants?: BrowseItem[];
+  /// Live brand-family bundle: the group key + how many channels it holds. When
+  /// `memberCount > 1` the card opens the bundle screen instead of playing.
+  groupKey?: string;
+  memberCount?: number;
   channel?: Channel;
   vod?: VodItem;
   series?: SeriesSummary;
@@ -50,6 +55,7 @@ export interface BrowseItem {
 export interface BrowseFilters {
   country?: string | null;
   category?: string | null;
+  region?: string | null;
   query?: string | null;
   favoritesOnly?: boolean;
   watchlistOnly?: boolean;
@@ -61,7 +67,7 @@ export const RAIL_SIZE = 20;
 
 // ── Normalizers ───────────────────────────────────────────────────────────────
 
-function channelToItem(c: Channel): BrowseItem {
+export function channelToItem(c: Channel): BrowseItem {
   return {
     key: `live-${c.id}`,
     kind: "live",
@@ -74,6 +80,29 @@ function channelToItem(c: Channel): BrowseItem {
     isInWatchlist: c.isInWatchlist,
     dedupGroup: c.dedupGroup,
     channel: c,
+  };
+}
+
+/// Trailing standalone number stripped for a bundle's display title
+/// ("beIN Sports 1" → "beIN Sports") when it groups multiple channels.
+function prettyBrand(title: string): string {
+  return title.replace(/\s+\d+$/, "").trim() || title;
+}
+
+function channelGroupToItem(g: ChannelGroup): BrowseItem {
+  const bundle = g.memberCount > 1;
+  return {
+    key: `live-group-${g.group}`,
+    kind: "live",
+    id: g.representativeId,
+    title: bundle ? prettyBrand(g.title) : g.title,
+    subtitle: [g.region, g.category].filter(Boolean).join(" / ") || null,
+    posterUrl: g.logoUrl,
+    tvgId: null,
+    isFavorite: g.isFavorite,
+    isInWatchlist: g.isInWatchlist,
+    groupKey: g.group,
+    memberCount: g.memberCount,
   };
 }
 
@@ -128,10 +157,10 @@ const CATEGORIES_COMMAND: Record<BrowseTab, string> = {
   series: "list_series_categories",
 };
 
-/// Build the per-tab filter payload. Movies/series accept no `country`.
+/// Build the per-tab filter payload. Movies/series accept no `country`/`region`.
 function filterPayload(tab: BrowseTab, filters: BrowseFilters): BrowseFilters {
   if (tab === "live") return filters;
-  const { country: _country, ...rest } = filters;
+  const { country: _country, region: _region, ...rest } = filters;
   return rest;
 }
 
@@ -145,7 +174,8 @@ async function fetchItems(
 ): Promise<BrowseItem[]> {
   const args = { profileId, sourceId, limit, offset, filters: filterPayload(tab, filters) };
   if (tab === "live") {
-    return collapseDuplicates((await invoke<Channel[]>(LIST_COMMAND.live, args)).map(channelToItem));
+    // Live is grouped into brand-family bundles server-side (one card per brand).
+    return (await invoke<ChannelGroup[]>("list_channel_groups", args)).map(channelGroupToItem);
   }
   if (tab === "movies") {
     return collapseDuplicates((await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem));
@@ -204,6 +234,20 @@ async function fetchCountries(profileId: string, sourceId: number): Promise<stri
   return invoke<string[]>("list_channel_countries", { profileId, sourceId });
 }
 
+async function fetchRegions(profileId: string, sourceId: number): Promise<string[]> {
+  return invoke<string[]>("list_channel_regions", { profileId, sourceId });
+}
+
+/// All channels of one live brand-family bundle (for the bundle screen / cinema).
+export async function fetchChannelsInGroup(
+  profileId: string,
+  sourceId: number,
+  group: string
+): Promise<BrowseItem[]> {
+  const chans = await invoke<Channel[]>("list_channels_in_group", { profileId, sourceId, group });
+  return chans.map(channelToItem);
+}
+
 async function fetchContinueWatching(profileId: string): Promise<ContinueWatchingItem[]> {
   return invoke<ContinueWatchingItem[]>("list_continue_watching", { profileId, limit: RAIL_SIZE });
 }
@@ -250,6 +294,8 @@ export const browseKeys = {
     [...browseKeys.source(profileId, sourceId), "categories", tab] as const,
   countries: (profileId: string, sourceId: number) =>
     [...browseKeys.source(profileId, sourceId), "countries"] as const,
+  regions: (profileId: string, sourceId: number) =>
+    [...browseKeys.source(profileId, sourceId), "regions"] as const,
   continueWatching: (profileId: string) =>
     [...browseKeys.all, profileId, "continueWatching"] as const,
   rail: (profileId: string, sourceId: number, tab: BrowseTab, railId: string) =>
@@ -277,6 +323,14 @@ export function useCategories(tab: BrowseTab, profileId: string, sourceId: numbe
   return useQuery({
     queryKey: browseKeys.categories(profileId, sourceId ?? -1, tab),
     queryFn: () => fetchCategories(tab, profileId, sourceId!),
+    enabled: sourceId !== null,
+  });
+}
+
+export function useRegions(profileId: string, sourceId: number | null) {
+  return useQuery({
+    queryKey: browseKeys.regions(profileId, sourceId ?? -1),
+    queryFn: () => fetchRegions(profileId, sourceId!),
     enabled: sourceId !== null,
   });
 }
