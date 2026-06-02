@@ -20,6 +20,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SettingsModal } from "@/features/settings/SettingsModal";
 import { SeriesDetail } from "@/features/browse/SeriesDetail";
+import { ContentDetail } from "@/features/browse/ContentDetail";
 import { BrowseRails } from "@/features/browse/BrowseRails";
 import { BrowseGrid } from "@/features/browse/BrowseGrid";
 import { BrowseBoundary } from "@/features/browse/BrowseBoundary";
@@ -56,6 +57,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const [activeSourceId, setActiveSourceId] = useState<number | null>(null);
   const [tab, setTab] = useState<Tab>("live");
   const [selectedSeries, setSelectedSeries] = useState<SeriesSummary | null>(null);
+  // A movie's "starting screen" (overview + actions) shown before playback.
+  const [selectedContent, setSelectedContent] = useState<BrowseItem | null>(null);
   const [playingMedia, setPlayingMedia] = useState<PlayMedia | null>(null);
   const [showAddSource, setShowAddSource] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -256,11 +259,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     }
   }
 
-  const activate = useCallback((item: BrowseItem) => {
-    if (item.kind === "series" && item.series) {
-      setSelectedSeries(item.series);
-      return;
-    }
+  const playItem = useCallback((item: BrowseItem) => {
     setPlayingMedia({
       kind: item.kind === "live" ? "live" : "vod",
       id: item.id,
@@ -269,6 +268,22 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       posterUrl: item.posterUrl,
     });
   }, []);
+
+  const activate = useCallback(
+    (item: BrowseItem) => {
+      if (item.kind === "series" && item.series) {
+        setSelectedSeries(item.series);
+        return;
+      }
+      // Movies open an overview "starting screen"; live plays immediately.
+      if (item.kind === "vod") {
+        setSelectedContent(item);
+        return;
+      }
+      playItem(item);
+    },
+    [playItem]
+  );
 
   const toggleFavorite = useCallback(
     async (item: BrowseItem, next: boolean) => {
@@ -340,6 +355,30 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             }
           />
         </div>
+        {playingMedia && (
+          <PlayerModal
+            profileId={profile.id}
+            media={playingMedia}
+            onClose={() => setPlayingMedia(null)}
+            sourceId={activeSourceId}
+            onPlayMedia={setPlayingMedia}
+          />
+        )}
+      </>
+    );
+  }
+
+  if (selectedContent) {
+    return (
+      <>
+        <ContentDetail
+          profileId={profile.id}
+          item={selectedContent}
+          onBack={() => setSelectedContent(null)}
+          onPlay={playItem}
+          onToggleFavorite={toggleFavorite}
+          onToggleWatchlist={toggleWatchlist}
+        />
         {playingMedia && (
           <PlayerModal
             profileId={profile.id}

@@ -92,12 +92,19 @@ export function SeriesDetail({
         )}
         <div className="flex flex-1 items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-xl font-semibold text-white">{series.seriesTitle}</h2>
+            <h2 className="text-xl font-semibold text-white">
+              {series.canonicalTitle ?? series.seriesTitle}
+            </h2>
             <p className="text-sm text-white/50 mt-1">
               {seasonCount} season{seasonCount !== 1 ? "s" : ""} ·{" "}
               {episodeCount} episode{episodeCount !== 1 ? "s" : ""}
               {series.category ? ` · ${series.category}` : ""}
             </p>
+            {series.overview && (
+              <p className="mt-2 line-clamp-3 max-w-xl text-sm leading-6 text-white/70">
+                {series.overview}
+              </p>
+            )}
           </div>
           <div className="flex flex-shrink-0 items-center gap-2">
             <WatchlistButton

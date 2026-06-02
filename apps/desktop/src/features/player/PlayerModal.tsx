@@ -1203,6 +1203,26 @@ export function PlayerModal({
     [nativeToken]
   );
 
+  // Apply the profile's preferred audio language once per stream, when tracks
+  // first arrive (the start screen sets this; exact switching stays manual).
+  const preferredAudioAppliedRef = useRef(false);
+  useEffect(() => {
+    preferredAudioAppliedRef.current = false;
+  }, [media.id]);
+  useEffect(() => {
+    if (preferredAudioAppliedRef.current) return;
+    const pref = profileSettings.settings.preferredAudioLang;
+    if (!pref || audioTracks.length < 2) return;
+    const match = audioTracks.find((t) => t.lang?.toLowerCase().startsWith(pref.toLowerCase()));
+    if (match && match.id !== audioTrackId) selectAudioTrack(match.id);
+    preferredAudioAppliedRef.current = true;
+  }, [
+    audioTracks,
+    audioTrackId,
+    selectAudioTrack,
+    profileSettings.settings.preferredAudioLang,
+  ]);
+
   const changeSpeed = useCallback(
     (next: number) => {
       setSpeed(next);
