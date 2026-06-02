@@ -303,10 +303,13 @@ impl<'a> VodRepository<'a> {
         Ok(())
     }
 
-    /// Movies for a source that have not yet had a TMDB pass.
+    /// Movies for a source that have not yet had a TMDB pass. Searches use the
+    /// **raw `name`** (the caller runs it through `search_title`, which recovers
+    /// the real title — incl. non-Latin — even when `clean_title` is broken, e.g.
+    /// `clean_title='EN-AR'` from `EN-AR| 大囍事 (2009)`).
     pub async fn list_for_tmdb(&self, source_id: i64) -> Result<Vec<TmdbQuery>, StorageError> {
         let rows = sqlx::query!(
-            r#"SELECT id as "id!: i64", name, clean_title, year
+            r#"SELECT id as "id!: i64", name, year
                FROM vod_items
                WHERE source_id = ? AND tmdb_status IS NULL"#,
             source_id,
@@ -317,7 +320,7 @@ impl<'a> VodRepository<'a> {
             .into_iter()
             .map(|r| TmdbQuery {
                 id: r.id,
-                title: r.clean_title.unwrap_or(r.name),
+                title: r.name,
                 year: r.year,
             })
             .collect())

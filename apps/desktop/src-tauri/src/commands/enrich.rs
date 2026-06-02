@@ -13,8 +13,8 @@ use nova_enrich::{
     FastEmbedder, GenreClassifier, TmdbClient, TmdbMatch, MIN_CONFIDENCE, WEAK_CONFIDENCE,
 };
 use nova_storage::{
-    ChannelRepository, EnrichUpdate, ProfileSettingsRepository, SeriesRepository, SeriesTmdbWrite,
-    TmdbCacheRepository, TmdbWrite, UnenrichedRow, VodRepository,
+    ChannelRepository, EnrichUpdate, ProfileSettingsRepository, SeriesRepository, SeriesTmdbQuery,
+    SeriesTmdbWrite, TmdbCacheRepository, TmdbQuery, TmdbWrite, UnenrichedRow, VodRepository,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -28,6 +28,9 @@ use super::require_profile_pool;
 const MODEL_ID: &str = "multilingual-e5-small";
 /// Rows embedded per batch; small enough that progress advances visibly.
 const EMBED_CHUNK: usize = 256;
+/// TMDB results flushed to the DB this often, so a long pass persists progress
+/// incrementally (and re-runs resume) instead of losing everything on a hiccup.
+const TMDB_WRITE_BATCH: usize = 200;
 /// Variant entries embed nearly identically; cluster above this cosine. Used only
 /// as a *secondary* guard now — primary grouping is exact `dedup_key` equality.
 const DEDUP_THRESHOLD: f32 = 0.92;
@@ -270,66 +273,111 @@ async fn run_tmdb(
     };
     emit(0);
 
-    let mut movie_writes = Vec::with_capacity(movies.len());
+    // Per-item errors (a transient TMDB hiccup / rate-limit on one of thousands
+    // of calls) must NOT abort the whole pass — skip the row (it stays unenriched
+    // and is retried next run) and keep going. Matches are flushed in batches so
+    // progress persists and a re-run resumes via `tmdb_status IS NULL`.
+    let mut movie_writes: Vec<TmdbWrite> = Vec::new();
     for q in &movies {
-        // Use a search-optimized query (strip prefixes/year/junk); year separate.
-        let query = nova_core::clean::search_title(&q.title);
-        let year = q.year.map(|y| y as i32);
-        let qlc = query.to_lowercase();
-        let mut best: Option<(TmdbMatch, f32)> = None;
-
-        // 1) movie + year → 2) movie no-year → 3) multi. Stop once confident.
-        let key = format!("movie::{qlc}::{}", year.unwrap_or(0));
-        let body = fetch_cached(&cache, &key, || client.search_movie(&query, year)).await?;
-        best = take_better(best, score_body(&body, &query, year, &movie_genres)?);
-
-        if year.is_some() && !is_confident(&best) {
-            let key = format!("movie::{qlc}::noyear");
-            let body = fetch_cached(&cache, &key, || client.search_movie(&query, None)).await?;
-            best = take_better(best, score_body(&body, &query, year, &movie_genres)?);
+        match match_movie(&client, &cache, q, &movie_genres).await {
+            Ok(best) => movie_writes.push(to_movie_write(q.id, best)),
+            Err(e) => {
+                tracing::warn!(id = q.id, error = ?e, "tmdb movie match failed; retry next run")
+            }
         }
-        if !is_confident(&best) {
-            let key = format!("multi::{qlc}");
-            let body = fetch_cached(&cache, &key, || client.search_multi(&query)).await?;
-            best = take_better(best, score_body(&body, &query, year, &movie_genres)?);
-        }
-
-        movie_writes.push(to_movie_write(q.id, best));
         done += 1;
         if done.is_multiple_of(25) {
             emit(done);
         }
+        if movie_writes.len() >= TMDB_WRITE_BATCH {
+            VodRepository::new(pool).apply_tmdb(&movie_writes).await?;
+            movie_writes.clear();
+        }
     }
-    VodRepository::new(pool).apply_tmdb(&movie_writes).await?;
+    if !movie_writes.is_empty() {
+        VodRepository::new(pool).apply_tmdb(&movie_writes).await?;
+    }
 
     // ── Series (search by title only; no year column) ──
-    let mut series_writes = Vec::with_capacity(series.len());
+    let mut series_writes: Vec<SeriesTmdbWrite> = Vec::new();
     for q in &series {
-        // Series-specific normalization: also strips season/series indicator words.
-        let query = nova_core::clean::search_series_title(&q.series_title);
-        let qlc = query.to_lowercase();
-        let mut best: Option<(TmdbMatch, f32)> = None;
-
-        let key = format!("tv::{qlc}");
-        let body = fetch_cached(&cache, &key, || client.search_tv(&query)).await?;
-        best = take_better(best, score_body(&body, &query, None, &tv_genres)?);
-
-        if !is_confident(&best) {
-            let key = format!("multi::{qlc}");
-            let body = fetch_cached(&cache, &key, || client.search_multi(&query)).await?;
-            best = take_better(best, score_body(&body, &query, None, &tv_genres)?);
+        match match_series(&client, &cache, q, &tv_genres).await {
+            Ok(best) => series_writes.push(to_series_write(q.series_title.clone(), best)),
+            Err(e) => {
+                tracing::warn!(series = %q.series_title, error = ?e, "tmdb series match failed; retry next run")
+            }
         }
-
-        series_writes.push(to_series_write(q.series_title.clone(), best));
         done += 1;
         if done.is_multiple_of(25) {
             emit(done);
         }
+        if series_writes.len() >= TMDB_WRITE_BATCH {
+            SeriesRepository::new(pool)
+                .apply_tmdb(source_id, &series_writes)
+                .await?;
+            series_writes.clear();
+        }
     }
-    SeriesRepository::new(pool)
-        .apply_tmdb(source_id, &series_writes)
-        .await?;
+    if !series_writes.is_empty() {
+        SeriesRepository::new(pool)
+            .apply_tmdb(source_id, &series_writes)
+            .await?;
+    }
     Ok(())
+}
+
+/// Match one movie via the cascade: movie+year → movie no-year → `/search/multi`,
+/// stopping once confident. Network errors propagate so the caller can skip just
+/// this row.
+async fn match_movie(
+    client: &TmdbClient,
+    cache: &TmdbCacheRepository<'_>,
+    q: &TmdbQuery,
+    genres: &HashMap<i64, String>,
+) -> Result<Option<(TmdbMatch, f32)>, ApiError> {
+    let query = nova_core::clean::search_title(&q.title);
+    let year = q.year.map(|y| y as i32);
+    let qlc = query.to_lowercase();
+    let mut best: Option<(TmdbMatch, f32)> = None;
+
+    let key = format!("movie::{qlc}::{}", year.unwrap_or(0));
+    let body = fetch_cached(cache, &key, || client.search_movie(&query, year)).await?;
+    best = take_better(best, score_body(&body, &query, year, genres)?);
+
+    if year.is_some() && !is_confident(&best) {
+        let key = format!("movie::{qlc}::noyear");
+        let body = fetch_cached(cache, &key, || client.search_movie(&query, None)).await?;
+        best = take_better(best, score_body(&body, &query, year, genres)?);
+    }
+    if !is_confident(&best) {
+        let key = format!("multi::{qlc}");
+        let body = fetch_cached(cache, &key, || client.search_multi(&query)).await?;
+        best = take_better(best, score_body(&body, &query, year, genres)?);
+    }
+    Ok(best)
+}
+
+/// Match one series: `/search/tv` → `/search/multi` fallback.
+async fn match_series(
+    client: &TmdbClient,
+    cache: &TmdbCacheRepository<'_>,
+    q: &SeriesTmdbQuery,
+    genres: &HashMap<i64, String>,
+) -> Result<Option<(TmdbMatch, f32)>, ApiError> {
+    let query = nova_core::clean::search_series_title(&q.series_title);
+    let qlc = query.to_lowercase();
+    let mut best: Option<(TmdbMatch, f32)> = None;
+
+    let key = format!("tv::{qlc}");
+    let body = fetch_cached(cache, &key, || client.search_tv(&query)).await?;
+    best = take_better(best, score_body(&body, &query, None, genres)?);
+
+    if !is_confident(&best) {
+        let key = format!("multi::{qlc}");
+        let body = fetch_cached(cache, &key, || client.search_multi(&query)).await?;
+        best = take_better(best, score_body(&body, &query, None, genres)?);
+    }
+    Ok(best)
 }
 
 /// Parse a search body and return its best-scored candidate.
