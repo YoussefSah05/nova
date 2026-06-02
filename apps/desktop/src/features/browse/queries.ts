@@ -288,8 +288,8 @@ export const browseKeys = {
   all: ["browse"] as const,
   source: (profileId: string, sourceId: number) =>
     [...browseKeys.all, profileId, sourceId] as const,
-  count: (profileId: string, sourceId: number, tab: BrowseTab) =>
-    [...browseKeys.source(profileId, sourceId), "count", tab] as const,
+  count: (profileId: string, sourceId: number, tab: BrowseTab, filters: BrowseFilters = {}) =>
+    [...browseKeys.source(profileId, sourceId), "count", tab, filters] as const,
   categories: (profileId: string, sourceId: number, tab: BrowseTab) =>
     [...browseKeys.source(profileId, sourceId), "categories", tab] as const,
   countries: (profileId: string, sourceId: number) =>
@@ -313,7 +313,7 @@ export function useBrowseCount(
   filters: BrowseFilters = {}
 ) {
   return useQuery({
-    queryKey: browseKeys.count(profileId, sourceId ?? -1, tab),
+    queryKey: browseKeys.count(profileId, sourceId ?? -1, tab, filters),
     queryFn: () => fetchCount(tab, profileId, sourceId!, filters),
     enabled: sourceId !== null,
   });
@@ -397,7 +397,7 @@ export function prefetchSourceOverview(qc: QueryClient, profileId: string, sourc
   });
   for (const tab of ["live", "movies", "series"] as const) {
     void qc.prefetchQuery({
-      queryKey: browseKeys.count(profileId, sourceId, tab),
+      queryKey: browseKeys.count(profileId, sourceId, tab, {}),
       queryFn: () => fetchCount(tab, profileId, sourceId, {}),
     });
     void qc.prefetchQuery({
