@@ -45,7 +45,11 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
     void refresh();
     const un = listen<EnrichProgress>("catalog:enrich:progress", (e) => {
       setProgress(e.payload);
-      if (e.payload.done) setBusy(null);
+      if (e.payload.done) {
+        setBusy(null);
+        // "no-model" means the marker vanished — re-sync so the button flips to Download.
+        if (e.payload.stage === "no-model") void refresh();
+      }
     });
     return () => {
       void un.then((u) => u());
@@ -83,10 +87,19 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
     // `busy` clears on the terminal `catalog:enrich:progress` event.
   };
 
-  const runLabel =
-    progress && !progress.done && progress.total > 0
-      ? `${progress.stage}… ${progress.processed}/${progress.total}`
-      : "Running…";
+  const runLabel = (() => {
+    if (!progress || progress.done) return "Running…";
+    if (progress.stage === "loading-model") return "Loading model…";
+    const stageWord =
+      progress.stage === "embedding"
+        ? "Embedding"
+        : progress.stage === "matching"
+          ? "Matching"
+          : "Working";
+    return progress.total > 0
+      ? `${stageWord} ${progress.processed}/${progress.total}`
+      : `${stageWord}…`;
+  })();
 
   return (
     <div className="flex flex-col gap-6">

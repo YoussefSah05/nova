@@ -39,6 +39,29 @@ pub fn polish_title(raw: &str) -> String {
     }
 }
 
+/// A grouping key for near-duplicate detection. Strips the same quality/codec
+/// junk as [`polish_title`] and normalizes to lowercase alphanumerics, but
+/// **preserves distinguishing numbers** so genuinely different entries never
+/// merge: `BeIN Sports 1` ≠ `BeIN Sports 2`, `Rocky` ≠ `Rocky 2`, while
+/// `HBO`, `HBO HD`, `HBO ᴴᴰ`, `HBO FHD` all collapse to `hbo`.
+///
+/// Returns an empty string when nothing distinctive remains (e.g. a channel
+/// literally named "HD"); callers treat an empty key as "do not group".
+pub fn dedup_key(raw: &str) -> String {
+    fold(raw)
+        .split_whitespace()
+        .filter(|tok| !is_junk_token(tok))
+        .map(|tok| {
+            tok.chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(|c| c.to_lowercase())
+                .collect::<String>()
+        })
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Fold decorative Unicode to ASCII: fullwidth forms and the modifier/superscript
 /// capital letters IPTV providers use as flair (`ᴴᴰ`, `ᵁᴴᴰ`). Other characters
 /// (Arabic, accented Latin, …) pass through untouched.
@@ -149,5 +172,29 @@ mod tests {
         // A channel literally named with only a quality tag keeps the original.
         assert_eq!(polish_title("HD"), "HD");
         assert_eq!(polish_title(""), "");
+    }
+
+    #[test]
+    fn dedup_key_merges_quality_variants() {
+        // Quality variants share a key (true duplicates).
+        assert_eq!(dedup_key("HBO"), "hbo");
+        assert_eq!(dedup_key("HBO HD"), "hbo");
+        assert_eq!(dedup_key("HBO ᴴᴰ"), "hbo");
+        assert_eq!(dedup_key("HBO FHD"), "hbo");
+    }
+
+    #[test]
+    fn dedup_key_keeps_numbered_variants_distinct() {
+        // Different numbers ⇒ different keys ⇒ never merged (the content-loss bug).
+        assert_ne!(dedup_key("BeIN Sports 1 HD"), dedup_key("BeIN Sports 2 HD"));
+        assert_eq!(dedup_key("BeIN Sports 1 HD"), "bein sports 1");
+        assert_ne!(dedup_key("Rocky"), dedup_key("Rocky 2"));
+        // A "backup"/alternate variant stays separate so it isn't hidden.
+        assert_ne!(dedup_key("HBO"), dedup_key("HBO Backup"));
+    }
+
+    #[test]
+    fn dedup_key_empty_when_only_junk() {
+        assert_eq!(dedup_key("HD"), "");
     }
 }

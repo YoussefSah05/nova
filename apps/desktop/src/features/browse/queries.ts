@@ -36,6 +36,10 @@ export interface BrowseItem {
   isInWatchlist: boolean;
   /// Enrichment de-dup cluster key — variants collapse to one card per page.
   dedupGroup?: string | null;
+  /// Other members of this item's dedup group (quality/backup variants). The
+  /// content is never dropped — it rides along on the representative so the
+  /// detail screen / player can offer the alternate versions.
+  variants?: BrowseItem[];
   channel?: Channel;
   vod?: VodItem;
   series?: SeriesSummary;
@@ -152,14 +156,27 @@ async function fetchItems(
 /// Collapse enrichment de-dup variants within a page: keep the first item of
 /// each `dedupGroup` (items without a group are kept as-is). Page-local — exact
 /// for rails (one page) and good enough for the grid's 200-item pages.
+/// Collapse a page's dedup groups to one representative card each, but keep the
+/// other members as `variants` on the representative (lossless — nothing is
+/// dropped, so quality/backup versions stay reachable). Items without a group
+/// pass through unchanged.
 function collapseDuplicates(items: BrowseItem[]): BrowseItem[] {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    if (!item.dedupGroup) return true;
-    if (seen.has(item.dedupGroup)) return false;
-    seen.add(item.dedupGroup);
-    return true;
-  });
+  const repAt = new Map<string, number>();
+  const out: BrowseItem[] = [];
+  for (const item of items) {
+    if (!item.dedupGroup) {
+      out.push(item);
+      continue;
+    }
+    const at = repAt.get(item.dedupGroup);
+    if (at === undefined) {
+      repAt.set(item.dedupGroup, out.length);
+      out.push({ ...item, variants: [] });
+    } else {
+      (out[at].variants ??= []).push(item);
+    }
+  }
+  return out;
 }
 
 async function fetchCount(

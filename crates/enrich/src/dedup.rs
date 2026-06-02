@@ -1,16 +1,24 @@
-//! Near-duplicate clustering. IPTV catalogs are full of variants — `HBO`,
-//! `HBO ᴴᴰ`, `HBO FHD`, `HBO Backup` — that should collapse into one logical
-//! entry. We bucket on a cheap key first (keeping comparisons O(n) per bucket,
-//! not O(n²) over the whole catalog), then greedily cluster within a bucket by
-//! cosine similarity against each cluster's representative.
+//! Near-duplicate clustering. IPTV catalogs are full of *quality* variants —
+//! `HBO`, `HBO ᴴᴰ`, `HBO FHD` — that should collapse into one logical entry. But
+//! genuinely different entries that merely look alike — `BeIN Sports 1` vs `BeIN
+//! Sports 2`, `Rocky` vs `Rocky 2` — must NOT merge (that was losing content).
+//!
+//! So grouping is gated on an exact rules `key` (`nova_core::clean::dedup_key`,
+//! which strips quality junk but preserves distinguishing numbers); embedding
+//! cosine is only a secondary guard against the rare case where two different
+//! things normalize to the same key. Items with an empty key never group. Keyed
+//! lookup keeps the whole pass O(n).
+
+use std::collections::HashMap;
 
 use crate::cosine;
 
-/// An item to cluster: a stable `id`, a coarse `bucket` key (e.g. first title
-/// token or category) that gates which items are even compared, and its vector.
+/// An item to cluster: a stable `id`, a coarse `bucket` (first title token), an
+/// exact grouping `key` (empty ⇒ never group), and its embedding vector.
 pub struct DedupItem {
     pub id: i64,
     pub bucket: String,
+    pub key: String,
     pub vector: Vec<f32>,
 }
 
@@ -20,32 +28,34 @@ pub struct Cluster {
     pub member_ids: Vec<i64>,
 }
 
-/// Greedily cluster items by cosine similarity ≥ `threshold` within each bucket.
-/// Order-stable: items keep input order; each joins the first representative it
-/// matches, else starts a new cluster. Returns clusters in first-seen order.
+/// Group items that share an exact `(bucket, key)` and whose vectors are at least
+/// `threshold` cosine-similar. Order-stable; returns clusters in first-seen order.
 pub fn cluster(items: &[DedupItem], threshold: f32) -> Vec<Cluster> {
-    // (bucket, representative-vector, cluster-index)
-    let mut reps: Vec<(&str, &[f32], usize)> = Vec::new();
     let mut clusters: Vec<Cluster> = Vec::new();
+    // Representative vector per cluster index (borrows from `items`).
+    let mut rep_vec: Vec<&[f32]> = Vec::new();
+    // First cluster index seen for each (bucket, key).
+    let mut by_key: HashMap<(&str, &str), usize> = HashMap::new();
 
     for item in items {
-        let mut joined = None;
-        for (bucket, rep_vec, idx) in &reps {
-            if *bucket == item.bucket && cosine(rep_vec, &item.vector) >= threshold {
-                joined = Some(*idx);
-                break;
+        // An empty key (only junk in the name) never groups.
+        if !item.key.is_empty() {
+            let k = (item.bucket.as_str(), item.key.as_str());
+            if let Some(&idx) = by_key.get(&k) {
+                if cosine(rep_vec[idx], &item.vector) >= threshold {
+                    clusters[idx].member_ids.push(item.id);
+                    continue;
+                }
+                // Same key but dissimilar vectors — fall through to a new cluster
+                // without remapping the key (rare; the first rep keeps the key).
+            } else {
+                by_key.insert(k, clusters.len());
             }
         }
-        match joined {
-            Some(idx) => clusters[idx].member_ids.push(item.id),
-            None => {
-                let idx = clusters.len();
-                clusters.push(Cluster {
-                    member_ids: vec![item.id],
-                });
-                reps.push((&item.bucket, &item.vector, idx));
-            }
-        }
+        clusters.push(Cluster {
+            member_ids: vec![item.id],
+        });
+        rep_vec.push(&item.vector);
     }
     clusters
 }
@@ -54,20 +64,21 @@ pub fn cluster(items: &[DedupItem], threshold: f32) -> Vec<Cluster> {
 mod tests {
     use super::*;
 
-    fn item(id: i64, bucket: &str, v: Vec<f32>) -> DedupItem {
+    fn item(id: i64, bucket: &str, key: &str, v: Vec<f32>) -> DedupItem {
         DedupItem {
             id,
             bucket: bucket.to_string(),
+            key: key.to_string(),
             vector: v,
         }
     }
 
     #[test]
-    fn collapses_near_identical_within_bucket() {
+    fn collapses_near_identical_within_key() {
         let items = vec![
-            item(1, "hbo", vec![1.0, 0.0]),
-            item(2, "hbo", vec![0.99, 0.01]), // ~same as 1
-            item(3, "hbo", vec![0.0, 1.0]),   // different
+            item(1, "hbo", "hbo", vec![1.0, 0.0]),
+            item(2, "hbo", "hbo", vec![0.99, 0.01]), // same key, ~same vector
+            item(3, "hbo", "hbo", vec![0.0, 1.0]),   // same key, orthogonal → guard splits
         ];
         let clusters = cluster(&items, 0.95);
         assert_eq!(clusters.len(), 2);
@@ -76,10 +87,21 @@ mod tests {
     }
 
     #[test]
-    fn different_buckets_never_merge() {
+    fn different_keys_never_merge() {
+        // Identical vectors but different keys (e.g. "Sports 1" vs "Sports 2").
         let items = vec![
-            item(1, "a", vec![1.0, 0.0]),
-            item(2, "b", vec![1.0, 0.0]), // identical vector, different bucket
+            item(1, "bein", "bein sports 1", vec![1.0, 0.0]),
+            item(2, "bein", "bein sports 2", vec![1.0, 0.0]),
+        ];
+        let clusters = cluster(&items, 0.5);
+        assert_eq!(clusters.len(), 2);
+    }
+
+    #[test]
+    fn empty_key_never_groups() {
+        let items = vec![
+            item(1, "hd", "", vec![1.0, 0.0]),
+            item(2, "hd", "", vec![1.0, 0.0]),
         ];
         let clusters = cluster(&items, 0.5);
         assert_eq!(clusters.len(), 2);

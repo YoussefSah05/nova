@@ -26,7 +26,10 @@ use crate::state::AppState;
 use super::require_profile_pool;
 
 const MODEL_ID: &str = "multilingual-e5-small";
-/// Variant entries embed nearly identically; cluster above this cosine.
+/// Rows embedded per batch; small enough that progress advances visibly.
+const EMBED_CHUNK: usize = 256;
+/// Variant entries embed nearly identically; cluster above this cosine. Used only
+/// as a *secondary* guard now — primary grouping is exact `dedup_key` equality.
 const DEDUP_THRESHOLD: f32 = 0.92;
 /// Only fill a genre when the nearest label clears this — avoids weak guesses.
 const GENRE_THRESHOLD: f32 = 0.78;
@@ -90,8 +93,20 @@ pub async fn start_enrichment(
 ) -> Result<(), ApiError> {
     let dir = embeddings_dir(&app)?;
     if !marker(&dir).exists() {
-        // No model → silently skip, so auto-triggering after import is harmless.
-        // The Settings panel surfaces install state explicitly.
+        // No model installed. Auto-trigger after import is harmless, but emit a
+        // terminal event so a *manual* run from Settings doesn't spin forever —
+        // the panel turns this into a "download the model first" prompt.
+        let _ = app.emit(
+            "catalog:enrich:progress",
+            EnrichProgress {
+                source_id,
+                stage: "no-model".into(),
+                processed: 0,
+                total: 0,
+                done: true,
+                error: None,
+            },
+        );
         return Ok(());
     }
     let pool = require_profile_pool(&profile_id, &state).await?;
@@ -144,10 +159,13 @@ async fn run_enrichment(
         emit("complete", 0, true);
         return Ok(());
     }
-    emit("embedding", 0, false);
+    // The first model load is slow (cold ONNX init); tell the UI before we block.
+    emit("loading-model", 0, false);
 
     // Embedding + clustering is CPU-heavy and synchronous — do it off the async
-    // runtime, then write results back.
+    // runtime. Embed in chunks and emit progress per chunk so the bar actually
+    // moves (the whole-catalog single call is what made it look stuck at 0).
+    let app_bg = app.clone();
     let (ch_updates, vod_updates) = tauri::async_runtime::spawn_blocking(
         move || -> Result<(Vec<EnrichUpdate>, Vec<EnrichUpdate>), String> {
             let embedder = FastEmbedder::load(&cache_dir, false).map_err(|e| e.to_string())?;
@@ -157,8 +175,32 @@ async fn run_enrichment(
             let labels: Vec<(String, Vec<f32>)> =
                 genre_strings.into_iter().zip(label_vecs).collect();
             let classifier = GenreClassifier::new(labels);
-            let ch = enrich_rows(&embedder, &classifier, &ch_rows).map_err(|e| e.to_string())?;
-            let vod = enrich_rows(&embedder, &classifier, &vod_rows).map_err(|e| e.to_string())?;
+
+            // Embed channels + movies in one 0..total sweep, then split the
+            // vectors back out for per-type clustering.
+            let ch_n = ch_rows.len();
+            let mut texts: Vec<String> = Vec::with_capacity(total);
+            texts.extend(ch_rows.iter().map(|r| r.text.clone()));
+            texts.extend(vod_rows.iter().map(|r| r.text.clone()));
+
+            let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(total);
+            for batch in texts.chunks(EMBED_CHUNK) {
+                vectors.extend(embedder.embed(batch).map_err(|e| e.to_string())?);
+                let _ = app_bg.emit(
+                    "catalog:enrich:progress",
+                    EnrichProgress {
+                        source_id,
+                        stage: "embedding".into(),
+                        processed: vectors.len(),
+                        total,
+                        done: false,
+                        error: None,
+                    },
+                );
+            }
+            let (ch_vecs, vod_vecs) = vectors.split_at(ch_n);
+            let ch = cluster_and_genre(&ch_rows, ch_vecs, &classifier);
+            let vod = cluster_and_genre(&vod_rows, vod_vecs, &classifier);
             Ok((ch, vod))
         },
     )
@@ -329,25 +371,24 @@ fn to_series_write(series_title: String, m: Option<nova_enrich::TmdbMatch>) -> S
     }
 }
 
-/// Embed a batch, cluster near-duplicates (within a cheap first-token bucket),
-/// and zero-shot a genre for rows that lack one.
-fn enrich_rows(
-    embedder: &FastEmbedder,
-    classifier: &GenreClassifier,
+/// Cluster near-duplicates over already-computed vectors (embedding happens in
+/// the chunked sweep in `run_enrichment`) and zero-shot a genre for rows lacking
+/// one.
+fn cluster_and_genre(
     rows: &[UnenrichedRow],
-) -> Result<Vec<EnrichUpdate>, EnrichError> {
+    vectors: &[Vec<f32>],
+    classifier: &GenreClassifier,
+) -> Vec<EnrichUpdate> {
     if rows.is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    let texts: Vec<String> = rows.iter().map(|r| r.text.clone()).collect();
-    let vectors = embedder.embed(&texts)?;
-
     let items: Vec<DedupItem> = rows
         .iter()
-        .zip(&vectors)
+        .zip(vectors)
         .map(|(r, v)| DedupItem {
             id: r.id,
             bucket: bucket_key(&r.text),
+            key: nova_core::clean::dedup_key(&r.text),
             vector: v.clone(),
         })
         .collect();
@@ -360,9 +401,8 @@ fn enrich_rows(
         }
     }
 
-    Ok(rows
-        .iter()
-        .zip(&vectors)
+    rows.iter()
+        .zip(vectors)
         .map(|(r, v)| {
             let rep = group_of.get(&r.id).copied().unwrap_or(r.id);
             let needs_genre = r.category.as_deref().is_none_or(|c| c.trim().is_empty());
@@ -379,7 +419,7 @@ fn enrich_rows(
                 category,
             }
         })
-        .collect())
+        .collect()
 }
 
 /// Coarse bucket key (first alphanumeric token, lowercased) so only plausibly
