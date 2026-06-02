@@ -61,13 +61,11 @@ fn install_macos_player_layer(
         let webview_view: &NSView = &*wk_ptr.cast::<NSView>();
         let ns_window: &NSWindow = &*window_ptr.cast::<NSWindow>();
 
-        // Make the WKWebView see-through so our video layer underneath shows.
-        // `drawsBackground` is a private but stable WKWebView KVC key.
-        let no = NSNumber::numberWithBool(false);
-        wk_webview.setValue_forKey(Some(&no), ns_string!("drawsBackground"));
-        ns_window.setOpaque(false);
-        let clear = NSColor::clearColor();
-        ns_window.setBackgroundColor(Some(&clear));
+        // Start OPAQUE: the window only needs to be see-through while a video is
+        // on screen. Keeping it opaque while browsing means WebKit's momentum
+        // scroll can't reveal the GL layer (the old "last frame bleeds through
+        // during fast scroll" bug). `set_window_transparent` flips it on demand.
+        apply_window_transparency(wk_webview, ns_window, false);
 
         // Force the WKWebView to be layer-backed so it has a `layer` we can
         // host sublayers in.
@@ -102,4 +100,46 @@ fn install_macos_player_layer(
     }
 
     Ok(())
+}
+
+/// Toggle the window/webview between opaque (browsing) and transparent (so the
+/// libmpv `CAOpenGLLayer` behind the webview shows). Transparent only while a
+/// player is on screen — see [`install_macos_player_layer`].
+pub fn set_window_transparent<R: Runtime>(
+    window: &WebviewWindow<R>,
+    transparent: bool,
+) -> tauri::Result<()> {
+    window.with_webview(move |webview| unsafe {
+        let wk_ptr = webview.inner();
+        let window_ptr = webview.ns_window();
+        if wk_ptr.is_null() || window_ptr.is_null() {
+            return;
+        }
+        let wk_webview: &WKWebView = &*wk_ptr.cast::<WKWebView>();
+        let ns_window: &NSWindow = &*window_ptr.cast::<NSWindow>();
+        apply_window_transparency(wk_webview, ns_window, transparent);
+    })
+}
+
+/// Set the webview `drawsBackground` + window opacity/background colour. When
+/// opaque, the window paints the app's dark surface colour so nothing behind the
+/// webview (the GL layer / desktop) can show through.
+///
+/// # Safety
+/// `wk_webview` / `ns_window` must be live AppKit objects on the main thread.
+unsafe fn apply_window_transparency(
+    wk_webview: &WKWebView,
+    ns_window: &NSWindow,
+    transparent: bool,
+) {
+    let draws = NSNumber::numberWithBool(!transparent);
+    wk_webview.setValue_forKey(Some(&draws), ns_string!("drawsBackground"));
+    ns_window.setOpaque(!transparent);
+    let color = if transparent {
+        NSColor::clearColor()
+    } else {
+        // Matches `--color-surface` (#0a0a0c) so there's no flash on toggle.
+        NSColor::colorWithSRGBRed_green_blue_alpha(0.039, 0.039, 0.047, 1.0)
+    };
+    ns_window.setBackgroundColor(Some(&color));
 }

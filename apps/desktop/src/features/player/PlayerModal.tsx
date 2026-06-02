@@ -452,8 +452,12 @@ export function PlayerModal({
   useEffect(() => {
     if (!USE_MPV_ENGINE || !nativeEmbedded) return;
     document.documentElement.classList.add("nova-native-player-active");
+    // Make the native window transparent only while the video surface is on
+    // screen; opaque again on close so fast scroll can't reveal the GL layer.
+    void invoke("set_player_surface_active", { active: true }).catch(() => undefined);
     return () => {
       document.documentElement.classList.remove("nova-native-player-active");
+      void invoke("set_player_surface_active", { active: false }).catch(() => undefined);
     };
   }, [nativeEmbedded]);
 
@@ -1646,9 +1650,10 @@ export function PlayerModal({
           </div>
         )}
 
-        {/* Top chrome: gradient + title + close */}
+        {/* Top chrome: gradient + title + close (also the window drag handle) */}
         <div
           data-controls
+          data-tauri-drag-region
           className={cn(
             "absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-4 px-6 pt-5 pb-12",
             "bg-gradient-to-b from-black/85 via-black/40 to-transparent",
