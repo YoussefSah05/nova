@@ -601,6 +601,15 @@ content in place via React Query invalidation on the terminal `catalog:enrich:pr
 open a `ContentDetail` start screen (overview + Play / preferred-audio / Translate-soon) before
 playback.
 
+**Live channel classification:** live TV is grouped by **brand family** and **region** (not TMDB).
+`clean::channel_brand` derives a brand key (folding a trailing channel number so `beIN Sports 1/2/HD`
+gather into one bundle; single-word numbered brands like `France 24` are preserved), and
+`region::region_of` buckets the country code. Both are stored on `channels` (`channel_group`, `region`,
+migration 0015) at import. The live wall queries **bundles** (`list_channel_groups`, one card per
+brand) filtered by Type + Region; a bundle opens a channel-list start screen
+(`list_channels_in_group`), and live cinema mode shows two layers — the brand bundle, then
+same-category (region-preferred) suggestions.
+
 ### Live playback flow
 1. User clicks a channel. Frontend calls `play_channel(channel_id, caption_mode)`.
 2. Rust returns a localhost proxy URL: `http://127.0.0.1:<port>/live/<channel_id>/index.m3u8`.
