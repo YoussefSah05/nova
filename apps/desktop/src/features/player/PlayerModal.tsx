@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -31,6 +30,15 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { Slider } from "@/components/ui/slider";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuCheckItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { Channel, SeriesEpisode } from "@/types";
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
 
@@ -1848,18 +1856,25 @@ function IconButton({
   active?: boolean;
 }) {
   return (
-    <button
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      className={cn(
-        "flex h-9 w-9 items-center justify-center rounded-full text-white/85",
-        "transition-all hover:bg-white/15 hover:text-white hover:scale-105 active:scale-95",
-        active && "bg-white/15 text-white"
-      )}
-    >
-      {children}
-    </button>
+    <TooltipProvider delayDuration={300} disableHoverableContent>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={onClick}
+            aria-label={label}
+            className={cn(
+              "flex h-9 w-9 items-center justify-center rounded-full text-white/85",
+              "transition-all hover:bg-white/15 hover:text-white hover:scale-105 active:scale-95",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              active && "bg-white/15 text-white"
+            )}
+          >
+            {children}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -2034,70 +2049,38 @@ function ChromeMenu({
   onClose: () => void;
   active?: boolean;
 }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose();
-    };
-    window.addEventListener("mousedown", onDoc);
-    return () => window.removeEventListener("mousedown", onDoc);
-  }, [open, onClose]);
-
   return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={onToggle}
-        aria-label={label}
-        title={label}
-        className={cn(
-          "flex h-9 w-9 items-center justify-center rounded-full text-white/85",
-          "transition-all hover:bg-white/15 hover:text-white hover:scale-105 active:scale-95",
-          active && "bg-white/15 text-white"
-        )}
-      >
-        {icon}
-      </button>
-      {open && (
-        <div
-          role="menu"
+    <DropdownMenu open={open} onOpenChange={(o) => (o ? onToggle() : onClose())}>
+      <DropdownMenuTrigger asChild>
+        <button
+          aria-label={label}
+          title={label}
           className={cn(
-            "absolute bottom-12 right-0 z-30 w-56 overflow-hidden rounded-lg",
-            "bg-black/85 backdrop-blur-md border border-white/10 shadow-xl",
-            "text-sm text-white"
+            "flex h-9 w-9 items-center justify-center rounded-full text-white/85",
+            "transition-all hover:bg-white/15 hover:text-white hover:scale-105 active:scale-95",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            active && "bg-white/15 text-white"
           )}
         >
-          <p className="px-3 py-2 text-[11px] uppercase tracking-wider text-white/55">{heading}</p>
-          <ul className="max-h-72 overflow-auto pb-1">
-            {options.map((opt) => (
-              <li key={opt.key}>
-                <button
-                  role="menuitemradio"
-                  aria-checked={opt.active}
-                  onClick={() => {
-                    onSelect(opt.key);
-                    onClose();
-                  }}
-                  className={cn(
-                    "flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors",
-                    "hover:bg-white/10",
-                    opt.active && "bg-white/10 text-white"
-                  )}
-                >
-                  <span>{opt.label}</span>
-                  {opt.detail ? (
-                    <span className="text-[11px] text-white/40">{opt.detail}</span>
-                  ) : opt.active ? (
-                    <span className="text-[11px] text-[var(--color-accent)]">Selected</span>
-                  ) : null}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
+          {icon}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="end" className="max-h-72 w-56 overflow-auto">
+        <DropdownMenuLabel>{heading}</DropdownMenuLabel>
+        {options.map((opt) => (
+          <DropdownMenuCheckItem
+            key={opt.key}
+            checked={opt.active}
+            onSelect={() => onSelect(opt.key)}
+          >
+            {opt.label}
+            {opt.detail ? (
+              <span className="ml-2 text-[11px] text-muted-foreground">{opt.detail}</span>
+            ) : null}
+          </DropdownMenuCheckItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -2222,83 +2205,33 @@ function Scrubber({
   duration: number;
   onSeek: (sec: number) => void;
 }) {
-  const trackRef = useRef<HTMLDivElement | null>(null);
   const [hoverPct, setHoverPct] = useState<number | null>(null);
-  const [scrubbing, setScrubbing] = useState(false);
-
-  const pctFromEvent = (e: { clientX: number }): number => {
-    const el = trackRef.current;
-    if (!el) return 0;
-    const rect = el.getBoundingClientRect();
-    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-  };
-
-  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    (e.target as Element).setPointerCapture?.(e.pointerId);
-    setScrubbing(true);
-    const pct = pctFromEvent(e);
-    setHoverPct(pct);
-    onSeek(pct * duration);
-  };
-
-  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    const pct = pctFromEvent(e);
-    setHoverPct(pct);
-    if (scrubbing) onSeek(pct * duration);
-  };
-
-  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
-    (e.target as Element).releasePointerCapture?.(e.pointerId);
-    setScrubbing(false);
-  };
-
-  const previewTime = hoverPct != null ? hoverPct * duration : null;
-  const indicatorStyle: CSSProperties = {
-    left: `${(hoverPct ?? 0) * 100}%`,
-  };
+  const previewTime = hoverPct != null && duration > 0 ? hoverPct * duration : null;
 
   return (
     <div
-      className="group relative h-5 cursor-pointer touch-none"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerLeave={() => !scrubbing && setHoverPct(null)}
+      className="group relative py-1.5"
+      onPointerMove={(e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        setHoverPct(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
+      }}
+      onPointerLeave={() => setHoverPct(null)}
     >
-      <div
-        ref={trackRef}
-        className={cn(
-          "absolute inset-x-0 top-1/2 -translate-y-1/2 rounded-full bg-white/20 transition-[height] duration-150",
-          scrubbing || hoverPct != null ? "h-1.5" : "h-1"
-        )}
-      >
-        {/* buffered */}
-        <div
-          className="absolute inset-y-0 left-0 rounded-full bg-white/30"
-          style={{ width: `${bufferedPct}%` }}
-        />
-        {/* progress (accent) */}
-        <div
-          className="absolute inset-y-0 left-0 rounded-full bg-[var(--color-accent)]"
-          style={{ width: `${progressPct}%` }}
-        />
-        {/* thumb */}
-        <div
-          className={cn(
-            "absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-white shadow-md transition-opacity",
-            scrubbing || hoverPct != null ? "opacity-100" : "opacity-0"
-          )}
-          style={{ left: `calc(${progressPct}% - 6px)` }}
-        />
+      {/* Buffered range, behind the slider's own track. */}
+      <div className="pointer-events-none absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 overflow-hidden rounded-full">
+        <div className="h-full bg-white/25" style={{ width: `${bufferedPct}%` }} />
       </div>
-
-      {/* Hover/scrub time preview */}
+      <Slider
+        value={[Math.max(0, Math.min(100, progressPct))]}
+        max={100}
+        step={0.1}
+        onValueChange={(v) => onSeek((v[0] / 100) * duration)}
+        aria-label="Seek"
+      />
       {previewTime != null && (
         <div
-          className="pointer-events-none absolute -top-7 -translate-x-1/2 rounded bg-black/85 px-1.5 py-0.5 text-[11px] tabular-nums text-white shadow-md"
-          style={indicatorStyle}
+          className="pointer-events-none absolute -top-6 -translate-x-1/2 rounded bg-black/85 px-1.5 py-0.5 text-[11px] tabular-nums text-white shadow-md"
+          style={{ left: `${(hoverPct ?? 0) * 100}%` }}
         >
           {formatTime(previewTime)}
         </div>
@@ -2361,48 +2294,20 @@ function VolumeControl({
   const displayed = muted ? 0 : volume;
   const Icon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
 
-  const trackRef = useRef<HTMLDivElement | null>(null);
-  const [dragging, setDragging] = useState(false);
-
-  const pctFromEvent = (e: { clientX: number }): number => {
-    const el = trackRef.current;
-    if (!el) return 0;
-    const rect = el.getBoundingClientRect();
-    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-  };
-
   return (
     <div className="group flex items-center">
       <IconButton onClick={onToggleMute} label={muted ? "Unmute" : "Mute"}>
         <Icon className="h-5 w-5" />
       </IconButton>
-      <div
-        ref={trackRef}
-        className={cn(
-          "ml-1 h-5 w-0 cursor-pointer overflow-hidden transition-[width] duration-200",
-          "group-hover:w-20",
-          dragging && "w-20"
-        )}
-        onPointerDown={(e) => {
-          e.preventDefault();
-          (e.target as Element).setPointerCapture?.(e.pointerId);
-          setDragging(true);
-          onChange(pctFromEvent(e));
-        }}
-        onPointerMove={(e) => {
-          if (dragging) onChange(pctFromEvent(e));
-        }}
-        onPointerUp={(e) => {
-          (e.target as Element).releasePointerCapture?.(e.pointerId);
-          setDragging(false);
-        }}
-      >
-        <div className="relative top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/25">
-          <div
-            className="absolute inset-y-0 left-0 rounded-full bg-white"
-            style={{ width: `${displayed * 100}%` }}
-          />
-        </div>
+      <div className="ml-1 w-0 overflow-hidden transition-[width] duration-200 group-hover:w-24 group-focus-within:w-24">
+        <Slider
+          value={[displayed * 100]}
+          max={100}
+          step={1}
+          onValueChange={(v) => onChange(v[0] / 100)}
+          className="w-24"
+          aria-label="Volume"
+        />
       </div>
     </div>
   );

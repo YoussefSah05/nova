@@ -1,6 +1,7 @@
 //! Small presentational primitives shared by the settings sections.
 
 import { cn } from "@/lib/utils";
+import { Switch } from "@/components/ui/switch";
 
 /// A labelled row: title (+ optional description) on the left, control on the right.
 export function SettingRow({
@@ -51,26 +52,7 @@ export function Toggle({
   onChange: (next: boolean) => void;
   label?: string;
 }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "relative h-6 w-11 shrink-0 rounded-full transition-colors",
-        checked ? "bg-[var(--color-accent)]" : "bg-white/15"
-      )}
-    >
-      <span
-        className={cn(
-          "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform",
-          checked ? "translate-x-[1.375rem]" : "translate-x-0.5"
-        )}
-      />
-    </button>
-  );
+  return <Switch checked={checked} onCheckedChange={onChange} aria-label={label} />;
 }
 
 export function SelectInput<T extends string>({
