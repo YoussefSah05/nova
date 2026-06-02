@@ -272,6 +272,9 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       title: item.title,
       subtitle: item.subtitle,
       posterUrl: item.posterUrl,
+      channelGroup: item.groupKey ?? item.channel?.channelGroup ?? null,
+      category: item.channel?.category ?? null,
+      region: item.channel?.region ?? null,
     });
   }, []);
 
@@ -281,8 +284,9 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
         setSelectedSeries(item.series);
         return;
       }
-      // Movies open an overview "starting screen"; live plays immediately.
-      if (item.kind === "vod") {
+      // Movies open an overview screen; live brand bundles open their channel
+      // list; a single live channel plays immediately.
+      if (item.kind === "vod" || (item.kind === "live" && (item.memberCount ?? 1) > 1)) {
         setSelectedContent(item);
         return;
       }
@@ -379,6 +383,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       <>
         <ContentDetail
           profileId={profile.id}
+          sourceId={activeSourceId}
           item={selectedContent}
           onBack={() => setSelectedContent(null)}
           onPlay={playItem}

@@ -146,7 +146,15 @@ pub fn search_title(raw: &str) -> String {
 /// Series/season indicator words (normalized, multilingual) dropped from a TV
 /// search query — providers append these but TMDB wants just the show name.
 const SERIES_WORDS: &[&str] = &[
-    "season", "saison", "temporada", "staffel", "stagione", "series", "serie", "show", "مسلسل",
+    "season",
+    "saison",
+    "temporada",
+    "staffel",
+    "stagione",
+    "series",
+    "serie",
+    "show",
+    "مسلسل",
 ];
 
 /// Like [`search_title`] but for **TV series**: also strips season/series
@@ -393,7 +401,10 @@ mod tests {
 
     #[test]
     fn search_series_title_strips_season_words() {
-        assert_eq!(search_series_title("Game of Thrones Season 8"), "Game of Thrones");
+        assert_eq!(
+            search_series_title("Game of Thrones Season 8"),
+            "Game of Thrones"
+        );
         assert_eq!(search_series_title("مسلسل Breaking Bad"), "Breaking Bad");
         assert_eq!(search_series_title("Dark Saison 2"), "Dark");
     }

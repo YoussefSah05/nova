@@ -305,7 +305,8 @@ async fn run_tmdb(
     // ── Series (search by title only; no year column) ──
     let mut series_writes = Vec::with_capacity(series.len());
     for q in &series {
-        let query = nova_core::clean::search_title(&q.series_title);
+        // Series-specific normalization: also strips season/series indicator words.
+        let query = nova_core::clean::search_series_title(&q.series_title);
         let qlc = query.to_lowercase();
         let mut best: Option<(TmdbMatch, f32)> = None;
 

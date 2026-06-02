@@ -3,6 +3,7 @@
 //! preferred-audio language, Translate (coming later), favourite / watchlist, and
 //! a version picker when the catalog had quality/backup duplicates.
 
+import { useEffect, useState } from "react";
 import { ArrowLeft, ChevronDown, Headphones, Languages, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ import {
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
 import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
-import type { BrowseItem } from "./queries";
+import { fetchChannelsInGroup, type BrowseItem } from "./queries";
 
 /// Preferred audio language choices. `null` = keep the stream's original track.
 const AUDIO_LANGS: { value: string | null; label: string }[] = [
@@ -32,11 +33,86 @@ const AUDIO_LANGS: { value: string | null; label: string }[] = [
 
 interface ContentDetailProps {
   profileId: string;
+  sourceId: number | null;
   item: BrowseItem;
   onBack: () => void;
   onPlay: (item: BrowseItem) => void;
   onToggleFavorite: (item: BrowseItem, next: boolean) => void;
   onToggleWatchlist: (item: BrowseItem, next: boolean) => void;
+}
+
+/// Live brand bundle: a backdrop-less header + a grid of the bundle's channels.
+function LiveBundleDetail({
+  profileId,
+  sourceId,
+  item,
+  onBack,
+  onPlay,
+}: {
+  profileId: string;
+  sourceId: number | null;
+  item: BrowseItem;
+  onBack: () => void;
+  onPlay: (item: BrowseItem) => void;
+}) {
+  const [channels, setChannels] = useState<BrowseItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (sourceId == null || !item.groupKey) return;
+    let cancelled = false;
+    setLoading(true);
+    fetchChannelsInGroup(profileId, sourceId, item.groupKey)
+      .then((c) => !cancelled && setChannels(c))
+      .catch(() => !cancelled && setChannels([]))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId, sourceId, item.groupKey]);
+
+  return (
+    <div className="min-h-screen bg-neutral-950 px-8 py-6 text-white">
+      <Button variant="ghost" size="sm" onClick={onBack} className="gap-2 text-white/70 hover:text-white">
+        <ArrowLeft className="h-4 w-4" /> Back
+      </Button>
+      <div className="mt-4 flex items-center gap-4">
+        {item.posterUrl && (
+          <img src={item.posterUrl} alt="" className="h-16 w-28 rounded-lg object-contain bg-neutral-900 p-2" />
+        )}
+        <div>
+          <h1 className="text-2xl font-semibold">{item.title}</h1>
+          <p className="mt-1 text-sm text-white/55">
+            {channels.length || item.memberCount} channels
+            {item.subtitle ? ` · ${item.subtitle}` : ""}
+          </p>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="mt-8 text-sm text-white/50">Loading channels…</p>
+      ) : (
+        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          {channels.map((c) => (
+            <button
+              key={c.key}
+              onClick={() => onPlay(c)}
+              className="flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-center transition-colors hover:bg-white/10"
+            >
+              <div className="flex h-16 w-full items-center justify-center">
+                {c.posterUrl ? (
+                  <img src={c.posterUrl} alt="" loading="lazy" className="max-h-16 max-w-full object-contain" />
+                ) : (
+                  <Play className="h-6 w-6 text-white/40" />
+                )}
+              </div>
+              <span className="line-clamp-2 text-xs font-medium text-white/85">{c.title}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /// Raw provider name for a variant (shows quality, e.g. "… FHD"), for the picker.
@@ -47,6 +123,7 @@ function variantLabel(it: BrowseItem, index: number): string {
 
 export function ContentDetail({
   profileId,
+  sourceId,
   item,
   onBack,
   onPlay,
@@ -54,6 +131,19 @@ export function ContentDetail({
   onToggleWatchlist,
 }: ContentDetailProps) {
   const { settings, setSettings } = useProfileSettings(profileId);
+
+  // Live brand bundle → channel grid; movies → the overview hero below.
+  if (item.kind === "live") {
+    return (
+      <LiveBundleDetail
+        profileId={profileId}
+        sourceId={sourceId}
+        item={item}
+        onBack={onBack}
+        onPlay={onPlay}
+      />
+    );
+  }
 
   const backdrop = item.vod?.backdropUrl ?? item.posterUrl;
   const overview = item.vod?.overview ?? null;

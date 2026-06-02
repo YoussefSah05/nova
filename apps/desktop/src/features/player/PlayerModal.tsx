@@ -39,7 +39,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Channel, SeriesEpisode } from "@/types";
+import type { ChannelGroup, SeriesEpisode } from "@/types";
+import { fetchChannelsInGroup, type BrowseItem } from "@/features/browse/queries";
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
 
 import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
@@ -62,6 +63,10 @@ export interface PlayMedia {
   title: string;
   subtitle?: string | null;
   posterUrl?: string | null;
+  /// Live context for cinema mode (layer 1 = brand bundle, layer 2 = same type).
+  channelGroup?: string | null;
+  category?: string | null;
+  region?: string | null;
 }
 
 interface PlayerModalProps {
@@ -1924,6 +1929,9 @@ function CinemaPanel({
           profileId={profileId}
           sourceId={sourceId}
           currentChannelId={currentMediaId}
+          group={media.channelGroup}
+          category={media.category}
+          region={media.region}
           onSelectChannel={onSelectMedia}
         />
       ) : media.kind === "episode" ? (
@@ -1955,78 +1963,164 @@ function CinemaPanel({
   );
 }
 
+/// One tile in a cinema row.
+function ChannelTile({
+  title,
+  logoUrl,
+  active,
+  onClick,
+}: {
+  title: string;
+  logoUrl: string | null;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex w-28 flex-shrink-0 flex-col items-center gap-1.5 rounded-lg p-2 text-center transition-colors",
+        "focus:outline-none focus:ring-2 focus:ring-indigo-400",
+        active ? "bg-white/15" : "hover:bg-white/10"
+      )}
+    >
+      <div className="flex h-16 w-full items-center justify-center overflow-hidden rounded bg-neutral-800">
+        {logoUrl ? (
+          <img src={logoUrl} alt="" loading="lazy" className="max-h-full max-w-full object-contain" />
+        ) : (
+          <Radio className="h-5 w-5 text-white/40" />
+        )}
+      </div>
+      <span className="line-clamp-2 text-[11px] font-medium text-white/85">{title}</span>
+    </button>
+  );
+}
+
+/// Two-layer cinema browser for live: layer 1 = the playing channel's brand
+/// bundle; layer 2 = more channels of the same type (preferring the same region).
 function CinemaChannelStrip({
   profileId,
   sourceId,
   currentChannelId,
+  group,
+  category,
+  region,
   onSelectChannel,
 }: {
   profileId: string;
   sourceId: number | null;
   currentChannelId: number;
+  group?: string | null;
+  category?: string | null;
+  region?: string | null;
   onSelectChannel: (m: PlayMedia) => void;
 }) {
-  const [channels, setChannels] = useState<Channel[]>([]);
+  const [bundle, setBundle] = useState<BrowseItem[]>([]);
+  const [suggestions, setSuggestions] = useState<ChannelGroup[]>([]);
 
+  // Layer 1 — the brand bundle.
   useEffect(() => {
-    if (sourceId == null) return;
+    if (sourceId == null || !group) {
+      setBundle([]);
+      return;
+    }
+    let cancelled = false;
+    fetchChannelsInGroup(profileId, sourceId, group)
+      .then((c) => !cancelled && setBundle(c))
+      .catch(() => !cancelled && setBundle([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId, sourceId, group]);
+
+  // Layer 2 — more of the same type, region preferred.
+  useEffect(() => {
+    if (sourceId == null || !category) {
+      setSuggestions([]);
+      return;
+    }
     let cancelled = false;
     void (async () => {
       try {
-        const items = await invoke<Channel[]>("list_channels", {
+        const groups = await invoke<ChannelGroup[]>("list_channel_groups", {
           profileId,
           sourceId,
-          limit: 100,
+          limit: 40,
           offset: 0,
-          filters: {},
+          filters: { category, region: region ?? null },
         });
-        if (!cancelled) setChannels(items);
+        if (!cancelled) setSuggestions(groups.filter((g) => g.group !== group));
       } catch {
-        if (!cancelled) setChannels([]);
+        if (!cancelled) setSuggestions([]);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [profileId, sourceId]);
+  }, [profileId, sourceId, category, region, group]);
 
+  const hasBundle = bundle.length > 1;
   return (
-    <div className="flex h-full flex-col gap-2 px-6 py-3">
-      <p className="text-xs font-semibold uppercase tracking-wide text-white/45">Channels</p>
-      <div className="-mx-1 flex flex-1 gap-3 overflow-x-auto px-1 [scrollbar-width:thin]">
-        {channels.map((c) => {
-          const active = c.id === currentChannelId;
-          return (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() =>
-                onSelectChannel({
-                  kind: "live",
-                  id: c.id,
-                  title: c.name,
-                  subtitle: [c.country, c.category].filter(Boolean).join(" / ") || null,
-                  posterUrl: c.logoUrl,
-                })
-              }
-              className={cn(
-                "flex w-28 flex-shrink-0 flex-col items-center gap-1.5 rounded-lg p-2 text-center transition-colors",
-                "focus:outline-none focus:ring-2 focus:ring-indigo-400",
-                active ? "bg-white/15" : "hover:bg-white/10"
-              )}
-            >
-              <div className="flex h-16 w-full items-center justify-center overflow-hidden rounded bg-neutral-800">
-                {c.logoUrl ? (
-                  <img src={c.logoUrl} alt="" loading="lazy" className="max-h-full max-w-full object-contain" />
-                ) : (
-                  <Radio className="h-5 w-5 text-white/40" />
-                )}
-              </div>
-              <span className="line-clamp-2 text-[11px] font-medium text-white/85">{c.name}</span>
-            </button>
-          );
-        })}
-      </div>
+    <div className="flex h-full flex-col gap-3 overflow-y-auto px-6 py-3">
+      {hasBundle && (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-white/45">
+            More from this group
+          </p>
+          <div className="-mx-1 flex gap-3 overflow-x-auto px-1 [scrollbar-width:thin]">
+            {bundle.map((c) => (
+              <ChannelTile
+                key={c.key}
+                title={c.title}
+                logoUrl={c.posterUrl}
+                active={c.id === currentChannelId}
+                onClick={() =>
+                  onSelectChannel({
+                    kind: "live",
+                    id: c.id,
+                    title: c.title,
+                    subtitle: c.subtitle,
+                    posterUrl: c.posterUrl,
+                    channelGroup: c.channel?.channelGroup ?? group,
+                    category: c.channel?.category ?? category,
+                    region: c.channel?.region ?? region,
+                  })
+                }
+              />
+            ))}
+          </div>
+        </div>
+      )}
+      {suggestions.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-white/45">
+            {category ? `More ${category}` : "More channels"}
+          </p>
+          <div className="-mx-1 flex gap-3 overflow-x-auto px-1 [scrollbar-width:thin]">
+            {suggestions.map((g) => (
+              <ChannelTile
+                key={g.group}
+                title={g.title}
+                logoUrl={g.logoUrl}
+                active={false}
+                onClick={() =>
+                  onSelectChannel({
+                    kind: "live",
+                    id: g.representativeId,
+                    title: g.title,
+                    subtitle: [g.region, g.category].filter(Boolean).join(" / ") || null,
+                    posterUrl: g.logoUrl,
+                    channelGroup: g.group,
+                    category: g.category,
+                    region: g.region,
+                  })
+                }
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
