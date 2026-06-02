@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!: i64\", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at\n                 FROM channels\n                 WHERE source_id = ?\n                   AND (? IS NULL OR country = ?)\n                   AND (? IS NULL OR category = ?)\n                   AND (? IS NULL OR name LIKE ? OR category LIKE ? OR raw_group LIKE ?)\n                   AND (? = 0 OR is_favorite = 1)\n                   AND (? = 0 OR is_in_watchlist = 1)\n                 ORDER BY id ASC LIMIT ? OFFSET ?",
+  "query": "SELECT id as \"id!: i64\", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group\n                 FROM channels\n                 WHERE source_id = ?\n                   AND (? IS NULL OR country = ?)\n                   AND (? IS NULL OR category = ?)\n                   AND (? IS NULL OR name LIKE ? OR category LIKE ? OR raw_group LIKE ?)\n                   AND (? = 0 OR is_favorite = 1)\n                   AND (? = 0 OR is_in_watchlist = 1)\n                 ORDER BY id ASC LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -67,6 +67,11 @@
         "name": "added_at",
         "ordinal": 12,
         "type_info": "Integer"
+      },
+      {
+        "name": "dedup_group",
+        "ordinal": 13,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -85,8 +90,9 @@
       false,
       false,
       true,
+      true,
       true
     ]
   },
-  "hash": "16e277dc008eec8626f01943661ed9bb5e8f33f6aaf60964c68c7d6d4a0934b5"
+  "hash": "966d03424637196a8823646a3cc9a6a0ccfd5322643fa6579425afc6abf6331c"
 }

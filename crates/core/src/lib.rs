@@ -85,6 +85,8 @@ pub struct Channel {
     pub is_in_watchlist: bool,
     pub last_played_at: Option<i64>,
     pub added_at: Option<i64>,
+    /// Enrichment de-dup cluster key (variants share one); `None` until enriched.
+    pub dedup_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +103,8 @@ pub struct VodItem {
     pub is_favorite: bool,
     pub is_in_watchlist: bool,
     pub added_at: Option<i64>,
+    /// Enrichment de-dup cluster key (variants share one); `None` until enriched.
+    pub dedup_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

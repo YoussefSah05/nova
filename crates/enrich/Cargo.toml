@@ -1,0 +1,11 @@
+[package]
+name = "nova-enrich"
+version = "0.1.0"
+edition = "2021"
+description = "Catalog enrichment — on-device embeddings, de-dup, taxonomy"
+
+[dependencies]
+nova-core = { path = "../core" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+fastembed = { workspace = true }

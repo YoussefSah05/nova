@@ -15,6 +15,7 @@ use crate::state::AppState;
 use std::time::{Duration, Instant};
 
 pub mod caption_style;
+pub mod enrich;
 pub mod epg;
 pub mod playback;
 pub mod profile_settings;
@@ -1159,6 +1160,7 @@ fn push_entry(
             is_in_watchlist: false,
             last_played_at: None,
             added_at: None,
+            dedup_group: None,
         }),
         MediaKind::Movie => vod.push(VodItem {
             id: 0,
@@ -1172,6 +1174,7 @@ fn push_entry(
             is_favorite: false,
             is_in_watchlist: false,
             added_at: None,
+            dedup_group: None,
         }),
         MediaKind::Series => series.push(SeriesEpisode {
             id: 0,

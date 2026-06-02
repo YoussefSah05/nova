@@ -34,6 +34,8 @@ export interface BrowseItem {
   tvgId: string | null;
   isFavorite: boolean;
   isInWatchlist: boolean;
+  /// Enrichment de-dup cluster key — variants collapse to one card per page.
+  dedupGroup?: string | null;
   channel?: Channel;
   vod?: VodItem;
   series?: SeriesSummary;
@@ -66,6 +68,7 @@ function channelToItem(c: Channel): BrowseItem {
     tvgId: c.tvgId,
     isFavorite: c.isFavorite,
     isInWatchlist: c.isInWatchlist,
+    dedupGroup: c.dedupGroup,
     channel: c,
   };
 }
@@ -82,6 +85,7 @@ function vodToItem(v: VodItem): BrowseItem {
     tvgId: null,
     isFavorite: v.isFavorite,
     isInWatchlist: v.isInWatchlist,
+    dedupGroup: v.dedupGroup,
     vod: v,
   };
 }
@@ -136,12 +140,25 @@ async function fetchItems(
 ): Promise<BrowseItem[]> {
   const args = { profileId, sourceId, limit, offset, filters: filterPayload(tab, filters) };
   if (tab === "live") {
-    return (await invoke<Channel[]>(LIST_COMMAND.live, args)).map(channelToItem);
+    return collapseDuplicates((await invoke<Channel[]>(LIST_COMMAND.live, args)).map(channelToItem));
   }
   if (tab === "movies") {
-    return (await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem);
+    return collapseDuplicates((await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem));
   }
   return (await invoke<SeriesSummary[]>(LIST_COMMAND.series, args)).map(seriesToItem);
+}
+
+/// Collapse enrichment de-dup variants within a page: keep the first item of
+/// each `dedupGroup` (items without a group are kept as-is). Page-local — exact
+/// for rails (one page) and good enough for the grid's 200-item pages.
+function collapseDuplicates(items: BrowseItem[]): BrowseItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (!item.dedupGroup) return true;
+    if (seen.has(item.dedupGroup)) return false;
+    seen.add(item.dedupGroup);
+    return true;
+  });
 }
 
 async function fetchCount(

@@ -134,6 +134,10 @@ pub fn run() {
             // Phase 6.2 — per-profile caption styling
             commands::caption_style::get_caption_style,
             commands::caption_style::set_caption_style,
+            // Catalog enrichment (Phase B) — embeddings de-dup + genre fill
+            commands::enrich::get_enrich_model_status,
+            commands::enrich::download_enrich_models,
+            commands::enrich::start_enrichment,
             // Cleanup — per-profile viewing settings + player episode list
             commands::profile_settings::get_profile_settings,
             commands::profile_settings::set_profile_settings,
