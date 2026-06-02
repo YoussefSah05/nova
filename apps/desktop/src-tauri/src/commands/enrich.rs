@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use nova_enrich::{
-    best_match, cluster, parse_genres, parse_search, DedupItem, Embedder, EnrichError,
-    FastEmbedder, GenreClassifier, TmdbClient, MIN_CONFIDENCE,
+    best_scored, cluster, parse_genres, parse_search, DedupItem, Embedder, EnrichError,
+    FastEmbedder, GenreClassifier, TmdbClient, TmdbMatch, MIN_CONFIDENCE, WEAK_CONFIDENCE,
 };
 use nova_storage::{
     ChannelRepository, EnrichUpdate, ProfileSettingsRepository, SeriesRepository, SeriesTmdbWrite,
@@ -272,20 +272,29 @@ async fn run_tmdb(
 
     let mut movie_writes = Vec::with_capacity(movies.len());
     for q in &movies {
-        let key = format!("movie::{}::{}", q.title.to_lowercase(), q.year.unwrap_or(0));
-        let body = fetch_cached(&cache, &key, || {
-            client.search_movie(&q.title, q.year.map(|y| y as i32))
-        })
-        .await?;
-        let items = parse_search(&body).map_err(|e| ApiError::Internal(e.to_string()))?;
-        let m = best_match(
-            &q.title,
-            q.year.map(|y| y as i32),
-            &items,
-            &movie_genres,
-            MIN_CONFIDENCE,
-        );
-        movie_writes.push(to_movie_write(q.id, m));
+        // Use a search-optimized query (strip prefixes/year/junk); year separate.
+        let query = nova_core::clean::search_title(&q.title);
+        let year = q.year.map(|y| y as i32);
+        let qlc = query.to_lowercase();
+        let mut best: Option<(TmdbMatch, f32)> = None;
+
+        // 1) movie + year → 2) movie no-year → 3) multi. Stop once confident.
+        let key = format!("movie::{qlc}::{}", year.unwrap_or(0));
+        let body = fetch_cached(&cache, &key, || client.search_movie(&query, year)).await?;
+        best = take_better(best, score_body(&body, &query, year, &movie_genres)?);
+
+        if year.is_some() && !is_confident(&best) {
+            let key = format!("movie::{qlc}::noyear");
+            let body = fetch_cached(&cache, &key, || client.search_movie(&query, None)).await?;
+            best = take_better(best, score_body(&body, &query, year, &movie_genres)?);
+        }
+        if !is_confident(&best) {
+            let key = format!("multi::{qlc}");
+            let body = fetch_cached(&cache, &key, || client.search_multi(&query)).await?;
+            best = take_better(best, score_body(&body, &query, year, &movie_genres)?);
+        }
+
+        movie_writes.push(to_movie_write(q.id, best));
         done += 1;
         if done.is_multiple_of(25) {
             emit(done);
@@ -296,11 +305,21 @@ async fn run_tmdb(
     // ── Series (search by title only; no year column) ──
     let mut series_writes = Vec::with_capacity(series.len());
     for q in &series {
-        let key = format!("tv::{}", q.series_title.to_lowercase());
-        let body = fetch_cached(&cache, &key, || client.search_tv(&q.series_title)).await?;
-        let items = parse_search(&body).map_err(|e| ApiError::Internal(e.to_string()))?;
-        let m = best_match(&q.series_title, None, &items, &tv_genres, MIN_CONFIDENCE);
-        series_writes.push(to_series_write(q.series_title.clone(), m));
+        let query = nova_core::clean::search_title(&q.series_title);
+        let qlc = query.to_lowercase();
+        let mut best: Option<(TmdbMatch, f32)> = None;
+
+        let key = format!("tv::{qlc}");
+        let body = fetch_cached(&cache, &key, || client.search_tv(&query)).await?;
+        best = take_better(best, score_body(&body, &query, None, &tv_genres)?);
+
+        if !is_confident(&best) {
+            let key = format!("multi::{qlc}");
+            let body = fetch_cached(&cache, &key, || client.search_multi(&query)).await?;
+            best = take_better(best, score_body(&body, &query, None, &tv_genres)?);
+        }
+
+        series_writes.push(to_series_write(q.series_title.clone(), best));
         done += 1;
         if done.is_multiple_of(25) {
             emit(done);
@@ -310,6 +329,48 @@ async fn run_tmdb(
         .apply_tmdb(source_id, &series_writes)
         .await?;
     Ok(())
+}
+
+/// Parse a search body and return its best-scored candidate.
+fn score_body(
+    body: &str,
+    query: &str,
+    year: Option<i32>,
+    genres: &std::collections::HashMap<i64, String>,
+) -> Result<Option<(TmdbMatch, f32)>, ApiError> {
+    let items = parse_search(body).map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(best_scored(query, year, &items, genres))
+}
+
+fn is_confident(b: &Option<(TmdbMatch, f32)>) -> bool {
+    b.as_ref().is_some_and(|(_, s)| *s >= MIN_CONFIDENCE)
+}
+
+/// Keep whichever candidate scored higher.
+fn take_better(
+    cur: Option<(TmdbMatch, f32)>,
+    cand: Option<(TmdbMatch, f32)>,
+) -> Option<(TmdbMatch, f32)> {
+    match (cur, cand) {
+        (Some(a), Some(b)) => Some(if b.1 > a.1 { b } else { a }),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
+    }
+}
+
+/// Map TMDB genre names onto Nova's canonical taxonomy so chips/rails stay
+/// consistent; unknown names pass through. Order-preserving, de-duplicated.
+fn canonicalize_genres(genres: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for g in genres {
+        let c = nova_core::classify::canonical_genre(g)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| g.clone());
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Read a cached TMDB body or fetch + store it.
@@ -332,19 +393,33 @@ where
     Ok(body)
 }
 
-fn to_movie_write(id: i64, m: Option<nova_enrich::TmdbMatch>) -> TmdbWrite {
-    match m {
-        Some(m) => TmdbWrite {
+/// Tier the scored candidate into a movie write:
+/// - confident → canonical title + canonical genres + overview + art,
+/// - weak (has a poster) → poster/backdrop only, keep the original title,
+/// - otherwise → unmatched.
+fn to_movie_write(id: i64, scored: Option<(TmdbMatch, f32)>) -> TmdbWrite {
+    match scored {
+        Some((m, s)) if s >= MIN_CONFIDENCE => {
+            let genres = canonicalize_genres(&m.genres);
+            TmdbWrite {
+                id,
+                canonical_title: Some(m.canonical_title),
+                poster_url: m.poster_url,
+                backdrop_url: m.backdrop_url,
+                overview: m.overview,
+                primary_genre: genres.first().cloned(),
+                genres_csv: (!genres.is_empty()).then(|| genres.join(", ")),
+                matched: true,
+            }
+        }
+        Some((m, s)) if s >= WEAK_CONFIDENCE && m.poster_url.is_some() => TmdbWrite {
             id,
-            canonical_title: Some(m.canonical_title),
             poster_url: m.poster_url,
             backdrop_url: m.backdrop_url,
-            overview: m.overview,
-            primary_genre: m.genres.first().cloned(),
-            genres_csv: (!m.genres.is_empty()).then(|| m.genres.join(", ")),
             matched: true,
+            ..Default::default()
         },
-        None => TmdbWrite {
+        _ => TmdbWrite {
             id,
             matched: false,
             ..Default::default()
@@ -352,18 +427,28 @@ fn to_movie_write(id: i64, m: Option<nova_enrich::TmdbMatch>) -> TmdbWrite {
     }
 }
 
-fn to_series_write(series_title: String, m: Option<nova_enrich::TmdbMatch>) -> SeriesTmdbWrite {
-    match m {
-        Some(m) => SeriesTmdbWrite {
+fn to_series_write(series_title: String, scored: Option<(TmdbMatch, f32)>) -> SeriesTmdbWrite {
+    match scored {
+        Some((m, s)) if s >= MIN_CONFIDENCE => {
+            let genres = canonicalize_genres(&m.genres);
+            SeriesTmdbWrite {
+                series_title,
+                canonical_title: Some(m.canonical_title),
+                poster_url: m.poster_url,
+                backdrop_url: m.backdrop_url,
+                overview: m.overview,
+                genres_csv: (!genres.is_empty()).then(|| genres.join(", ")),
+                matched: true,
+            }
+        }
+        Some((m, s)) if s >= WEAK_CONFIDENCE && m.poster_url.is_some() => SeriesTmdbWrite {
             series_title,
-            canonical_title: Some(m.canonical_title),
             poster_url: m.poster_url,
             backdrop_url: m.backdrop_url,
-            overview: m.overview,
-            genres_csv: (!m.genres.is_empty()).then(|| m.genres.join(", ")),
             matched: true,
+            ..Default::default()
         },
-        None => SeriesTmdbWrite {
+        _ => SeriesTmdbWrite {
             series_title,
             matched: false,
             ..Default::default()

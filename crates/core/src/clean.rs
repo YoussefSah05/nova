@@ -62,6 +62,82 @@ pub fn dedup_key(raw: &str) -> String {
         .join(" ")
 }
 
+/// Build the cleanest possible **TMDB search query** from a raw catalog name.
+/// More aggressive than [`polish_title`]: drops a leading provider/country
+/// prefix (everything before the last `|`), bracketed groups (`[MULTI]`,
+/// `(2019)`), quality/codec junk, a 4-digit year (passed to the API separately),
+/// and `SxxEyy` episode markers. Keeps the real words (incl. hyphenated names).
+/// Falls back to the folded input if stripping leaves nothing.
+pub fn search_title(raw: &str) -> String {
+    let folded = fold(raw);
+    // Provider/country prefixes precede pipes: "FR| US| The Matrix" → "The Matrix".
+    let after_pipe = folded.rsplit('|').next().unwrap_or(&folded);
+
+    // Drop bracketed/parenthesized groups.
+    let mut unbracketed = String::with_capacity(after_pipe.len());
+    let mut depth = 0i32;
+    for c in after_pipe.chars() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = (depth - 1).max(0),
+            _ if depth == 0 => unbracketed.push(c),
+            _ => {}
+        }
+    }
+
+    let kept: Vec<&str> = unbracketed
+        .split(|c: char| c.is_whitespace() || matches!(c, ':' | '_' | '|'))
+        .filter(|t| !t.is_empty())
+        .filter(|t| !is_junk_token(t))
+        .filter(|t| !is_year_token(t))
+        .filter(|t| !is_season_episode(t))
+        .collect();
+
+    let joined = cleanup(&kept.join(" "));
+    if joined.is_empty() {
+        cleanup(&folded)
+    } else {
+        joined
+    }
+}
+
+/// A standalone 4-digit release year (1900–2099) — removed from search queries
+/// since the year is sent to TMDB as a separate parameter.
+fn is_year_token(tok: &str) -> bool {
+    tok.len() == 4
+        && tok.bytes().all(|c| c.is_ascii_digit())
+        && matches!(tok.parse::<u32>(), Ok(y) if (1900..=2099).contains(&y))
+}
+
+/// An `SxxEyy` / `Sx` / `NxNN` episode marker (lowercased), e.g. `S01E02`, `1x05`.
+fn is_season_episode(tok: &str) -> bool {
+    let l = tok.to_ascii_lowercase();
+    let b = l.as_bytes();
+    // s<digits>e<digits> or s<digits>
+    if b.first() == Some(&b's') && b.len() > 1 {
+        let rest = &l[1..];
+        if let Some(epos) = rest.find('e') {
+            let (sn, ep) = (&rest[..epos], &rest[epos + 1..]);
+            return !sn.is_empty()
+                && sn.bytes().all(|c| c.is_ascii_digit())
+                && !ep.is_empty()
+                && ep.bytes().all(|c| c.is_ascii_digit());
+        }
+        if rest.bytes().all(|c| c.is_ascii_digit()) && !rest.is_empty() {
+            return true;
+        }
+    }
+    // <digits>x<digits>
+    if let Some(xpos) = l.find('x') {
+        let (a, c) = (&l[..xpos], &l[xpos + 1..]);
+        return !a.is_empty()
+            && a.bytes().all(|d| d.is_ascii_digit())
+            && !c.is_empty()
+            && c.bytes().all(|d| d.is_ascii_digit());
+    }
+    false
+}
+
 /// Fold decorative Unicode to ASCII: fullwidth forms and the modifier/superscript
 /// capital letters IPTV providers use as flair (`ᴴᴰ`, `ᵁᴴᴰ`). Other characters
 /// (Arabic, accented Latin, …) pass through untouched.
@@ -196,5 +272,22 @@ mod tests {
     #[test]
     fn dedup_key_empty_when_only_junk() {
         assert_eq!(dedup_key("HD"), "");
+    }
+
+    #[test]
+    fn search_title_strips_prefixes_brackets_year_quality() {
+        assert_eq!(search_title("VOD| The Matrix 1999 1080p"), "The Matrix");
+        assert_eq!(search_title("FR| US| Inception [MULTI] 2010"), "Inception");
+        assert_eq!(search_title("EN - Breaking Bad S01E01"), "EN Breaking Bad");
+        assert_eq!(
+            search_title("Mad Max: Fury Road (2015) FHD"),
+            "Mad Max Fury Road"
+        );
+    }
+
+    #[test]
+    fn search_title_keeps_real_titles() {
+        assert_eq!(search_title("Spider-Man"), "Spider-Man");
+        assert_eq!(search_title("Rocky 2"), "Rocky 2");
     }
 }

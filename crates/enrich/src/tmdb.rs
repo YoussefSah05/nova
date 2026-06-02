@@ -19,9 +19,13 @@ const IMG_BASE: &str = "https://image.tmdb.org/t/p";
 /// ~40 req/s — comfortably under TMDB's limit; calls are sequential so a fixed
 /// inter-request delay is enough (no token bucket needed).
 const REQUEST_SPACING: Duration = Duration::from_millis(25);
-/// Below this combined title+year confidence we leave the row unmatched rather
-/// than guess (a Phase D / LLM residual later).
+/// At or above this combined title+year confidence we trust the canonical title,
+/// genres and overview.
 pub const MIN_CONFIDENCE: f32 = 0.6;
+/// Between [`WEAK_CONFIDENCE`, `MIN_CONFIDENCE`) we attach the poster/backdrop
+/// only (keep the original title) so the catalog still gets art; below it we
+/// don't guess at all.
+pub const WEAK_CONFIDENCE: f32 = 0.3;
 
 // ── API response shapes (deserialize only what we use) ──────────────────────────
 
@@ -62,11 +66,18 @@ pub struct TmdbItem {
     overview: Option<String>,
     #[serde(default)]
     genre_ids: Vec<i64>,
+    /// Present on `/search/multi` results (`movie` | `tv` | `person`).
+    #[serde(default)]
+    media_type: Option<String>,
 }
 
 impl TmdbItem {
     fn display_title(&self) -> Option<&str> {
         self.title.as_deref().or(self.name.as_deref())
+    }
+    /// Skip non-title results (people) that `/search/multi` mixes in.
+    fn is_title(&self) -> bool {
+        self.media_type.as_deref() != Some("person")
     }
     fn year(&self) -> Option<i32> {
         let d = self
@@ -148,6 +159,12 @@ impl TmdbClient {
             .await
     }
 
+    /// `/search/multi` — raw JSON body. Last-resort fallback across movies + tv.
+    pub async fn search_multi(&self, query: &str) -> Result<String, EnrichError> {
+        self.get("/search/multi", &[("query", query.to_string())])
+            .await
+    }
+
     /// `/genre/{movie,tv}/list` — raw JSON body. `kind` is `movie` or `tv`.
     pub async fn genre_list(&self, kind: &str) -> Result<String, EnrichError> {
         self.get(&format!("/genre/{kind}/list"), &[]).await
@@ -211,18 +228,20 @@ fn title_similarity(a: &str, b: &str) -> f32 {
     }
 }
 
-/// Pick the best candidate for `query_title`/`query_year`. Confidence combines
-/// title similarity (TMDB already popularity-ranks results) with a year bonus.
-/// Returns `None` if nothing clears `min_confidence`.
-pub fn best_match(
+/// Score + return the single best candidate (no confidence gate), so the caller
+/// can tier the result (full match vs poster-only fallback). `None` only when
+/// there are no title results at all.
+pub fn best_scored(
     query_title: &str,
     query_year: Option<i32>,
     items: &[TmdbItem],
     genres: &HashMap<i64, String>,
-    min_confidence: f32,
-) -> Option<TmdbMatch> {
+) -> Option<(TmdbMatch, f32)> {
     let mut best: Option<(f32, &TmdbItem)> = None;
     for item in items {
+        if !item.is_title() {
+            continue;
+        }
         let Some(cand_title) = item.display_title() else {
             continue;
         };
@@ -237,12 +256,26 @@ pub fn best_match(
         }
     }
     let (score, item) = best?;
-    if score < min_confidence {
-        return None;
-    }
-    Some(TmdbMatch {
+    Some((to_match(item, query_title, genres), score))
+}
+
+/// Backward-compatible: the best candidate only if it clears `min_confidence`.
+pub fn best_match(
+    query_title: &str,
+    query_year: Option<i32>,
+    items: &[TmdbItem],
+    genres: &HashMap<i64, String>,
+    min_confidence: f32,
+) -> Option<TmdbMatch> {
+    best_scored(query_title, query_year, items, genres)
+        .filter(|(_, score)| *score >= min_confidence)
+        .map(|(m, _)| m)
+}
+
+fn to_match(item: &TmdbItem, fallback_title: &str, genres: &HashMap<i64, String>) -> TmdbMatch {
+    TmdbMatch {
         tmdb_id: item.id,
-        canonical_title: item.display_title().unwrap_or(query_title).to_string(),
+        canonical_title: item.display_title().unwrap_or(fallback_title).to_string(),
         poster_url: image_url(&item.poster_path, "w500"),
         backdrop_url: image_url(&item.backdrop_path, "w1280"),
         overview: item.overview.clone().filter(|o| !o.trim().is_empty()),
@@ -251,7 +284,7 @@ pub fn best_match(
             .iter()
             .filter_map(|id| genres.get(id).cloned())
             .collect(),
-    })
+    }
 }
 
 #[cfg(test)]

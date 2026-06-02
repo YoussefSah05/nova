@@ -11,7 +11,10 @@ pub mod tmdb;
 pub use dedup::{cluster, Cluster, DedupItem};
 pub use embed::{Embedder, FastEmbedder};
 pub use taxonomy::GenreClassifier;
-pub use tmdb::{best_match, parse_genres, parse_search, TmdbClient, TmdbMatch, MIN_CONFIDENCE};
+pub use tmdb::{
+    best_match, best_scored, parse_genres, parse_search, TmdbClient, TmdbMatch, MIN_CONFIDENCE,
+    WEAK_CONFIDENCE,
+};
 
 #[derive(thiserror::Error, Debug)]
 pub enum EnrichError {
