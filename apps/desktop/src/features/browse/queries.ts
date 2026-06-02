@@ -74,14 +74,15 @@ function channelToItem(c: Channel): BrowseItem {
 }
 
 function vodToItem(v: VodItem): BrowseItem {
-  const title = v.cleanTitle ?? v.name;
+  // Prefer the TMDB-enriched display layer, falling back to rules-cleaned / raw.
+  const title = v.canonicalTitle ?? v.cleanTitle ?? v.name;
   return {
     key: `vod-${v.id}`,
     kind: "vod",
     id: v.id,
     title,
     subtitle: [v.year?.toString(), v.category].filter(Boolean).join(" / ") || null,
-    posterUrl: v.logoUrl,
+    posterUrl: v.posterUrl ?? v.logoUrl,
     tvgId: null,
     isFavorite: v.isFavorite,
     isInWatchlist: v.isInWatchlist,
@@ -95,7 +96,7 @@ function seriesToItem(s: SeriesSummary): BrowseItem {
     key: `series-${s.sourceId}-${s.seriesTitle}`,
     kind: "series",
     id: s.sourceId,
-    title: s.seriesTitle,
+    title: s.canonicalTitle ?? s.seriesTitle,
     subtitle: s.category,
     posterUrl: s.posterUrl,
     tvgId: null,

@@ -8,8 +8,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use nova_enrich::{cluster, DedupItem, Embedder, EnrichError, FastEmbedder, GenreClassifier};
-use nova_storage::{ChannelRepository, EnrichUpdate, UnenrichedRow, VodRepository};
+use nova_enrich::{
+    best_match, cluster, parse_genres, parse_search, DedupItem, Embedder, EnrichError,
+    FastEmbedder, GenreClassifier, TmdbClient, MIN_CONFIDENCE,
+};
+use nova_storage::{
+    ChannelRepository, EnrichUpdate, ProfileSettingsRepository, SeriesRepository, SeriesTmdbWrite,
+    TmdbCacheRepository, TmdbWrite, UnenrichedRow, VodRepository,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -166,8 +172,161 @@ async fn run_enrichment(
     VodRepository::new(&pool)
         .apply_enrichment(&vod_updates)
         .await?;
+
+    // Phase C — opt-in TMDB pass (canonical titles, posters, backdrops, genres).
+    // Offline-first: only runs when enabled *and* a key is set.
+    let settings = ProfileSettingsRepository::new(&pool).get().await?;
+    if settings.tmdb_enabled {
+        if let Some(key) = settings.tmdb_api_key.filter(|k| !k.trim().is_empty()) {
+            run_tmdb(&pool, source_id, key, app).await?;
+        }
+    }
+
     emit("complete", total, true);
     Ok(())
+}
+
+/// TMDB enrichment for movies + series of a source. Each search is cached by key
+/// so duplicates (and re-runs) don't re-hit the API; unmatched rows are recorded
+/// so they're skipped next time. Network-bound, so it runs on the async runtime
+/// (not `spawn_blocking`).
+async fn run_tmdb(
+    pool: &Arc<sqlx::SqlitePool>,
+    source_id: i64,
+    api_key: String,
+    app: &AppHandle,
+) -> Result<(), ApiError> {
+    let client = TmdbClient::new(api_key).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let cache = TmdbCacheRepository::new(pool);
+
+    let movie_genres = {
+        let body = fetch_cached(&cache, "genres:movie", || client.genre_list("movie")).await?;
+        parse_genres(&body).map_err(|e| ApiError::Internal(e.to_string()))?
+    };
+    let tv_genres = {
+        let body = fetch_cached(&cache, "genres:tv", || client.genre_list("tv")).await?;
+        parse_genres(&body).map_err(|e| ApiError::Internal(e.to_string()))?
+    };
+
+    // ── Movies ──
+    let movies = VodRepository::new(pool).list_for_tmdb(source_id).await?;
+    let series = SeriesRepository::new(pool).list_for_tmdb(source_id).await?;
+    let tmdb_total = movies.len() + series.len();
+    let mut done = 0usize;
+    let emit = |processed: usize| {
+        let _ = app.emit(
+            "catalog:enrich:progress",
+            EnrichProgress {
+                source_id,
+                stage: "matching".into(),
+                processed,
+                total: tmdb_total,
+                done: false,
+                error: None,
+            },
+        );
+    };
+    emit(0);
+
+    let mut movie_writes = Vec::with_capacity(movies.len());
+    for q in &movies {
+        let key = format!("movie::{}::{}", q.title.to_lowercase(), q.year.unwrap_or(0));
+        let body = fetch_cached(&cache, &key, || {
+            client.search_movie(&q.title, q.year.map(|y| y as i32))
+        })
+        .await?;
+        let items = parse_search(&body).map_err(|e| ApiError::Internal(e.to_string()))?;
+        let m = best_match(
+            &q.title,
+            q.year.map(|y| y as i32),
+            &items,
+            &movie_genres,
+            MIN_CONFIDENCE,
+        );
+        movie_writes.push(to_movie_write(q.id, m));
+        done += 1;
+        if done.is_multiple_of(25) {
+            emit(done);
+        }
+    }
+    VodRepository::new(pool).apply_tmdb(&movie_writes).await?;
+
+    // ── Series (search by title only; no year column) ──
+    let mut series_writes = Vec::with_capacity(series.len());
+    for q in &series {
+        let key = format!("tv::{}", q.series_title.to_lowercase());
+        let body = fetch_cached(&cache, &key, || client.search_tv(&q.series_title)).await?;
+        let items = parse_search(&body).map_err(|e| ApiError::Internal(e.to_string()))?;
+        let m = best_match(&q.series_title, None, &items, &tv_genres, MIN_CONFIDENCE);
+        series_writes.push(to_series_write(q.series_title.clone(), m));
+        done += 1;
+        if done.is_multiple_of(25) {
+            emit(done);
+        }
+    }
+    SeriesRepository::new(pool)
+        .apply_tmdb(source_id, &series_writes)
+        .await?;
+    Ok(())
+}
+
+/// Read a cached TMDB body or fetch + store it.
+async fn fetch_cached<F, Fut>(
+    cache: &TmdbCacheRepository<'_>,
+    key: &str,
+    fetch: F,
+) -> Result<String, ApiError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<String, EnrichError>>,
+{
+    if let Some(body) = cache.get(key).await? {
+        return Ok(body);
+    }
+    let body = fetch()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    cache.put(key, &body).await?;
+    Ok(body)
+}
+
+fn to_movie_write(id: i64, m: Option<nova_enrich::TmdbMatch>) -> TmdbWrite {
+    match m {
+        Some(m) => TmdbWrite {
+            id,
+            canonical_title: Some(m.canonical_title),
+            poster_url: m.poster_url,
+            backdrop_url: m.backdrop_url,
+            overview: m.overview,
+            primary_genre: m.genres.first().cloned(),
+            genres_csv: (!m.genres.is_empty()).then(|| m.genres.join(", ")),
+            matched: true,
+        },
+        None => TmdbWrite {
+            id,
+            matched: false,
+            ..Default::default()
+        },
+    }
+}
+
+fn to_series_write(series_title: String, m: Option<nova_enrich::TmdbMatch>) -> SeriesTmdbWrite {
+    match m {
+        Some(m) => SeriesTmdbWrite {
+            series_title,
+            canonical_title: Some(m.canonical_title),
+            poster_url: m.poster_url,
+            backdrop_url: m.backdrop_url,
+            overview: m.overview,
+            genres_csv: (!m.genres.is_empty()).then(|| m.genres.join(", ")),
+            matched: true,
+        },
+        None => SeriesTmdbWrite {
+            series_title,
+            matched: false,
+            ..Default::default()
+        },
+    }
 }
 
 /// Embed a batch, cluster near-duplicates (within a cheap first-token bucket),

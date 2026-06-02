@@ -13,7 +13,7 @@ pub use error::StorageError;
 pub use repositories::{
     CaptionStyleRepository, ChannelRepository, EnrichUpdate, EpgSource, EpgSourcesRepository, Job,
     JobRepository, NowAndNext, PlaybackRepository, ProfileRepository, ProfileSettingsRepository,
-    ProgramsRepository, ResolvedStreamUrl, ResumePosition, SeriesRepository, SourceRepository,
-    StoredTranscript, TranscriptRepository, UnenrichedRow, VodRepository, WatchHistoryRepository,
-    WatchSnapshot,
+    ProgramsRepository, ResolvedStreamUrl, ResumePosition, SeriesRepository, SeriesTmdbQuery,
+    SeriesTmdbWrite, SourceRepository, StoredTranscript, TmdbCacheRepository, TmdbQuery, TmdbWrite,
+    TranscriptRepository, UnenrichedRow, VodRepository, WatchHistoryRepository, WatchSnapshot,
 };

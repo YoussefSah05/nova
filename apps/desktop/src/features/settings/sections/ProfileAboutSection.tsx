@@ -106,6 +106,10 @@ export function ProfileAboutSection({
           }
         />
       </SettingsCard>
+
+      <p className="text-xs text-white/40">
+        This product uses the TMDB API but is not endorsed or certified by TMDB.
+      </p>
     </div>
   );
 }

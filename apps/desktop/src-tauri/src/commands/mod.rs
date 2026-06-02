@@ -1175,6 +1175,10 @@ fn push_entry(
             is_in_watchlist: false,
             added_at: None,
             dedup_group: None,
+            canonical_title: None,
+            poster_url: None,
+            backdrop_url: None,
+            overview: None,
         }),
         MediaKind::Series => series.push(SeriesEpisode {
             id: 0,

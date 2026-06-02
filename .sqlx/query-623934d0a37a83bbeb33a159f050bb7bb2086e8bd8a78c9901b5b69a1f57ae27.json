@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO tmdb_cache (cache_key, body, fetched_at) VALUES (?, ?, ?)\n             ON CONFLICT(cache_key) DO UPDATE SET body = excluded.body, fetched_at = excluded.fetched_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "623934d0a37a83bbeb33a159f050bb7bb2086e8bd8a78c9901b5b69a1f57ae27"
+}

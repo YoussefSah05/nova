@@ -105,6 +105,11 @@ pub struct VodItem {
     pub added_at: Option<i64>,
     /// Enrichment de-dup cluster key (variants share one); `None` until enriched.
     pub dedup_group: Option<String>,
+    /// TMDB display layer (Phase C, opt-in); `None` until matched.
+    pub canonical_title: Option<String>,
+    pub poster_url: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub overview: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +140,10 @@ pub struct SeriesSummary {
     pub is_favorite: bool,
     pub is_in_watchlist: bool,
     pub added_at: Option<i64>,
+    /// TMDB display layer (Phase C, opt-in); `None` until matched.
+    pub canonical_title: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub overview: Option<String>,
 }
 
 /// Sort order for browse list commands.
@@ -297,6 +306,12 @@ pub struct ProfileSettings {
     pub preferred_subtitle_lang: Option<String>,
     /// Default playback route: `auto` | `remux_hls` | `transcode_hls`.
     pub default_playback_route: String,
+    /// Catalog enrichment (Phase C): use TMDB to fill canonical titles, posters,
+    /// backdrops, overviews and genres. Offline-first — nothing calls TMDB unless
+    /// this is on *and* a key is set.
+    pub tmdb_enabled: bool,
+    /// User-supplied TMDB API key (v3 auth). `None` keeps enrichment fully offline.
+    pub tmdb_api_key: Option<String>,
 }
 
 impl Default for ProfileSettings {
@@ -307,6 +322,8 @@ impl Default for ProfileSettings {
             preferred_audio_lang: None,
             preferred_subtitle_lang: None,
             default_playback_route: "auto".to_string(),
+            tmdb_enabled: false,
+            tmdb_api_key: None,
         }
     }
 }

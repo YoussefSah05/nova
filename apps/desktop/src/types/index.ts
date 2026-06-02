@@ -51,6 +51,11 @@ export interface VodItem {
   isInWatchlist: boolean;
   addedAt: number | null;
   dedupGroup: string | null;
+  // TMDB display layer (Phase C); null until matched.
+  canonicalTitle: string | null;
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  overview: string | null;
 }
 
 export interface SeriesSummary {
@@ -63,6 +68,10 @@ export interface SeriesSummary {
   isFavorite: boolean;
   isInWatchlist: boolean;
   addedAt: number | null;
+  // TMDB display layer (Phase C); null until matched.
+  canonicalTitle: string | null;
+  backdropUrl: string | null;
+  overview: string | null;
 }
 
 export interface SeriesEpisode {
@@ -194,6 +203,9 @@ export interface ProfileSettings {
   preferredAudioLang: string | null;
   preferredSubtitleLang: string | null;
   defaultPlaybackRoute: DefaultPlaybackRoute;
+  // Catalog enrichment (Phase C) — opt-in TMDB, user-supplied key.
+  tmdbEnabled: boolean;
+  tmdbApiKey: string | null;
 }
 
 export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
@@ -202,6 +214,8 @@ export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
   preferredAudioLang: null,
   preferredSubtitleLang: null,
   defaultPlaybackRoute: "auto",
+  tmdbEnabled: false,
+  tmdbApiKey: null,
 };
 
 // ── IPC errors ────────────────────────────────────────────────────────────────

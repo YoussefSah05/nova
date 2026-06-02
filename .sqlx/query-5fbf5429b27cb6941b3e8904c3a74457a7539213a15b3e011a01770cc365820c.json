@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT body as \"body!: String\" FROM tmdb_cache WHERE cache_key = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "body!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5fbf5429b27cb6941b3e8904c3a74457a7539213a15b3e011a01770cc365820c"
+}

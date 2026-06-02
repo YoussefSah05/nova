@@ -574,9 +574,23 @@ Layers are idempotent, incremental, and never destroy raw data — they write a 
 Phase A is live: `nova_core::clean::polish_title` (`crates/core/src/clean.rs`) folds decorative
 Unicode (`ᴴᴰ`→`HD`, fullwidth→ASCII) and strips release/quality/codec junk tokens
 (`HD`/`1080p`/`x265`/`WEB-DL`/`MULTI`/`VOSTFR`…), conservatively. It runs at import in `push_entry`
-(both M3U + Xtream) on live `name`, vod `clean_title`, series `series_title`. Phases B–D add
-enrichment columns + a post-import background job (`crates/jobs`) emitting `catalog:enrich:progress`,
-upgrading content in place via React Query invalidation.
+(both M3U + Xtream) on live `name`, vod `clean_title`, series `series_title`.
+
+Phase B is live (`crates/enrich`, fastembed-rs/`ort`, `multilingual-e5-small`): a post-import
+background task (`commands/enrich.rs::run_enrichment`) embeds unenriched rows, clusters near-duplicate
+variants into a `dedup_group` (bucketed cosine), and zero-shot fills missing genres — gated on
+`enrich_status IS NULL` (migration 0013), idempotent, emitting `catalog:enrich:progress`.
+
+Phase C is live (opt-in TMDB): the same job, after the embedding stage, matches movies + series to
+TMDB (`nova_enrich::tmdb` — async `reqwest` client returning cacheable raw bodies + pure
+`best_match` lexical title+year scoring) and writes a display layer — `canonical_title`, `poster_url`,
+`backdrop_url`, `overview`, `tmdb_genres` (migration 0014: columns on `vod_items`, a `series_meta`
+sidecar, a `tmdb_cache`). It only runs when `ProfileSettings.tmdb_enabled` and a user-supplied
+`tmdb_api_key` are set (offline-first); unmatched rows are recorded (`tmdb_status='unmatched'`) for a
+later Phase D residual. TMDB ToS requires attribution (surfaced in Settings/About) and permits the
+local cache. Phase D (tiny local LLM, llama.cpp) remains planned. The frontend prefers the enriched
+display layer (`queries.ts`, `BrowseHero`) and upgrades content in place via React Query invalidation
+on the terminal `catalog:enrich:progress` event.
 
 ### Live playback flow
 1. User clicks a channel. Frontend calls `play_channel(channel_id, caption_mode)`.

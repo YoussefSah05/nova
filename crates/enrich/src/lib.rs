@@ -6,15 +6,21 @@
 mod dedup;
 mod embed;
 mod taxonomy;
+pub mod tmdb;
 
 pub use dedup::{cluster, Cluster, DedupItem};
 pub use embed::{Embedder, FastEmbedder};
 pub use taxonomy::GenreClassifier;
+pub use tmdb::{best_match, parse_genres, parse_search, TmdbClient, TmdbMatch, MIN_CONFIDENCE};
 
 #[derive(thiserror::Error, Debug)]
 pub enum EnrichError {
     #[error("embedding model error: {0}")]
     Model(String),
+    #[error("TMDB request error: {0}")]
+    Http(String),
+    #[error("TMDB parse error: {0}")]
+    Parse(String),
 }
 
 /// Cosine similarity of two equal-length vectors (0 if either is zero/length-mismatched).

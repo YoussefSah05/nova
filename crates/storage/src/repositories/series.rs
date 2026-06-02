@@ -2,6 +2,7 @@ use nova_core::{now_ts, ContentSort, SeriesEpisode, SeriesSummary};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
+use crate::repositories::enrich::{SeriesTmdbQuery, SeriesTmdbWrite};
 
 pub struct SeriesRepository<'a> {
     pool: &'a SqlitePool,
@@ -175,22 +176,27 @@ impl<'a> SeriesRepository<'a> {
         let wl_flag: i64 = if watchlist_only { 1 } else { 0 };
         let rows = match sort {
             ContentSort::RecentlyAdded => sqlx::query!(
-                r#"SELECT series_title as "series_title!: String",
-                        MIN(category) as "category?: String",
-                        SUM(CASE WHEN season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
-                        COUNT(DISTINCT CASE WHEN season > 0 THEN season END) as "season_count!: i64",
-                        MIN(logo_url) as "poster_url?: String",
-                        MAX(is_favorite) as "is_favorite!: i64",
-                        MAX(is_in_watchlist) as "is_in_watchlist!: i64",
-                        MAX(added_at) as "added_at?: i64"
-                 FROM series_episodes
-                 WHERE source_id = ?
-                   AND (? IS NULL OR category = ?)
-                   AND (? IS NULL OR series_title LIKE ?)
-                 GROUP BY series_title
-                 HAVING (? = 0 OR MAX(is_favorite) = 1)
-                    AND (? = 0 OR MAX(is_in_watchlist) = 1)
-                 ORDER BY MAX(added_at) DESC, series_title ASC
+                r#"SELECT se.series_title as "series_title!: String",
+                        MIN(se.category) as "category?: String",
+                        SUM(CASE WHEN se.season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
+                        COUNT(DISTINCT CASE WHEN se.season > 0 THEN se.season END) as "season_count!: i64",
+                        COALESCE(MAX(sm.poster_url), MIN(se.logo_url)) as "poster_url?: String",
+                        MAX(se.is_favorite) as "is_favorite!: i64",
+                        MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
+                        MAX(se.added_at) as "added_at?: i64",
+                        MAX(sm.canonical_title) as "canonical_title?: String",
+                        MAX(sm.backdrop_url) as "backdrop_url?: String",
+                        MAX(sm.overview) as "overview?: String"
+                 FROM series_episodes se
+                 LEFT JOIN series_meta sm
+                   ON sm.source_id = se.source_id AND sm.series_title = se.series_title
+                 WHERE se.source_id = ?
+                   AND (? IS NULL OR se.category = ?)
+                   AND (? IS NULL OR se.series_title LIKE ?)
+                 GROUP BY se.series_title
+                 HAVING (? = 0 OR MAX(se.is_favorite) = 1)
+                    AND (? = 0 OR MAX(se.is_in_watchlist) = 1)
+                 ORDER BY MAX(se.added_at) DESC, se.series_title ASC
                  LIMIT ? OFFSET ?"#,
                 source_id,
                 category,
@@ -215,25 +221,33 @@ impl<'a> SeriesRepository<'a> {
                 is_favorite: r.is_favorite != 0,
                 is_in_watchlist: r.is_in_watchlist != 0,
                 added_at: r.added_at,
+                canonical_title: r.canonical_title,
+                backdrop_url: r.backdrop_url,
+                overview: r.overview,
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
-                r#"SELECT series_title as "series_title!: String",
-                        MIN(category) as "category?: String",
-                        SUM(CASE WHEN season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
-                        COUNT(DISTINCT CASE WHEN season > 0 THEN season END) as "season_count!: i64",
-                        MIN(logo_url) as "poster_url?: String",
-                        MAX(is_favorite) as "is_favorite!: i64",
-                        MAX(is_in_watchlist) as "is_in_watchlist!: i64",
-                        MAX(added_at) as "added_at?: i64"
-                 FROM series_episodes
-                 WHERE source_id = ?
-                   AND (? IS NULL OR category = ?)
-                   AND (? IS NULL OR series_title LIKE ?)
-                 GROUP BY series_title
-                 HAVING (? = 0 OR MAX(is_favorite) = 1)
-                    AND (? = 0 OR MAX(is_in_watchlist) = 1)
-                 ORDER BY series_title ASC
+                r#"SELECT se.series_title as "series_title!: String",
+                        MIN(se.category) as "category?: String",
+                        SUM(CASE WHEN se.season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
+                        COUNT(DISTINCT CASE WHEN se.season > 0 THEN se.season END) as "season_count!: i64",
+                        COALESCE(MAX(sm.poster_url), MIN(se.logo_url)) as "poster_url?: String",
+                        MAX(se.is_favorite) as "is_favorite!: i64",
+                        MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
+                        MAX(se.added_at) as "added_at?: i64",
+                        MAX(sm.canonical_title) as "canonical_title?: String",
+                        MAX(sm.backdrop_url) as "backdrop_url?: String",
+                        MAX(sm.overview) as "overview?: String"
+                 FROM series_episodes se
+                 LEFT JOIN series_meta sm
+                   ON sm.source_id = se.source_id AND sm.series_title = se.series_title
+                 WHERE se.source_id = ?
+                   AND (? IS NULL OR se.category = ?)
+                   AND (? IS NULL OR se.series_title LIKE ?)
+                 GROUP BY se.series_title
+                 HAVING (? = 0 OR MAX(se.is_favorite) = 1)
+                    AND (? = 0 OR MAX(se.is_in_watchlist) = 1)
+                 ORDER BY se.series_title ASC
                  LIMIT ? OFFSET ?"#,
                 source_id,
                 category,
@@ -258,6 +272,9 @@ impl<'a> SeriesRepository<'a> {
                 is_favorite: r.is_favorite != 0,
                 is_in_watchlist: r.is_in_watchlist != 0,
                 added_at: r.added_at,
+                canonical_title: r.canonical_title,
+                backdrop_url: r.backdrop_url,
+                overview: r.overview,
             })
             .collect(),
         };
@@ -405,6 +422,66 @@ impl<'a> SeriesRepository<'a> {
         .fetch_all(self.pool)
         .await?;
         Ok(rows.into_iter().map(|r| r.value).collect())
+    }
+
+    /// Distinct series of a source that have not yet had a TMDB pass (no
+    /// `series_meta` row, or one still flagged `tmdb_status IS NULL`).
+    pub async fn list_for_tmdb(
+        &self,
+        source_id: i64,
+    ) -> Result<Vec<SeriesTmdbQuery>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT DISTINCT se.series_title as "series_title!: String"
+               FROM series_episodes se
+               LEFT JOIN series_meta sm
+                 ON sm.source_id = se.source_id AND sm.series_title = se.series_title
+               WHERE se.source_id = ? AND sm.tmdb_status IS NULL"#,
+            source_id,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SeriesTmdbQuery {
+                series_title: r.series_title,
+            })
+            .collect())
+    }
+
+    /// Upsert TMDB metadata for series into `series_meta` (matched or unmatched).
+    pub async fn apply_tmdb(
+        &self,
+        source_id: i64,
+        updates: &[SeriesTmdbWrite],
+    ) -> Result<(), StorageError> {
+        let mut tx = self.pool.begin().await?;
+        for u in updates {
+            let status = if u.matched { "matched" } else { "unmatched" };
+            sqlx::query!(
+                "INSERT INTO series_meta
+                   (source_id, series_title, canonical_title, poster_url, backdrop_url, overview, tmdb_genres, tmdb_status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(source_id, series_title) DO UPDATE SET
+                   canonical_title = excluded.canonical_title,
+                   poster_url = excluded.poster_url,
+                   backdrop_url = excluded.backdrop_url,
+                   overview = excluded.overview,
+                   tmdb_genres = excluded.tmdb_genres,
+                   tmdb_status = excluded.tmdb_status",
+                source_id,
+                u.series_title,
+                u.canonical_title,
+                u.poster_url,
+                u.backdrop_url,
+                u.overview,
+                u.genres_csv,
+                status,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 }
 
