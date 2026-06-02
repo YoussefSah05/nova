@@ -178,35 +178,55 @@ async function fetchItems(
     return (await invoke<ChannelGroup[]>("list_channel_groups", args)).map(channelGroupToItem);
   }
   if (tab === "movies") {
-    return collapseDuplicates((await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem));
+    return collapseByKey(
+      (await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem),
+      (item) => item.dedupGroup ?? null
+    );
   }
-  return (await invoke<SeriesSummary[]>(LIST_COMMAND.series, args)).map(seriesToItem);
+  // Series have no backend dedup group; collapse exact-duplicate titles instead.
+  return collapseByKey(
+    (await invoke<SeriesSummary[]>(LIST_COMMAND.series, args)).map(seriesToItem),
+    seriesGroupKey
+  );
 }
 
-/// Collapse enrichment de-dup variants within a page: keep the first item of
-/// each `dedupGroup` (items without a group are kept as-is). Page-local — exact
-/// for rails (one page) and good enough for the grid's 200-item pages.
-/// Collapse a page's dedup groups to one representative card each, but keep the
+/// Collapse a page's duplicates to one representative card each, keeping the
 /// other members as `variants` on the representative (lossless — nothing is
-/// dropped, so quality/backup versions stay reachable). Items without a group
-/// pass through unchanged.
-function collapseDuplicates(items: BrowseItem[]): BrowseItem[] {
+/// dropped, so quality/backup versions stay reachable). `keyOf` returns the
+/// grouping key, or `null`/`""` for items that should never group. Page-local —
+/// exact for rails (one page) and good enough for the grid's pages.
+function collapseByKey(items: BrowseItem[], keyOf: (item: BrowseItem) => string | null): BrowseItem[] {
   const repAt = new Map<string, number>();
   const out: BrowseItem[] = [];
   for (const item of items) {
-    if (!item.dedupGroup) {
+    const key = keyOf(item);
+    if (!key) {
       out.push(item);
       continue;
     }
-    const at = repAt.get(item.dedupGroup);
+    const at = repAt.get(key);
     if (at === undefined) {
-      repAt.set(item.dedupGroup, out.length);
+      repAt.set(key, out.length);
       out.push({ ...item, variants: [] });
     } else {
       (out[at].variants ??= []).push(item);
     }
   }
   return out;
+}
+
+/// Conservative dedup key for series titles: lowercase, keep letters/numbers
+/// (Unicode-safe so Arabic/CJK titles aren't blanked), collapse whitespace. Only
+/// *identical* normalized titles merge — distinct shows (incl. numbered seasons
+/// like `Foo 2`) keep their own card. Empty → never group.
+function seriesGroupKey(item: BrowseItem): string | null {
+  const raw = item.series?.canonicalTitle ?? item.series?.seriesTitle ?? item.title;
+  const key = raw
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return key || null;
 }
 
 async function fetchCount(
