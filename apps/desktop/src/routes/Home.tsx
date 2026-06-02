@@ -170,7 +170,31 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       if (p.done) {
         setRefreshing(false);
         setReloadKey((k) => k + 1);
-        if (activeSourceId !== null) invalidateSource(qc, profile.id, activeSourceId);
+        if (activeSourceId !== null) {
+          invalidateSource(qc, profile.id, activeSourceId);
+          // Kick off catalog enrichment (de-dup + genre fill). No-ops if the
+          // embedding model isn't installed; results stream in via the listener.
+          void invoke("start_enrichment", { profileId: profile.id, sourceId: activeSourceId });
+        }
+      }
+    }).then((un) => {
+      if (cancelled) un();
+      else unlisten = un;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [qc, profile.id, activeSourceId]);
+
+  // Enrichment runs in the background; refresh the browse caches when it finishes
+  // so de-duplicated cards + filled-in genres appear without a manual reload.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listen<{ sourceId: number; done: boolean }>("catalog:enrich:progress", (event) => {
+      if (event.payload.done && event.payload.sourceId === activeSourceId) {
+        invalidateSource(qc, profile.id, activeSourceId);
       }
     }).then((un) => {
       if (cancelled) un();

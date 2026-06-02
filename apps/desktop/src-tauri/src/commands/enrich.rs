@@ -84,7 +84,9 @@ pub async fn start_enrichment(
 ) -> Result<(), ApiError> {
     let dir = embeddings_dir(&app)?;
     if !marker(&dir).exists() {
-        return Err(ApiError::Internal("enrichment model not installed".into()));
+        // No model → silently skip, so auto-triggering after import is harmless.
+        // The Settings panel surfaces install state explicitly.
+        return Ok(());
     }
     let pool = require_profile_pool(&profile_id, &state).await?;
     let app2 = app.clone();

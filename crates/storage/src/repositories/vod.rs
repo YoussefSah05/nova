@@ -115,7 +115,7 @@ impl<'a> VodRepository<'a> {
         let wl_flag: i64 = if watchlist_only { 1 } else { 0 };
         let rows = match sort {
             ContentSort::RecentlyAdded => sqlx::query!(
-                r#"SELECT id as "id!: i64", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at
+                r#"SELECT id as "id!: i64", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group
                  FROM vod_items
                  WHERE source_id = ?
                    AND (? IS NULL OR category = ?)
@@ -143,10 +143,11 @@ impl<'a> VodRepository<'a> {
                 is_favorite: r.is_favorite != 0,
                 is_in_watchlist: r.is_in_watchlist != 0,
                 added_at: r.added_at,
+                dedup_group: r.dedup_group,
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
-                r#"SELECT id as "id!: i64", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at
+                r#"SELECT id as "id!: i64", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group
                  FROM vod_items
                  WHERE source_id = ?
                    AND (? IS NULL OR category = ?)
@@ -174,6 +175,7 @@ impl<'a> VodRepository<'a> {
                 is_favorite: r.is_favorite != 0,
                 is_in_watchlist: r.is_in_watchlist != 0,
                 added_at: r.added_at,
+                dedup_group: r.dedup_group,
             })
             .collect(),
         };

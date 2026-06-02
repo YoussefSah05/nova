@@ -121,7 +121,7 @@ impl<'a> ChannelRepository<'a> {
         let wl_flag: i64 = if watchlist_only { 1 } else { 0 };
         let rows = match sort {
             ContentSort::RecentlyAdded => sqlx::query!(
-                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at
+                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group
                  FROM channels
                  WHERE source_id = ?
                    AND (? IS NULL OR country = ?)
@@ -153,10 +153,11 @@ impl<'a> ChannelRepository<'a> {
                 is_in_watchlist: r.is_in_watchlist != 0,
                 last_played_at: r.last_played_at,
                 added_at: r.added_at,
+                dedup_group: r.dedup_group,
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
-                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at
+                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group
                  FROM channels
                  WHERE source_id = ?
                    AND (? IS NULL OR country = ?)
@@ -188,6 +189,7 @@ impl<'a> ChannelRepository<'a> {
                 is_in_watchlist: r.is_in_watchlist != 0,
                 last_played_at: r.last_played_at,
                 added_at: r.added_at,
+                dedup_group: r.dedup_group,
             })
             .collect(),
         };

@@ -1,0 +1,101 @@
+//! Settings → Catalog Enrichment: download the on-device embedding model and
+//! run the de-dup / genre-fill pass over imported playlists.
+
+import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+import type { Source } from "@/types";
+import { SettingRow, SettingsCard, SettingsButton } from "../SettingsUI";
+
+interface EnrichModelStatus {
+  installed: boolean;
+  modelId: string;
+}
+interface EnrichProgress {
+  sourceId: number;
+  stage: string;
+  processed: number;
+  total: number;
+  done: boolean;
+  error?: string | null;
+}
+
+export function EnrichmentSection({ profileId }: { profileId: string }) {
+  const [model, setModel] = useState<EnrichModelStatus | null>(null);
+  const [busy, setBusy] = useState<null | "download" | "run">(null);
+  const [progress, setProgress] = useState<EnrichProgress | null>(null);
+
+  const refresh = useCallback(async () => {
+    setModel(await invoke<EnrichModelStatus>("get_enrich_model_status"));
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const un = listen<EnrichProgress>("catalog:enrich:progress", (e) => {
+      setProgress(e.payload);
+      if (e.payload.done) setBusy(null);
+    });
+    return () => {
+      void un.then((u) => u());
+    };
+  }, [refresh]);
+
+  const download = async () => {
+    setBusy("download");
+    try {
+      await invoke("download_enrich_models");
+      await refresh();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const run = async () => {
+    setBusy("run");
+    setProgress(null);
+    try {
+      const sources = await invoke<Source[]>("list_sources", { profileId });
+      for (const s of sources) {
+        await invoke("start_enrichment", { profileId, sourceId: s.id });
+      }
+    } catch {
+      setBusy(null);
+    }
+    // `busy` clears on the terminal `catalog:enrich:progress` event.
+  };
+
+  const runLabel =
+    progress && !progress.done && progress.total > 0
+      ? `${progress.stage}… ${progress.processed}/${progress.total}`
+      : "Running…";
+
+  return (
+    <div className="flex flex-col gap-6">
+      <SettingsCard title="On-device model">
+        <SettingRow
+          title="Embedding model"
+          description={
+            model ? `${model.modelId} · ${model.installed ? "installed" : "not installed"}` : "…"
+          }
+        >
+          {model?.installed ? (
+            <SettingsButton variant="primary" onClick={run} disabled={busy !== null}>
+              {busy === "run" ? runLabel : "Run enrichment"}
+            </SettingsButton>
+          ) : (
+            <SettingsButton variant="primary" onClick={download} disabled={busy !== null}>
+              {busy === "download" ? "Downloading…" : "Download (~120MB)"}
+            </SettingsButton>
+          )}
+        </SettingRow>
+      </SettingsCard>
+
+      <p className="text-xs text-white/40">
+        Cleans the catalog with on-device AI: collapses duplicate channels/movies into one card and
+        fills in missing genres. Runs automatically after an import once the model is installed —
+        re-run here anytime.
+      </p>
+    </div>
+  );
+}

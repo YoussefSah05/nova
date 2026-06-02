@@ -1160,6 +1160,7 @@ fn push_entry(
             is_in_watchlist: false,
             last_played_at: None,
             added_at: None,
+            dedup_group: None,
         }),
         MediaKind::Movie => vod.push(VodItem {
             id: 0,
@@ -1173,6 +1174,7 @@ fn push_entry(
             is_favorite: false,
             is_in_watchlist: false,
             added_at: None,
+            dedup_group: None,
         }),
         MediaKind::Series => series.push(SeriesEpisode {
             id: 0,

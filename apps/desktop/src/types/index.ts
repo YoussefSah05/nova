@@ -35,6 +35,7 @@ export interface Channel {
   isInWatchlist: boolean;
   lastPlayedAt: number | null;
   addedAt: number | null;
+  dedupGroup: string | null;
 }
 
 export interface VodItem {
@@ -49,6 +50,7 @@ export interface VodItem {
   isFavorite: boolean;
   isInWatchlist: boolean;
   addedAt: number | null;
+  dedupGroup: string | null;
 }
 
 export interface SeriesSummary {

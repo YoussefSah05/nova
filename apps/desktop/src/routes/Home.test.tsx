@@ -102,6 +102,7 @@ function channel(id: number): Channel {
     isInWatchlist: false,
     lastPlayedAt: null,
     addedAt: null,
+    dedupGroup: null,
   };
 }
 
