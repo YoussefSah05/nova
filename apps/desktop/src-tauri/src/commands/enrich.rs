@@ -158,68 +158,71 @@ async fn run_enrichment(
         );
     };
 
-    if total == 0 {
-        emit("complete", 0, true);
-        return Ok(());
+    // Embedding/clustering only runs when there are *unenriched* rows. The TMDB
+    // stage below is independent — it must still run on a re-trigger even when
+    // embeddings are already done (`total == 0`), otherwise an opt-in TMDB pass
+    // could never catch up on rows it hasn't matched yet.
+    if total > 0 {
+        // The first model load is slow (cold ONNX init); tell the UI before we block.
+        emit("loading-model", 0, false);
+
+        // Embedding + clustering is CPU-heavy and synchronous — do it off the
+        // async runtime. Embed in chunks and emit progress per chunk so the bar
+        // actually moves (the whole-catalog single call looked stuck at 0).
+        let app_bg = app.clone();
+        let (ch_updates, vod_updates) = tauri::async_runtime::spawn_blocking(
+            move || -> Result<(Vec<EnrichUpdate>, Vec<EnrichUpdate>), String> {
+                let embedder = FastEmbedder::load(&cache_dir, false).map_err(|e| e.to_string())?;
+                let genres = nova_core::classify::genres();
+                let genre_strings: Vec<String> = genres.iter().map(|g| g.to_string()).collect();
+                let label_vecs = embedder.embed(&genre_strings).map_err(|e| e.to_string())?;
+                let labels: Vec<(String, Vec<f32>)> =
+                    genre_strings.into_iter().zip(label_vecs).collect();
+                let classifier = GenreClassifier::new(labels);
+
+                // Embed channels + movies in one 0..total sweep, then split the
+                // vectors back out for per-type clustering.
+                let ch_n = ch_rows.len();
+                let mut texts: Vec<String> = Vec::with_capacity(total);
+                texts.extend(ch_rows.iter().map(|r| r.text.clone()));
+                texts.extend(vod_rows.iter().map(|r| r.text.clone()));
+
+                let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(total);
+                for batch in texts.chunks(EMBED_CHUNK) {
+                    vectors.extend(embedder.embed(batch).map_err(|e| e.to_string())?);
+                    let _ = app_bg.emit(
+                        "catalog:enrich:progress",
+                        EnrichProgress {
+                            source_id,
+                            stage: "embedding".into(),
+                            processed: vectors.len(),
+                            total,
+                            done: false,
+                            error: None,
+                        },
+                    );
+                }
+                let (ch_vecs, vod_vecs) = vectors.split_at(ch_n);
+                let ch = cluster_and_genre(&ch_rows, ch_vecs, &classifier);
+                let vod = cluster_and_genre(&vod_rows, vod_vecs, &classifier);
+                Ok((ch, vod))
+            },
+        )
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(ApiError::Internal)?;
+
+        ChannelRepository::new(&pool)
+            .apply_enrichment(&ch_updates)
+            .await?;
+        VodRepository::new(&pool)
+            .apply_enrichment(&vod_updates)
+            .await?;
     }
-    // The first model load is slow (cold ONNX init); tell the UI before we block.
-    emit("loading-model", 0, false);
-
-    // Embedding + clustering is CPU-heavy and synchronous — do it off the async
-    // runtime. Embed in chunks and emit progress per chunk so the bar actually
-    // moves (the whole-catalog single call is what made it look stuck at 0).
-    let app_bg = app.clone();
-    let (ch_updates, vod_updates) = tauri::async_runtime::spawn_blocking(
-        move || -> Result<(Vec<EnrichUpdate>, Vec<EnrichUpdate>), String> {
-            let embedder = FastEmbedder::load(&cache_dir, false).map_err(|e| e.to_string())?;
-            let genres = nova_core::classify::genres();
-            let genre_strings: Vec<String> = genres.iter().map(|g| g.to_string()).collect();
-            let label_vecs = embedder.embed(&genre_strings).map_err(|e| e.to_string())?;
-            let labels: Vec<(String, Vec<f32>)> =
-                genre_strings.into_iter().zip(label_vecs).collect();
-            let classifier = GenreClassifier::new(labels);
-
-            // Embed channels + movies in one 0..total sweep, then split the
-            // vectors back out for per-type clustering.
-            let ch_n = ch_rows.len();
-            let mut texts: Vec<String> = Vec::with_capacity(total);
-            texts.extend(ch_rows.iter().map(|r| r.text.clone()));
-            texts.extend(vod_rows.iter().map(|r| r.text.clone()));
-
-            let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(total);
-            for batch in texts.chunks(EMBED_CHUNK) {
-                vectors.extend(embedder.embed(batch).map_err(|e| e.to_string())?);
-                let _ = app_bg.emit(
-                    "catalog:enrich:progress",
-                    EnrichProgress {
-                        source_id,
-                        stage: "embedding".into(),
-                        processed: vectors.len(),
-                        total,
-                        done: false,
-                        error: None,
-                    },
-                );
-            }
-            let (ch_vecs, vod_vecs) = vectors.split_at(ch_n);
-            let ch = cluster_and_genre(&ch_rows, ch_vecs, &classifier);
-            let vod = cluster_and_genre(&vod_rows, vod_vecs, &classifier);
-            Ok((ch, vod))
-        },
-    )
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?
-    .map_err(ApiError::Internal)?;
-
-    ChannelRepository::new(&pool)
-        .apply_enrichment(&ch_updates)
-        .await?;
-    VodRepository::new(&pool)
-        .apply_enrichment(&vod_updates)
-        .await?;
 
     // Phase C — opt-in TMDB pass (canonical titles, posters, backdrops, genres).
-    // Offline-first: only runs when enabled *and* a key is set.
+    // Offline-first: only runs when enabled *and* a key is set. Independent of the
+    // embedding stage so a re-run can keep matching rows even after embeddings done.
     let settings = ProfileSettingsRepository::new(&pool).get().await?;
     if settings.tmdb_enabled {
         if let Some(key) = settings.tmdb_api_key.filter(|k| !k.trim().is_empty()) {
