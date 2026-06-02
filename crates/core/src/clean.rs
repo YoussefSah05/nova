@@ -62,6 +62,48 @@ pub fn dedup_key(raw: &str) -> String {
         .join(" ")
 }
 
+/// A **brand-family** key for grouping live channels: the inverse of
+/// [`dedup_key`] — it *folds* a trailing channel number so a whole family
+/// gathers (`beIN Sports 1`, `beIN Sports 2`, `beIN Sports HD` → `bein sports`).
+/// To avoid clobbering single-word numbered brands (`France 24`, `RT`), the
+/// trailing number is only dropped when at least two alphabetic words remain
+/// (`Sky Sport 1` → `sky sport`, but `France 24` stays `france 24`).
+pub fn channel_brand(raw: &str) -> String {
+    let mut tokens: Vec<String> = fold(raw)
+        .split_whitespace()
+        .filter(|t| !is_junk_token(t))
+        .map(|t| {
+            t.chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(|c| c.to_lowercase())
+                .collect::<String>()
+        })
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    if tokens.is_empty() {
+        // Only junk (e.g. "HD") — fall back to a normalized form of the whole name.
+        return fold(raw)
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(|c| c.to_lowercase())
+            .collect();
+    }
+
+    let alpha_words = tokens
+        .iter()
+        .filter(|t| t.chars().any(|c| c.is_alphabetic()))
+        .count();
+    if alpha_words >= 2
+        && tokens
+            .last()
+            .is_some_and(|t| t.chars().all(|c| c.is_ascii_digit()))
+    {
+        tokens.pop();
+    }
+    tokens.join(" ")
+}
+
 /// Build the cleanest possible **TMDB search query** from a raw catalog name.
 /// More aggressive than [`polish_title`]: drops a leading provider/country
 /// prefix (everything before the last `|`), bracketed groups (`[MULTI]`,
@@ -99,6 +141,48 @@ pub fn search_title(raw: &str) -> String {
     } else {
         joined
     }
+}
+
+/// Series/season indicator words (normalized, multilingual) dropped from a TV
+/// search query — providers append these but TMDB wants just the show name.
+const SERIES_WORDS: &[&str] = &[
+    "season", "saison", "temporada", "staffel", "stagione", "series", "serie", "show", "مسلسل",
+];
+
+/// Like [`search_title`] but for **TV series**: also strips season/series
+/// indicator words and the season number that usually follows them
+/// (`Game of Thrones Season 8` → `Game of Thrones`, `مسلسل Breaking Bad` →
+/// `Breaking Bad`).
+pub fn search_series_title(raw: &str) -> String {
+    let folded = fold(raw);
+    let mut had_season = false;
+    let kept: Vec<&str> = folded
+        .split_whitespace()
+        .filter(|t| {
+            let norm: String = t
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(|c| c.to_lowercase())
+                .collect();
+            if SERIES_WORDS.contains(&norm.as_str()) {
+                had_season = true;
+                return false;
+            }
+            true
+        })
+        .collect();
+    // Once a season word appeared, a bare number is its index, not part of the title.
+    let cleaned: Vec<&str> = if had_season {
+        kept.into_iter()
+            .filter(|t| {
+                let alnum: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
+                alnum.is_empty() || !alnum.bytes().all(|b| b.is_ascii_digit())
+            })
+            .collect()
+    } else {
+        kept
+    };
+    search_title(&cleaned.join(" "))
 }
 
 /// A standalone 4-digit release year (1900–2099) — removed from search queries
@@ -289,5 +373,28 @@ mod tests {
     fn search_title_keeps_real_titles() {
         assert_eq!(search_title("Spider-Man"), "Spider-Man");
         assert_eq!(search_title("Rocky 2"), "Rocky 2");
+    }
+
+    #[test]
+    fn channel_brand_folds_families() {
+        assert_eq!(channel_brand("beIN Sports 1"), "bein sports");
+        assert_eq!(channel_brand("beIN Sports 2 HD"), "bein sports");
+        assert_eq!(channel_brand("beIN Sports ᴴᴰ"), "bein sports");
+        assert_eq!(channel_brand("Sky Sport 1"), "sky sport");
+        assert_eq!(channel_brand("HBO"), "hbo");
+    }
+
+    #[test]
+    fn channel_brand_keeps_single_word_numbered_brands() {
+        // Only one alphabetic word ⇒ the number is part of the brand.
+        assert_eq!(channel_brand("France 24"), "france 24");
+        assert_eq!(channel_brand("Al Jazeera"), "al jazeera");
+    }
+
+    #[test]
+    fn search_series_title_strips_season_words() {
+        assert_eq!(search_series_title("Game of Thrones Season 8"), "Game of Thrones");
+        assert_eq!(search_series_title("مسلسل Breaking Bad"), "Breaking Bad");
+        assert_eq!(search_series_title("Dark Saison 2"), "Dark");
     }
 }

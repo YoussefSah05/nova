@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod classify;
 pub mod clean;
+pub mod region;
 pub use classify::normalize_category;
 pub use clean::polish_title;
+pub use region::region_of;
 
 // ── Profiles ─────────────────────────────────────────────────────────────────
 
@@ -87,6 +89,11 @@ pub struct Channel {
     pub added_at: Option<i64>,
     /// Enrichment de-dup cluster key (variants share one); `None` until enriched.
     pub dedup_group: Option<String>,
+    /// Brand-family key (`nova_core::clean::channel_brand`) for grouping a brand's
+    /// channels into one bundle (e.g. all `beIN Sports N`); set at import.
+    pub channel_group: Option<String>,
+    /// Coarse region bucket (`nova_core::region::region_of` of `country`).
+    pub region: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +132,23 @@ pub struct SeriesEpisode {
     pub logo_url: Option<String>,
     pub stream_url: String,
     pub added_at: Option<i64>,
+}
+
+/// One live brand-family bundle (e.g. all `beIN Sports N`) returned by
+/// `list_channel_groups`. `representative_id` is the channel to play / show art
+/// for; `member_count` drives the "N channels" badge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelGroup {
+    pub group: String,
+    pub member_count: i64,
+    pub representative_id: i64,
+    pub title: String,
+    pub logo_url: Option<String>,
+    pub category: Option<String>,
+    pub region: Option<String>,
+    pub is_favorite: bool,
+    pub is_in_watchlist: bool,
 }
 
 /// Aggregated series row returned by `list_series`.

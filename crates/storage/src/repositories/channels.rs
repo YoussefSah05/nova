@@ -1,4 +1,4 @@
-use nova_core::{now_ts, Channel, ContentSort};
+use nova_core::{now_ts, Channel, ChannelGroup, ContentSort};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
@@ -28,8 +28,8 @@ impl<'a> ChannelRepository<'a> {
         let added_at = now_ts();
         for c in entries {
             sqlx::query!(
-                "INSERT INTO channels (source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, added_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO channels (source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, added_at, channel_group, region)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 c.source_id,
                 c.tvg_id,
                 c.name,
@@ -39,6 +39,8 @@ impl<'a> ChannelRepository<'a> {
                 c.logo_url,
                 c.stream_url,
                 added_at,
+                c.channel_group,
+                c.region,
             )
             .execute(&mut **tx)
             .await?;
@@ -110,6 +112,7 @@ impl<'a> ChannelRepository<'a> {
         offset: i64,
         country: Option<&str>,
         category: Option<&str>,
+        region: Option<&str>,
         query: Option<&str>,
         favorites_only: bool,
         watchlist_only: bool,
@@ -121,11 +124,12 @@ impl<'a> ChannelRepository<'a> {
         let wl_flag: i64 = if watchlist_only { 1 } else { 0 };
         let rows = match sort {
             ContentSort::RecentlyAdded => sqlx::query!(
-                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group
+                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
                  FROM channels
                  WHERE source_id = ?
                    AND (? IS NULL OR country = ?)
                    AND (? IS NULL OR category = ?)
+                   AND (? IS NULL OR region = ?)
                    AND (? IS NULL OR name LIKE ? OR category LIKE ? OR raw_group LIKE ?)
                    AND (? = 0 OR is_favorite = 1)
                    AND (? = 0 OR is_in_watchlist = 1)
@@ -133,6 +137,7 @@ impl<'a> ChannelRepository<'a> {
                 source_id,
                 country, country,
                 category, category,
+                region, region,
                 search, search, search, search,
                 fav_flag,
                 wl_flag,
@@ -154,14 +159,17 @@ impl<'a> ChannelRepository<'a> {
                 last_played_at: r.last_played_at,
                 added_at: r.added_at,
                 dedup_group: r.dedup_group,
+                channel_group: r.channel_group,
+                region: r.region,
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
-                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group
+                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
                  FROM channels
                  WHERE source_id = ?
                    AND (? IS NULL OR country = ?)
                    AND (? IS NULL OR category = ?)
+                   AND (? IS NULL OR region = ?)
                    AND (? IS NULL OR name LIKE ? OR category LIKE ? OR raw_group LIKE ?)
                    AND (? = 0 OR is_favorite = 1)
                    AND (? = 0 OR is_in_watchlist = 1)
@@ -169,6 +177,7 @@ impl<'a> ChannelRepository<'a> {
                 source_id,
                 country, country,
                 category, category,
+                region, region,
                 search, search, search, search,
                 fav_flag,
                 wl_flag,
@@ -190,6 +199,8 @@ impl<'a> ChannelRepository<'a> {
                 last_played_at: r.last_played_at,
                 added_at: r.added_at,
                 dedup_group: r.dedup_group,
+                channel_group: r.channel_group,
+                region: r.region,
             })
             .collect(),
         };
@@ -202,6 +213,7 @@ impl<'a> ChannelRepository<'a> {
         source_id: i64,
         country: Option<&str>,
         category: Option<&str>,
+        region: Option<&str>,
         query: Option<&str>,
         favorites_only: bool,
         watchlist_only: bool,
@@ -216,6 +228,7 @@ impl<'a> ChannelRepository<'a> {
              WHERE source_id = ?
                AND (? IS NULL OR country = ?)
                AND (? IS NULL OR category = ?)
+               AND (? IS NULL OR region = ?)
                AND (? IS NULL OR name LIKE ? OR category LIKE ? OR raw_group LIKE ?)
                AND (? = 0 OR is_favorite = 1)
                AND (? = 0 OR is_in_watchlist = 1)"#,
@@ -224,6 +237,8 @@ impl<'a> ChannelRepository<'a> {
             country,
             category,
             category,
+            region,
+            region,
             search,
             search,
             search,
@@ -234,6 +249,133 @@ impl<'a> ChannelRepository<'a> {
         .fetch_one(self.pool)
         .await?;
         Ok(row.n)
+    }
+
+    /// One row per brand-family (`channel_group`) for the live wall: a
+    /// representative channel (lowest id with a logo, else lowest id) plus the
+    /// number of channels in the family. Rows lacking a group are singletons.
+    /// Filtered by type (`category`) + `region` + free-text `query`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_groups(
+        &self,
+        source_id: i64,
+        category: Option<&str>,
+        region: Option<&str>,
+        query: Option<&str>,
+        favorites_only: bool,
+        watchlist_only: bool,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ChannelGroup>, StorageError> {
+        let search = like_query(query);
+        let search = search.as_deref();
+        let fav_flag: i64 = if favorites_only { 1 } else { 0 };
+        let wl_flag: i64 = if watchlist_only { 1 } else { 0 };
+        // Group key: COALESCE(channel_group, name) so ungrouped channels are their
+        // own singleton. Representative = lowest id; the card poster uses any
+        // non-empty logo in the family. `member_count` drives the bundle badge.
+        let rows = sqlx::query!(
+            r#"SELECT
+                 COALESCE(NULLIF(channel_group, ''), name) as "group_key!: String",
+                 COUNT(*) as "member_count!: i64",
+                 MIN(id) as "rep_id!: i64",
+                 MIN(name) as "name!: String",
+                 MIN(NULLIF(logo_url, '')) as "logo_url?: String",
+                 MIN(category) as "category?: String",
+                 MIN(region) as "region?: String",
+                 MAX(is_favorite) as "is_favorite!: i64",
+                 MAX(is_in_watchlist) as "is_in_watchlist!: i64"
+               FROM channels
+               WHERE source_id = ?
+                 AND (? IS NULL OR category = ?)
+                 AND (? IS NULL OR region = ?)
+                 AND (? IS NULL OR name LIKE ? OR category LIKE ? OR raw_group LIKE ?)
+                 AND (? = 0 OR is_favorite = 1)
+                 AND (? = 0 OR is_in_watchlist = 1)
+               GROUP BY COALESCE(NULLIF(channel_group, ''), name)
+               ORDER BY COUNT(*) DESC, COALESCE(NULLIF(channel_group, ''), name) ASC
+               LIMIT ? OFFSET ?"#,
+            source_id,
+            category,
+            category,
+            region,
+            region,
+            search,
+            search,
+            search,
+            search,
+            fav_flag,
+            wl_flag,
+            limit,
+            offset,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| ChannelGroup {
+                group: r.group_key,
+                member_count: r.member_count,
+                representative_id: r.rep_id,
+                title: r.name,
+                logo_url: r.logo_url,
+                category: r.category,
+                region: r.region,
+                is_favorite: r.is_favorite != 0,
+                is_in_watchlist: r.is_in_watchlist != 0,
+            })
+            .collect())
+    }
+
+    /// All channels of one brand-family, in display order.
+    pub async fn list_in_group(
+        &self,
+        source_id: i64,
+        group: &str,
+    ) -> Result<Vec<Channel>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
+               FROM channels
+               WHERE source_id = ? AND COALESCE(NULLIF(channel_group, ''), name) = ?
+               ORDER BY name ASC, id ASC"#,
+            source_id,
+            group,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| Channel {
+                id: r.id,
+                source_id: r.source_id,
+                tvg_id: r.tvg_id,
+                name: r.name,
+                country: r.country,
+                category: r.category,
+                raw_group: r.raw_group,
+                logo_url: r.logo_url,
+                stream_url: r.stream_url,
+                is_favorite: r.is_favorite != 0,
+                is_in_watchlist: r.is_in_watchlist != 0,
+                last_played_at: r.last_played_at,
+                added_at: r.added_at,
+                dedup_group: r.dedup_group,
+                channel_group: r.channel_group,
+                region: r.region,
+            })
+            .collect())
+    }
+
+    pub async fn regions(&self, source_id: i64) -> Result<Vec<String>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT DISTINCT region as "value!" FROM channels
+               WHERE source_id = ? AND region IS NOT NULL AND region != ''
+               ORDER BY region ASC"#,
+            source_id
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.value).collect())
     }
 
     pub async fn set_favorite(&self, id: i64, is_favorite: bool) -> Result<(), StorageError> {

@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                 COALESCE(NULLIF(channel_group, ''), name) as \"group_key!: String\",\n                 COUNT(*) as \"member_count!: i64\",\n                 MIN(id) as \"rep_id!: i64\",\n                 MIN(name) as \"name!: String\",\n                 MIN(NULLIF(logo_url, '')) as \"logo_url?: String\",\n                 MIN(category) as \"category?: String\",\n                 MIN(region) as \"region?: String\",\n                 MAX(is_favorite) as \"is_favorite!: i64\",\n                 MAX(is_in_watchlist) as \"is_in_watchlist!: i64\"\n               FROM channels\n               WHERE source_id = ?\n                 AND (? IS NULL OR category = ?)\n                 AND (? IS NULL OR region = ?)\n                 AND (? IS NULL OR name LIKE ? OR category LIKE ? OR raw_group LIKE ?)\n                 AND (? = 0 OR is_favorite = 1)\n                 AND (? = 0 OR is_in_watchlist = 1)\n               GROUP BY COALESCE(NULLIF(channel_group, ''), name)\n               ORDER BY COUNT(*) DESC, COALESCE(NULLIF(channel_group, ''), name) ASC\n               LIMIT ? OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "group_key!: String",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "member_count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      },
+      {
+        "name": "rep_id!: i64",
+        "ordinal": 2,
+        "type_info": "Null"
+      },
+      {
+        "name": "name!: String",
+        "ordinal": 3,
+        "type_info": "Null"
+      },
+      {
+        "name": "logo_url?: String",
+        "ordinal": 4,
+        "type_info": "Null"
+      },
+      {
+        "name": "category?: String",
+        "ordinal": 5,
+        "type_info": "Null"
+      },
+      {
+        "name": "region?: String",
+        "ordinal": 6,
+        "type_info": "Null"
+      },
+      {
+        "name": "is_favorite!: i64",
+        "ordinal": 7,
+        "type_info": "Null"
+      },
+      {
+        "name": "is_in_watchlist!: i64",
+        "ordinal": 8,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 13
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "d2c8666aec8fd2a6b53fd5c694b4a3da44f200ce6b556ad306731075543bbd68"
+}
