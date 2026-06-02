@@ -574,9 +574,41 @@ Layers are idempotent, incremental, and never destroy raw data — they write a 
 Phase A is live: `nova_core::clean::polish_title` (`crates/core/src/clean.rs`) folds decorative
 Unicode (`ᴴᴰ`→`HD`, fullwidth→ASCII) and strips release/quality/codec junk tokens
 (`HD`/`1080p`/`x265`/`WEB-DL`/`MULTI`/`VOSTFR`…), conservatively. It runs at import in `push_entry`
-(both M3U + Xtream) on live `name`, vod `clean_title`, series `series_title`. Phases B–D add
-enrichment columns + a post-import background job (`crates/jobs`) emitting `catalog:enrich:progress`,
-upgrading content in place via React Query invalidation.
+(both M3U + Xtream) on live `name`, vod `clean_title`, series `series_title`.
+
+Phase B is live (`crates/enrich`, fastembed-rs/`ort`, `multilingual-e5-small`): a post-import
+background task (`commands/enrich.rs::run_enrichment`) embeds unenriched rows **in chunks** (emitting
+real `embedding x/total` progress), groups true duplicates into a `dedup_group`, and zero-shot fills
+missing genres — gated on `enrich_status IS NULL` (migration 0013), idempotent, emitting
+`catalog:enrich:progress`. Grouping is gated on an exact rules key (`clean::dedup_key`, which strips
+quality junk but **preserves distinguishing numbers** so `Sports 1` ≠ `Sports 2`); embedding cosine is
+only a secondary guard. Grouping is **lossless** in the UI — variants ride along on the representative
+card (`queries.ts` `collapseDuplicates`) and stay reachable, never deleted.
+
+Phase C is live (opt-in TMDB): the same job, after the embedding stage, matches movies + series to
+TMDB (`nova_enrich::tmdb` — async `reqwest` client returning cacheable raw bodies + pure
+title+year scoring). The query is normalized for recall (`clean::search_title`) and tried as
+movie+year → movie no-year → `/search/multi`, stopping once confident. Results are **tiered**: a
+confident match writes the full display layer (`canonical_title`/`poster_url`/`backdrop_url`/
+`overview`/`tmdb_genres`, genres mapped through `classify::canonical_genre`); a weak match with a
+poster attaches **art only** (keeps the original title) for near-universal coverage; otherwise
+`tmdb_status='unmatched'` for a later Phase D residual (migration 0014: columns on `vod_items`, a
+`series_meta` sidecar, a `tmdb_cache`). It only runs when `ProfileSettings.tmdb_enabled` and a
+user-supplied `tmdb_api_key` are set (offline-first). TMDB ToS requires attribution (surfaced in
+Settings/About) and permits the local cache. Phase D (tiny local LLM, llama.cpp) remains planned. The
+frontend prefers the enriched display layer (`queries.ts`, `BrowseHero`, `ContentDetail`) and upgrades
+content in place via React Query invalidation on the terminal `catalog:enrich:progress` event. Movies
+open a `ContentDetail` start screen (overview + Play / preferred-audio / Translate-soon) before
+playback.
+
+**Live channel classification:** live TV is grouped by **brand family** and **region** (not TMDB).
+`clean::channel_brand` derives a brand key (folding a trailing channel number so `beIN Sports 1/2/HD`
+gather into one bundle; single-word numbered brands like `France 24` are preserved), and
+`region::region_of` buckets the country code. Both are stored on `channels` (`channel_group`, `region`,
+migration 0015) at import. The live wall queries **bundles** (`list_channel_groups`, one card per
+brand) filtered by Type + Region; a bundle opens a channel-list start screen
+(`list_channels_in_group`), and live cinema mode shows two layers — the brand bundle, then
+same-category (region-preferred) suggestions.
 
 ### Live playback flow
 1. User clicks a channel. Frontend calls `play_channel(channel_id, caption_mode)`.

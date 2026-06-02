@@ -2,7 +2,7 @@ use nova_core::{now_ts, ContentSort, VodItem};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
-use crate::repositories::enrich::{EnrichUpdate, UnenrichedRow};
+use crate::repositories::enrich::{EnrichUpdate, TmdbQuery, TmdbWrite, UnenrichedRow};
 
 pub struct VodRepository<'a> {
     pool: &'a SqlitePool,
@@ -115,7 +115,7 @@ impl<'a> VodRepository<'a> {
         let wl_flag: i64 = if watchlist_only { 1 } else { 0 };
         let rows = match sort {
             ContentSort::RecentlyAdded => sqlx::query!(
-                r#"SELECT id as "id!: i64", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group
+                r#"SELECT id as "id!: i64", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group, canonical_title, poster_url, backdrop_url, overview
                  FROM vod_items
                  WHERE source_id = ?
                    AND (? IS NULL OR category = ?)
@@ -144,10 +144,14 @@ impl<'a> VodRepository<'a> {
                 is_in_watchlist: r.is_in_watchlist != 0,
                 added_at: r.added_at,
                 dedup_group: r.dedup_group,
+                canonical_title: r.canonical_title,
+                poster_url: r.poster_url,
+                backdrop_url: r.backdrop_url,
+                overview: r.overview,
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
-                r#"SELECT id as "id!: i64", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group
+                r#"SELECT id as "id!: i64", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group, canonical_title, poster_url, backdrop_url, overview
                  FROM vod_items
                  WHERE source_id = ?
                    AND (? IS NULL OR category = ?)
@@ -176,6 +180,10 @@ impl<'a> VodRepository<'a> {
                 is_in_watchlist: r.is_in_watchlist != 0,
                 added_at: r.added_at,
                 dedup_group: r.dedup_group,
+                canonical_title: r.canonical_title,
+                poster_url: r.poster_url,
+                backdrop_url: r.backdrop_url,
+                overview: r.overview,
             })
             .collect(),
         };
@@ -286,6 +294,54 @@ impl<'a> VodRepository<'a> {
                  WHERE id = ?",
                 u.dedup_group,
                 u.category,
+                u.id,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Movies for a source that have not yet had a TMDB pass.
+    pub async fn list_for_tmdb(&self, source_id: i64) -> Result<Vec<TmdbQuery>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT id as "id!: i64", name, clean_title, year
+               FROM vod_items
+               WHERE source_id = ? AND tmdb_status IS NULL"#,
+            source_id,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| TmdbQuery {
+                id: r.id,
+                title: r.clean_title.unwrap_or(r.name),
+                year: r.year,
+            })
+            .collect())
+    }
+
+    /// Write back TMDB display metadata and mark rows matched/unmatched. The first
+    /// matched genre fills an *empty* category; existing categories are preserved.
+    pub async fn apply_tmdb(&self, updates: &[TmdbWrite]) -> Result<(), StorageError> {
+        let mut tx = self.pool.begin().await?;
+        for u in updates {
+            let status = if u.matched { "matched" } else { "unmatched" };
+            sqlx::query!(
+                "UPDATE vod_items
+                 SET canonical_title = ?, poster_url = ?, backdrop_url = ?, overview = ?,
+                     tmdb_genres = ?, category = COALESCE(NULLIF(TRIM(category), ''), ?),
+                     tmdb_status = ?
+                 WHERE id = ?",
+                u.canonical_title,
+                u.poster_url,
+                u.backdrop_url,
+                u.overview,
+                u.genres_csv,
+                u.primary_genre,
+                status,
                 u.id,
             )
             .execute(&mut *tx)

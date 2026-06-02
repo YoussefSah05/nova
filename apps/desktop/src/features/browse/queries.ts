@@ -12,6 +12,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Channel,
+  ChannelGroup,
   ContentSort,
   ContinueWatchingItem,
   SeriesSummary,
@@ -36,6 +37,14 @@ export interface BrowseItem {
   isInWatchlist: boolean;
   /// Enrichment de-dup cluster key — variants collapse to one card per page.
   dedupGroup?: string | null;
+  /// Other members of this item's dedup group (quality/backup variants). The
+  /// content is never dropped — it rides along on the representative so the
+  /// detail screen / player can offer the alternate versions.
+  variants?: BrowseItem[];
+  /// Live brand-family bundle: the group key + how many channels it holds. When
+  /// `memberCount > 1` the card opens the bundle screen instead of playing.
+  groupKey?: string;
+  memberCount?: number;
   channel?: Channel;
   vod?: VodItem;
   series?: SeriesSummary;
@@ -46,6 +55,7 @@ export interface BrowseItem {
 export interface BrowseFilters {
   country?: string | null;
   category?: string | null;
+  region?: string | null;
   query?: string | null;
   favoritesOnly?: boolean;
   watchlistOnly?: boolean;
@@ -57,7 +67,7 @@ export const RAIL_SIZE = 20;
 
 // ── Normalizers ───────────────────────────────────────────────────────────────
 
-function channelToItem(c: Channel): BrowseItem {
+export function channelToItem(c: Channel): BrowseItem {
   return {
     key: `live-${c.id}`,
     kind: "live",
@@ -73,15 +83,39 @@ function channelToItem(c: Channel): BrowseItem {
   };
 }
 
+/// Trailing standalone number stripped for a bundle's display title
+/// ("beIN Sports 1" → "beIN Sports") when it groups multiple channels.
+function prettyBrand(title: string): string {
+  return title.replace(/\s+\d+$/, "").trim() || title;
+}
+
+function channelGroupToItem(g: ChannelGroup): BrowseItem {
+  const bundle = g.memberCount > 1;
+  return {
+    key: `live-group-${g.group}`,
+    kind: "live",
+    id: g.representativeId,
+    title: bundle ? prettyBrand(g.title) : g.title,
+    subtitle: [g.region, g.category].filter(Boolean).join(" / ") || null,
+    posterUrl: g.logoUrl,
+    tvgId: null,
+    isFavorite: g.isFavorite,
+    isInWatchlist: g.isInWatchlist,
+    groupKey: g.group,
+    memberCount: g.memberCount,
+  };
+}
+
 function vodToItem(v: VodItem): BrowseItem {
-  const title = v.cleanTitle ?? v.name;
+  // Prefer the TMDB-enriched display layer, falling back to rules-cleaned / raw.
+  const title = v.canonicalTitle ?? v.cleanTitle ?? v.name;
   return {
     key: `vod-${v.id}`,
     kind: "vod",
     id: v.id,
     title,
     subtitle: [v.year?.toString(), v.category].filter(Boolean).join(" / ") || null,
-    posterUrl: v.logoUrl,
+    posterUrl: v.posterUrl ?? v.logoUrl,
     tvgId: null,
     isFavorite: v.isFavorite,
     isInWatchlist: v.isInWatchlist,
@@ -95,7 +129,7 @@ function seriesToItem(s: SeriesSummary): BrowseItem {
     key: `series-${s.sourceId}-${s.seriesTitle}`,
     kind: "series",
     id: s.sourceId,
-    title: s.seriesTitle,
+    title: s.canonicalTitle ?? s.seriesTitle,
     subtitle: s.category,
     posterUrl: s.posterUrl,
     tvgId: null,
@@ -123,10 +157,10 @@ const CATEGORIES_COMMAND: Record<BrowseTab, string> = {
   series: "list_series_categories",
 };
 
-/// Build the per-tab filter payload. Movies/series accept no `country`.
+/// Build the per-tab filter payload. Movies/series accept no `country`/`region`.
 function filterPayload(tab: BrowseTab, filters: BrowseFilters): BrowseFilters {
   if (tab === "live") return filters;
-  const { country: _country, ...rest } = filters;
+  const { country: _country, region: _region, ...rest } = filters;
   return rest;
 }
 
@@ -140,7 +174,8 @@ async function fetchItems(
 ): Promise<BrowseItem[]> {
   const args = { profileId, sourceId, limit, offset, filters: filterPayload(tab, filters) };
   if (tab === "live") {
-    return collapseDuplicates((await invoke<Channel[]>(LIST_COMMAND.live, args)).map(channelToItem));
+    // Live is grouped into brand-family bundles server-side (one card per brand).
+    return (await invoke<ChannelGroup[]>("list_channel_groups", args)).map(channelGroupToItem);
   }
   if (tab === "movies") {
     return collapseDuplicates((await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem));
@@ -151,14 +186,27 @@ async function fetchItems(
 /// Collapse enrichment de-dup variants within a page: keep the first item of
 /// each `dedupGroup` (items without a group are kept as-is). Page-local — exact
 /// for rails (one page) and good enough for the grid's 200-item pages.
+/// Collapse a page's dedup groups to one representative card each, but keep the
+/// other members as `variants` on the representative (lossless — nothing is
+/// dropped, so quality/backup versions stay reachable). Items without a group
+/// pass through unchanged.
 function collapseDuplicates(items: BrowseItem[]): BrowseItem[] {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    if (!item.dedupGroup) return true;
-    if (seen.has(item.dedupGroup)) return false;
-    seen.add(item.dedupGroup);
-    return true;
-  });
+  const repAt = new Map<string, number>();
+  const out: BrowseItem[] = [];
+  for (const item of items) {
+    if (!item.dedupGroup) {
+      out.push(item);
+      continue;
+    }
+    const at = repAt.get(item.dedupGroup);
+    if (at === undefined) {
+      repAt.set(item.dedupGroup, out.length);
+      out.push({ ...item, variants: [] });
+    } else {
+      (out[at].variants ??= []).push(item);
+    }
+  }
+  return out;
 }
 
 async function fetchCount(
@@ -184,6 +232,20 @@ async function fetchCategories(
 
 async function fetchCountries(profileId: string, sourceId: number): Promise<string[]> {
   return invoke<string[]>("list_channel_countries", { profileId, sourceId });
+}
+
+async function fetchRegions(profileId: string, sourceId: number): Promise<string[]> {
+  return invoke<string[]>("list_channel_regions", { profileId, sourceId });
+}
+
+/// All channels of one live brand-family bundle (for the bundle screen / cinema).
+export async function fetchChannelsInGroup(
+  profileId: string,
+  sourceId: number,
+  group: string
+): Promise<BrowseItem[]> {
+  const chans = await invoke<Channel[]>("list_channels_in_group", { profileId, sourceId, group });
+  return chans.map(channelToItem);
 }
 
 async function fetchContinueWatching(profileId: string): Promise<ContinueWatchingItem[]> {
@@ -232,6 +294,8 @@ export const browseKeys = {
     [...browseKeys.source(profileId, sourceId), "categories", tab] as const,
   countries: (profileId: string, sourceId: number) =>
     [...browseKeys.source(profileId, sourceId), "countries"] as const,
+  regions: (profileId: string, sourceId: number) =>
+    [...browseKeys.source(profileId, sourceId), "regions"] as const,
   continueWatching: (profileId: string) =>
     [...browseKeys.all, profileId, "continueWatching"] as const,
   rail: (profileId: string, sourceId: number, tab: BrowseTab, railId: string) =>
@@ -259,6 +323,14 @@ export function useCategories(tab: BrowseTab, profileId: string, sourceId: numbe
   return useQuery({
     queryKey: browseKeys.categories(profileId, sourceId ?? -1, tab),
     queryFn: () => fetchCategories(tab, profileId, sourceId!),
+    enabled: sourceId !== null,
+  });
+}
+
+export function useRegions(profileId: string, sourceId: number | null) {
+  return useQuery({
+    queryKey: browseKeys.regions(profileId, sourceId ?? -1),
+    queryFn: () => fetchRegions(profileId, sourceId!),
     enabled: sourceId !== null,
   });
 }

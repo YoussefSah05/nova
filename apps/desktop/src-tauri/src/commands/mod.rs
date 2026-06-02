@@ -222,6 +222,7 @@ async fn start_import(
 pub struct ChannelFilters {
     country: Option<String>,
     category: Option<String>,
+    region: Option<String>,
     query: Option<String>,
     #[serde(default)]
     favorites_only: bool,
@@ -257,6 +258,7 @@ pub async fn list_channels(
     let filters = filters.unwrap_or_default();
     let country = normalize_filter(filters.country);
     let category = normalize_filter(filters.category);
+    let region = normalize_filter(filters.region);
     let query = normalize_filter(filters.query);
     ChannelRepository::new(&pool)
         .list(
@@ -265,6 +267,7 @@ pub async fn list_channels(
             offset,
             country.as_deref(),
             category.as_deref(),
+            region.as_deref(),
             query.as_deref(),
             filters.favorites_only,
             filters.watchlist_only,
@@ -285,12 +288,14 @@ pub async fn count_channels(
     let filters = filters.unwrap_or_default();
     let country = normalize_filter(filters.country);
     let category = normalize_filter(filters.category);
+    let region = normalize_filter(filters.region);
     let query = normalize_filter(filters.query);
     ChannelRepository::new(&pool)
         .count_filtered(
             source_id,
             country.as_deref(),
             category.as_deref(),
+            region.as_deref(),
             query.as_deref(),
             filters.favorites_only,
             filters.watchlist_only,
@@ -321,6 +326,65 @@ pub async fn list_channel_categories(
     let pool = require_profile_pool(&profile_id, &state).await?;
     ChannelRepository::new(&pool)
         .categories(source_id)
+        .await
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn list_channel_regions(
+    profile_id: String,
+    source_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    ChannelRepository::new(&pool)
+        .regions(source_id)
+        .await
+        .map_err(Into::into)
+}
+
+/// Live brand-family bundles (one card per brand) for the live wall, filtered by
+/// type (`category`) + `region` + free text.
+#[tauri::command]
+pub async fn list_channel_groups(
+    profile_id: String,
+    source_id: i64,
+    limit: i64,
+    offset: i64,
+    filters: Option<ChannelFilters>,
+    state: State<'_, AppState>,
+) -> Result<Vec<nova_core::ChannelGroup>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let filters = filters.unwrap_or_default();
+    let category = normalize_filter(filters.category);
+    let region = normalize_filter(filters.region);
+    let query = normalize_filter(filters.query);
+    ChannelRepository::new(&pool)
+        .list_groups(
+            source_id,
+            category.as_deref(),
+            region.as_deref(),
+            query.as_deref(),
+            filters.favorites_only,
+            filters.watchlist_only,
+            limit,
+            offset,
+        )
+        .await
+        .map_err(Into::into)
+}
+
+/// All channels of one brand-family (for the bundle start screen / cinema layer 1).
+#[tauri::command]
+pub async fn list_channels_in_group(
+    profile_id: String,
+    source_id: i64,
+    group: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<Channel>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    ChannelRepository::new(&pool)
+        .list_in_group(source_id, &group)
         .await
         .map_err(Into::into)
 }
@@ -1146,22 +1210,32 @@ fn push_entry(
     series: &mut Vec<SeriesEpisode>,
 ) {
     match e.kind {
-        MediaKind::Live => live.push(Channel {
-            id: 0,
-            source_id,
-            tvg_id: e.tvg_id.clone(),
-            name: nova_core::polish_title(&e.clean_title),
-            country: e.country_prefix.clone(),
-            category: e.category.clone(),
-            raw_group: Some(e.group_title.clone()),
-            logo_url: e.logo_url.clone(),
-            stream_url: e.stream_url.clone(),
-            is_favorite: false,
-            is_in_watchlist: false,
-            last_played_at: None,
-            added_at: None,
-            dedup_group: None,
-        }),
+        MediaKind::Live => {
+            let name = nova_core::polish_title(&e.clean_title);
+            let region = e
+                .country_prefix
+                .as_deref()
+                .and_then(nova_core::region_of)
+                .map(str::to_string);
+            live.push(Channel {
+                id: 0,
+                source_id,
+                tvg_id: e.tvg_id.clone(),
+                channel_group: Some(nova_core::clean::channel_brand(&name)),
+                name,
+                country: e.country_prefix.clone(),
+                category: e.category.clone(),
+                raw_group: Some(e.group_title.clone()),
+                logo_url: e.logo_url.clone(),
+                stream_url: e.stream_url.clone(),
+                is_favorite: false,
+                is_in_watchlist: false,
+                last_played_at: None,
+                added_at: None,
+                dedup_group: None,
+                region,
+            })
+        }
         MediaKind::Movie => vod.push(VodItem {
             id: 0,
             source_id,
@@ -1175,6 +1249,10 @@ fn push_entry(
             is_in_watchlist: false,
             added_at: None,
             dedup_group: None,
+            canonical_title: None,
+            poster_url: None,
+            backdrop_url: None,
+            overview: None,
         }),
         MediaKind::Series => series.push(SeriesEpisode {
             id: 0,

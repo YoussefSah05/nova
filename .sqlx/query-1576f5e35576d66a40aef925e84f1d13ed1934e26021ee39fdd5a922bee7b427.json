@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT region as \"value!\" FROM channels\n               WHERE source_id = ? AND region IS NOT NULL AND region != ''\n               ORDER BY region ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "value!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "1576f5e35576d66a40aef925e84f1d13ed1934e26021ee39fdd5a922bee7b427"
+}

@@ -20,6 +20,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SettingsModal } from "@/features/settings/SettingsModal";
 import { SeriesDetail } from "@/features/browse/SeriesDetail";
+import { ContentDetail } from "@/features/browse/ContentDetail";
 import { BrowseRails } from "@/features/browse/BrowseRails";
 import { BrowseGrid } from "@/features/browse/BrowseGrid";
 import { BrowseBoundary } from "@/features/browse/BrowseBoundary";
@@ -33,6 +34,7 @@ import {
   useBrowseCount,
   useCategories,
   useCountries,
+  useRegions,
   type BrowseFilters,
   type BrowseItem,
   type BrowseTab,
@@ -56,6 +58,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const [activeSourceId, setActiveSourceId] = useState<number | null>(null);
   const [tab, setTab] = useState<Tab>("live");
   const [selectedSeries, setSelectedSeries] = useState<SeriesSummary | null>(null);
+  // A movie's "starting screen" (overview + actions) shown before playback.
+  const [selectedContent, setSelectedContent] = useState<BrowseItem | null>(null);
   const [playingMedia, setPlayingMedia] = useState<PlayMedia | null>(null);
   const [showAddSource, setShowAddSource] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -66,6 +70,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   }, [profile]);
   const [searchQuery, setSearchQuery] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
+  const [regionFilter, setRegionFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [sourceError, setSourceError] = useState<string | null>(null);
   // Reloads the non-query bits (source list + per-source totals) after a refresh.
@@ -88,12 +93,14 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
 
   const categoryOptions = useCategories(tab, profile.id, activeSourceId).data ?? [];
   const countryOptions = useCountries(profile.id, activeSourceId).data ?? [];
+  const regionOptions = useRegions(profile.id, activeSourceId).data ?? [];
 
   const query = filterParam(deferredSearchQuery);
   const category = filterParam(categoryFilter);
   const country = tab === "live" ? filterParam(countryFilter) : null;
-  const filters: BrowseFilters = { query, category, country };
-  const searchOrFilterActive = Boolean(query || category || country);
+  const region = tab === "live" ? filterParam(regionFilter) : null;
+  const filters: BrowseFilters = { query, category, country, region };
+  const searchOrFilterActive = Boolean(query || category || country || region);
 
   // ── Sources ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -227,8 +234,10 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   function resetBrowseState() {
     setSearchQuery("");
     setCountryFilter("");
+    setRegionFilter("");
     setCategoryFilter("");
     setSelectedSeries(null);
+    setSelectedContent(null);
   }
 
   async function handleSourceAdded() {
@@ -256,19 +265,35 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     }
   }
 
-  const activate = useCallback((item: BrowseItem) => {
-    if (item.kind === "series" && item.series) {
-      setSelectedSeries(item.series);
-      return;
-    }
+  const playItem = useCallback((item: BrowseItem) => {
     setPlayingMedia({
       kind: item.kind === "live" ? "live" : "vod",
       id: item.id,
       title: item.title,
       subtitle: item.subtitle,
       posterUrl: item.posterUrl,
+      channelGroup: item.groupKey ?? item.channel?.channelGroup ?? null,
+      category: item.channel?.category ?? null,
+      region: item.channel?.region ?? null,
     });
   }, []);
+
+  const activate = useCallback(
+    (item: BrowseItem) => {
+      if (item.kind === "series" && item.series) {
+        setSelectedSeries(item.series);
+        return;
+      }
+      // Movies open an overview screen; live brand bundles open their channel
+      // list; a single live channel plays immediately.
+      if (item.kind === "vod" || (item.kind === "live" && (item.memberCount ?? 1) > 1)) {
+        setSelectedContent(item);
+        return;
+      }
+      playItem(item);
+    },
+    [playItem]
+  );
 
   const toggleFavorite = useCallback(
     async (item: BrowseItem, next: boolean) => {
@@ -340,6 +365,31 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             }
           />
         </div>
+        {playingMedia && (
+          <PlayerModal
+            profileId={profile.id}
+            media={playingMedia}
+            onClose={() => setPlayingMedia(null)}
+            sourceId={activeSourceId}
+            onPlayMedia={setPlayingMedia}
+          />
+        )}
+      </>
+    );
+  }
+
+  if (selectedContent) {
+    return (
+      <>
+        <ContentDetail
+          profileId={profile.id}
+          sourceId={activeSourceId}
+          item={selectedContent}
+          onBack={() => setSelectedContent(null)}
+          onPlay={playItem}
+          onToggleFavorite={toggleFavorite}
+          onToggleWatchlist={toggleWatchlist}
+        />
         {playingMedia && (
           <PlayerModal
             profileId={profile.id}
@@ -479,6 +529,14 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                 />
               </div>
 
+              {tab === "live" && regionOptions.length > 0 && (
+                <FilterSelect
+                  label="Region"
+                  value={regionFilter}
+                  options={regionOptions}
+                  onChange={setRegionFilter}
+                />
+              )}
               {tab === "live" && (
                 <FilterSelect
                   label="Country"
@@ -497,6 +555,9 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
                 {searchQuery && (
                   <FilterChip label="Search" value={searchQuery} onClear={() => setSearchQuery("")} />
+                )}
+                {regionFilter && (
+                  <FilterChip label="Region" value={regionFilter} onClear={() => setRegionFilter("")} />
                 )}
                 {countryFilter && (
                   <FilterChip label="Country" value={countryFilter} onClear={() => setCountryFilter("")} />

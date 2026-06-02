@@ -36,6 +36,22 @@ export interface Channel {
   lastPlayedAt: number | null;
   addedAt: number | null;
   dedupGroup: string | null;
+  // Live brand-family grouping (Phase: live grouping).
+  channelGroup: string | null;
+  region: string | null;
+}
+
+/// One live brand-family bundle (e.g. all "beIN Sports N"), from list_channel_groups.
+export interface ChannelGroup {
+  group: string;
+  memberCount: number;
+  representativeId: number;
+  title: string;
+  logoUrl: string | null;
+  category: string | null;
+  region: string | null;
+  isFavorite: boolean;
+  isInWatchlist: boolean;
 }
 
 export interface VodItem {
@@ -51,6 +67,11 @@ export interface VodItem {
   isInWatchlist: boolean;
   addedAt: number | null;
   dedupGroup: string | null;
+  // TMDB display layer (Phase C); null until matched.
+  canonicalTitle: string | null;
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  overview: string | null;
 }
 
 export interface SeriesSummary {
@@ -63,6 +84,10 @@ export interface SeriesSummary {
   isFavorite: boolean;
   isInWatchlist: boolean;
   addedAt: number | null;
+  // TMDB display layer (Phase C); null until matched.
+  canonicalTitle: string | null;
+  backdropUrl: string | null;
+  overview: string | null;
 }
 
 export interface SeriesEpisode {
@@ -194,6 +219,9 @@ export interface ProfileSettings {
   preferredAudioLang: string | null;
   preferredSubtitleLang: string | null;
   defaultPlaybackRoute: DefaultPlaybackRoute;
+  // Catalog enrichment (Phase C) — opt-in TMDB, user-supplied key.
+  tmdbEnabled: boolean;
+  tmdbApiKey: string | null;
 }
 
 export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
@@ -202,6 +230,8 @@ export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
   preferredAudioLang: null,
   preferredSubtitleLang: null,
   defaultPlaybackRoute: "auto",
+  tmdbEnabled: false,
+  tmdbApiKey: null,
 };
 
 // ── IPC errors ────────────────────────────────────────────────────────────────

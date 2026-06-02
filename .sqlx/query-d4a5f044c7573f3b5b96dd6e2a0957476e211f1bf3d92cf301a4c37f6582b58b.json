@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\", name, clean_title, year\n               FROM vod_items\n               WHERE source_id = ? AND tmdb_status IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "clean_title",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "year",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "d4a5f044c7573f3b5b96dd6e2a0957476e211f1bf3d92cf301a4c37f6582b58b"
+}

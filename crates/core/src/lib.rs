@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod classify;
 pub mod clean;
+pub mod region;
 pub use classify::normalize_category;
 pub use clean::polish_title;
+pub use region::region_of;
 
 // ── Profiles ─────────────────────────────────────────────────────────────────
 
@@ -87,6 +89,11 @@ pub struct Channel {
     pub added_at: Option<i64>,
     /// Enrichment de-dup cluster key (variants share one); `None` until enriched.
     pub dedup_group: Option<String>,
+    /// Brand-family key (`nova_core::clean::channel_brand`) for grouping a brand's
+    /// channels into one bundle (e.g. all `beIN Sports N`); set at import.
+    pub channel_group: Option<String>,
+    /// Coarse region bucket (`nova_core::region::region_of` of `country`).
+    pub region: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +112,11 @@ pub struct VodItem {
     pub added_at: Option<i64>,
     /// Enrichment de-dup cluster key (variants share one); `None` until enriched.
     pub dedup_group: Option<String>,
+    /// TMDB display layer (Phase C, opt-in); `None` until matched.
+    pub canonical_title: Option<String>,
+    pub poster_url: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub overview: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +134,23 @@ pub struct SeriesEpisode {
     pub added_at: Option<i64>,
 }
 
+/// One live brand-family bundle (e.g. all `beIN Sports N`) returned by
+/// `list_channel_groups`. `representative_id` is the channel to play / show art
+/// for; `member_count` drives the "N channels" badge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelGroup {
+    pub group: String,
+    pub member_count: i64,
+    pub representative_id: i64,
+    pub title: String,
+    pub logo_url: Option<String>,
+    pub category: Option<String>,
+    pub region: Option<String>,
+    pub is_favorite: bool,
+    pub is_in_watchlist: bool,
+}
+
 /// Aggregated series row returned by `list_series`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,6 +164,10 @@ pub struct SeriesSummary {
     pub is_favorite: bool,
     pub is_in_watchlist: bool,
     pub added_at: Option<i64>,
+    /// TMDB display layer (Phase C, opt-in); `None` until matched.
+    pub canonical_title: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub overview: Option<String>,
 }
 
 /// Sort order for browse list commands.
@@ -297,6 +330,12 @@ pub struct ProfileSettings {
     pub preferred_subtitle_lang: Option<String>,
     /// Default playback route: `auto` | `remux_hls` | `transcode_hls`.
     pub default_playback_route: String,
+    /// Catalog enrichment (Phase C): use TMDB to fill canonical titles, posters,
+    /// backdrops, overviews and genres. Offline-first — nothing calls TMDB unless
+    /// this is on *and* a key is set.
+    pub tmdb_enabled: bool,
+    /// User-supplied TMDB API key (v3 auth). `None` keeps enrichment fully offline.
+    pub tmdb_api_key: Option<String>,
 }
 
 impl Default for ProfileSettings {
@@ -307,6 +346,8 @@ impl Default for ProfileSettings {
             preferred_audio_lang: None,
             preferred_subtitle_lang: None,
             default_playback_route: "auto".to_string(),
+            tmdb_enabled: false,
+            tmdb_api_key: None,
         }
     }
 }

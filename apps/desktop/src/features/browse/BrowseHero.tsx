@@ -32,6 +32,10 @@ export function BrowseHero({
   const { data, isLoading } = useRail(tab, profileId, sourceId, RECENTLY_ADDED_RAIL, true);
   const featured: BrowseItem | undefined = data?.find((i) => i.posterUrl) ?? data?.[0];
   const live = tab === "live";
+  // A wide TMDB backdrop suits the full-bleed hero better than a portrait poster.
+  const heroImage = featured
+    ? (featured.vod?.backdropUrl ?? featured.series?.backdropUrl ?? featured.posterUrl)
+    : null;
 
   if (isLoading || !data) {
     return <Skeleton className="h-[42vh] min-h-[300px] w-full rounded-2xl" />;
@@ -40,9 +44,9 @@ export function BrowseHero({
 
   return (
     <section className="relative h-[42vh] min-h-[300px] w-full overflow-hidden rounded-2xl border border-border bg-card">
-      {featured.posterUrl && !live ? (
+      {heroImage && !live ? (
         <img
-          src={featured.posterUrl}
+          src={heroImage}
           alt=""
           className="absolute inset-0 h-full w-full object-cover object-top"
         />

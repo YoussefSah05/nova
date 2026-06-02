@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!: i64\", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group\n                 FROM vod_items\n                 WHERE source_id = ?\n                   AND (? IS NULL OR category = ?)\n                   AND (? IS NULL OR name LIKE ? OR clean_title LIKE ? OR category LIKE ?)\n                   AND (? = 0 OR is_favorite = 1)\n                   AND (? = 0 OR is_in_watchlist = 1)\n                 ORDER BY added_at DESC, id DESC LIMIT ? OFFSET ?",
+  "query": "SELECT id as \"id!: i64\", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group, canonical_title, poster_url, backdrop_url, overview\n                 FROM vod_items\n                 WHERE source_id = ?\n                   AND (? IS NULL OR category = ?)\n                   AND (? IS NULL OR name LIKE ? OR clean_title LIKE ? OR category LIKE ?)\n                   AND (? = 0 OR is_favorite = 1)\n                   AND (? = 0 OR is_in_watchlist = 1)\n                 ORDER BY id ASC LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -62,6 +62,26 @@
         "name": "dedup_group",
         "ordinal": 11,
         "type_info": "Text"
+      },
+      {
+        "name": "canonical_title",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster_url",
+        "ordinal": 13,
+        "type_info": "Text"
+      },
+      {
+        "name": "backdrop_url",
+        "ordinal": 14,
+        "type_info": "Text"
+      },
+      {
+        "name": "overview",
+        "ordinal": 15,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -79,8 +99,12 @@
       false,
       false,
       true,
+      true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "5106ef7d375af662802d51f1b9d95fcdfc4332370fe5bbdf6f66b93fae6ef0fa"
+  "hash": "c44aeb44a3d1a29392ccfae87465826db437646f1c916af4bc98c29e9bfae3ee"
 }
