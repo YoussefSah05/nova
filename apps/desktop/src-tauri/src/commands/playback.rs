@@ -516,6 +516,24 @@ pub async fn airplay_status(
     Ok(state.airplay.status(&app))
 }
 
+/// Toggle the window's video-surface transparency. Opaque while browsing (so
+/// fast scroll can't reveal the GL layer); transparent while a player is on
+/// screen so the libmpv `CAOpenGLLayer` shows. No-op off macOS.
+#[tauri::command]
+pub fn set_player_surface_active(app: AppHandle, active: bool) -> Result<(), ApiError> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::Manager;
+        if let Some(window) = app.get_webview_window("main") {
+            crate::native_player_view::set_window_transparent(&window, active)
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (&app, active);
+    Ok(())
+}
+
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
     for b in s.bytes() {

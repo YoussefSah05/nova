@@ -178,35 +178,92 @@ async function fetchItems(
     return (await invoke<ChannelGroup[]>("list_channel_groups", args)).map(channelGroupToItem);
   }
   if (tab === "movies") {
-    return collapseDuplicates((await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem));
+    // Gather the same film's language/source copies under one card (title-based,
+    // from the raw name); fall back to the embeddings group when no real title.
+    return collapseByKey(
+      (await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem),
+      (item) => movieVersionKey(item) ?? item.dedupGroup ?? null
+    );
   }
-  return (await invoke<SeriesSummary[]>(LIST_COMMAND.series, args)).map(seriesToItem);
+  // Series have no backend dedup group; collapse exact-duplicate titles instead.
+  return collapseByKey(
+    (await invoke<SeriesSummary[]>(LIST_COMMAND.series, args)).map(seriesToItem),
+    seriesGroupKey
+  );
 }
 
-/// Collapse enrichment de-dup variants within a page: keep the first item of
-/// each `dedupGroup` (items without a group are kept as-is). Page-local — exact
-/// for rails (one page) and good enough for the grid's 200-item pages.
-/// Collapse a page's dedup groups to one representative card each, but keep the
+/// Collapse a page's duplicates to one representative card each, keeping the
 /// other members as `variants` on the representative (lossless — nothing is
-/// dropped, so quality/backup versions stay reachable). Items without a group
-/// pass through unchanged.
-function collapseDuplicates(items: BrowseItem[]): BrowseItem[] {
+/// dropped, so quality/backup versions stay reachable). `keyOf` returns the
+/// grouping key, or `null`/`""` for items that should never group. Page-local —
+/// exact for rails (one page) and good enough for the grid's pages.
+function collapseByKey(items: BrowseItem[], keyOf: (item: BrowseItem) => string | null): BrowseItem[] {
   const repAt = new Map<string, number>();
   const out: BrowseItem[] = [];
   for (const item of items) {
-    if (!item.dedupGroup) {
+    const key = keyOf(item);
+    if (!key) {
       out.push(item);
       continue;
     }
-    const at = repAt.get(item.dedupGroup);
+    const at = repAt.get(key);
     if (at === undefined) {
-      repAt.set(item.dedupGroup, out.length);
+      repAt.set(key, out.length);
       out.push({ ...item, variants: [] });
     } else {
       (out[at].variants ??= []).push(item);
     }
   }
   return out;
+}
+
+/// Conservative dedup key for series titles: lowercase, keep letters/numbers
+/// (Unicode-safe so Arabic/CJK titles aren't blanked), collapse whitespace. Only
+/// *identical* normalized titles merge — distinct shows (incl. numbered seasons
+/// like `Foo 2`) keep their own card. Empty → never group.
+function seriesGroupKey(item: BrowseItem): string | null {
+  const raw = item.series?.canonicalTitle ?? item.series?.seriesTitle ?? item.title;
+  const key = raw
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return key || null;
+}
+
+/// Quality/codec/source junk dropped anywhere in a movie title.
+const MOVIE_JUNK = new Set([
+  "hd", "fhd", "uhd", "sd", "hq", "4k", "8k", "hdr", "sdr", "hevc", "avc", "h264", "h265", "x264",
+  "x265", "aac", "ac3", "dts", "multi", "dual", "vostfr", "vost", "webdl", "webrip", "hdtv",
+  "bluray", "brrip", "bdrip", "hdrip", "dvdrip", "remux", "truefrench",
+]);
+/// Language tags stripped only at the END of the title (where providers append
+/// them, e.g. "… Fr"); never mid-title so "Un Homme en colère" keeps "en".
+const TRAILING_LANG = new Set(["fr", "en", "ar", "eng", "ara", "fra", "vo", "vf", "vff", "vfq", "es", "esp", "de", "it", "pt", "tr"]);
+
+/// Grouping key for a movie's language/source versions, derived from the RAW name
+/// (which keeps the real title even when `clean_title` is broken). Drops the
+/// provider prefix, bracketed groups, year, quality junk and a trailing language
+/// tag; keeps numbers so sequels/parts stay distinct. `null` when no real title
+/// remains (e.g. year-only names) so those never group.
+function movieVersionKey(item: BrowseItem): string | null {
+  const raw = item.vod?.name ?? item.title;
+  // Everything after the last '|' drops "FR|", "EN-AR|", "NF-FR| FR|" prefixes.
+  const afterPipe = raw.includes("|") ? raw.slice(raw.lastIndexOf("|") + 1) : raw;
+  const unbracketed = afterPipe.replace(/[([{][^)\]}]*[)\]}]/g, " ");
+  const tokens = unbracketed
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .filter((t) => !MOVIE_JUNK.has(t))
+    .filter((t) => !/^(?:19|20)\d{2}$/.test(t));
+  // Strip trailing language tags (one or more).
+  while (tokens.length > 1 && TRAILING_LANG.has(tokens[tokens.length - 1])) {
+    tokens.pop();
+  }
+  const key = tokens.join(" ").trim();
+  // Require some alphabetic content — never group year/number-only names.
+  return key && /\p{L}/u.test(key) ? key : null;
 }
 
 async function fetchCount(
@@ -288,8 +345,8 @@ export const browseKeys = {
   all: ["browse"] as const,
   source: (profileId: string, sourceId: number) =>
     [...browseKeys.all, profileId, sourceId] as const,
-  count: (profileId: string, sourceId: number, tab: BrowseTab) =>
-    [...browseKeys.source(profileId, sourceId), "count", tab] as const,
+  count: (profileId: string, sourceId: number, tab: BrowseTab, filters: BrowseFilters = {}) =>
+    [...browseKeys.source(profileId, sourceId), "count", tab, filters] as const,
   categories: (profileId: string, sourceId: number, tab: BrowseTab) =>
     [...browseKeys.source(profileId, sourceId), "categories", tab] as const,
   countries: (profileId: string, sourceId: number) =>
@@ -313,7 +370,7 @@ export function useBrowseCount(
   filters: BrowseFilters = {}
 ) {
   return useQuery({
-    queryKey: browseKeys.count(profileId, sourceId ?? -1, tab),
+    queryKey: browseKeys.count(profileId, sourceId ?? -1, tab, filters),
     queryFn: () => fetchCount(tab, profileId, sourceId!, filters),
     enabled: sourceId !== null,
   });
@@ -397,7 +454,7 @@ export function prefetchSourceOverview(qc: QueryClient, profileId: string, sourc
   });
   for (const tab of ["live", "movies", "series"] as const) {
     void qc.prefetchQuery({
-      queryKey: browseKeys.count(profileId, sourceId, tab),
+      queryKey: browseKeys.count(profileId, sourceId, tab, {}),
       queryFn: () => fetchCount(tab, profileId, sourceId, {}),
     });
     void qc.prefetchQuery({

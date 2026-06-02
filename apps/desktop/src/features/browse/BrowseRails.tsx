@@ -49,6 +49,10 @@ export function BrowseRails({
   const { data: categories } = useCategories(tab, profileId, sourceId);
   const { data: count } = useBrowseCount(tab, profileId, sourceId);
   const genres = (categories ?? []).slice(0, MAX_GENRE_RAILS);
+  // The primary rail is the source of truth for "is there anything here". The
+  // count is only a hint — never hide present content because a (possibly
+  // stale/poisoned) count says 0.
+  const railHasItems = (recently.data?.length ?? 0) > 0;
 
   const handleSeeAll = (spec: RailSpec) => {
     if (spec.filters.category) onSelectCategory(spec.filters.category);
@@ -70,8 +74,9 @@ export function BrowseRails({
     );
   }
 
-  // Source/tab genuinely has nothing.
-  if (count === 0) {
+  // Source/tab genuinely has nothing: the primary rail returned no items AND
+  // it's finished loading. (Don't trust count===0 alone — see `railHasItems`.)
+  if (!railHasItems && !recently.isLoading && !recently.isFetching && count === 0) {
     return (
       <StateCard
         icon={<FilmIcon className="h-8 w-8 text-muted-foreground" aria-hidden />}

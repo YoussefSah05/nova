@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DragRegion } from "@/components/DragRegion";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SettingsModal } from "@/features/settings/SettingsModal";
 import { SeriesDetail } from "@/features/browse/SeriesDetail";
@@ -347,7 +348,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   if (selectedSeries) {
     return (
       <>
-        <div className="min-h-screen bg-neutral-950 p-6">
+        <div className="relative min-h-screen bg-neutral-950 p-6 pt-10">
+          <DragRegion />
           <SeriesDetail
             profileId={profile.id}
             series={selectedSeries}

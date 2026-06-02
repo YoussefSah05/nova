@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, ChevronDown, Headphones, Languages, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { DragRegion } from "@/components/DragRegion";
 import {
   DropdownMenu,
   DropdownMenuCheckItem,
@@ -72,7 +73,8 @@ function LiveBundleDetail({
   }, [profileId, sourceId, item.groupKey]);
 
   return (
-    <div className="min-h-screen bg-neutral-950 px-8 py-6 text-white">
+    <div className="min-h-screen bg-neutral-950 px-8 pb-6 pt-10 text-white">
+      <DragRegion />
       <Button variant="ghost" size="sm" onClick={onBack} className="gap-2 text-white/70 hover:text-white">
         <ArrowLeft className="h-4 w-4" /> Back
       </Button>
@@ -153,6 +155,7 @@ export function ContentDetail({
 
   return (
     <div className="relative min-h-screen bg-neutral-950 text-white">
+      <DragRegion />
       {/* Backdrop */}
       <div className="absolute inset-x-0 top-0 h-[60vh] overflow-hidden">
         {backdrop ? (
@@ -164,7 +167,7 @@ export function ContentDetail({
         <div className="absolute inset-0 bg-gradient-to-r from-neutral-950/85 to-transparent" />
       </div>
 
-      <div className="relative z-10 flex flex-col gap-6 px-8 pb-12 pt-6">
+      <div className="relative z-10 flex flex-col gap-6 px-8 pb-12 pt-10">
         <Button
           variant="ghost"
           size="sm"

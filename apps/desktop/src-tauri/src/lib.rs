@@ -126,6 +126,7 @@ pub fn run() {
             commands::playback::mpv_frame_step,
             commands::playback::mpv_request_redraw,
             commands::playback::mpv_set_video_rect,
+            commands::playback::set_player_surface_active,
             commands::playback::record_watch_progress,
             commands::playback::get_resume_position,
             // Phase 6 — Transcription (VOD), streaming caption sessions

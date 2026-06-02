@@ -227,6 +227,11 @@ impl MpvLayer {
         // `setNeedsDisplayOnBoundsChange=YES`: redraw automatically on layout.
         this.setAsynchronous(false);
         this.setNeedsDisplayOnBoundsChange(true);
+        // Opaque: stop CoreAnimation blending the layer against the transparent
+        // window (which made the video look "glassy" and showed the desktop in
+        // letterbox margins / cinema mode). mpv clears the FBO to black, so
+        // uncovered areas read as solid black instead of see-through.
+        this.setOpaque(true);
         this
     }
 
