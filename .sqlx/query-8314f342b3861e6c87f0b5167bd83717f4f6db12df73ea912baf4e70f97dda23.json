@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE series_episodes\n                     SET category = COALESCE(NULLIF(TRIM(category), ''), ?)\n                     WHERE source_id = ? AND series_title = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "8314f342b3861e6c87f0b5167bd83717f4f6db12df73ea912baf4e70f97dda23"
+}

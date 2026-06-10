@@ -7,6 +7,7 @@ import { memo } from "react";
 import { cn } from "@/lib/utils";
 import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
+import { PosterFallback } from "./PosterFallback";
 import type { BrowseItem } from "./queries";
 
 export interface PosterCardHandlers {
@@ -25,7 +26,7 @@ export const PosterCard = memo(function PosterCard({
   return (
     <div
       className={cn(
-        "group relative flex flex-shrink-0 snap-start flex-col gap-2",
+        "group relative flex flex-shrink-0 snap-start flex-col gap-2 [contain:layout_paint]",
         live ? "w-44" : "w-36"
       )}
     >
@@ -44,12 +45,11 @@ export const PosterCard = memo(function PosterCard({
             src={item.posterUrl}
             alt=""
             loading="lazy"
+            decoding="async"
             className={cn("h-full w-full", live ? "object-contain p-3" : "object-cover")}
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center px-2 text-center text-xs text-muted-foreground">
-            {item.title}
-          </div>
+          <PosterFallback title={item.title} live={live} />
         )}
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
         {item.memberCount && item.memberCount > 1 ? (

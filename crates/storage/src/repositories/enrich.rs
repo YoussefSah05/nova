@@ -63,5 +63,8 @@ pub struct SeriesTmdbWrite {
     pub backdrop_url: Option<String>,
     pub overview: Option<String>,
     pub genres_csv: Option<String>,
+    /// First matched genre, used only to fill an *empty* episode `category` so
+    /// the genre-rail path lights up for series (mirrors `TmdbWrite`).
+    pub primary_genre: Option<String>,
     pub matched: bool,
 }

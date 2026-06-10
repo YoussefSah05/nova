@@ -124,3 +124,11 @@ html.nova-native-player-active .nova-native-player-shell * {
     animation: none;
   }
 }
+
+/* Off-screen rails skip layout + paint entirely (rendered lazily as they near
+   the viewport), so a tab with many rails scrolls cheaply. The intrinsic size
+   reserves the row height so the scrollbar stays stable. */
+.rail-contain {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
+}
