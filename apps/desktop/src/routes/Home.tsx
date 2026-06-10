@@ -606,6 +606,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                       tab={tab}
                       profileId={profile.id}
                       sourceId={activeSourceId}
+                      scrollRef={scrollRef}
                       onPlay={setPlayingMedia}
                       onSelectCategory={setCategoryFilter}
                       onActivate={activate}

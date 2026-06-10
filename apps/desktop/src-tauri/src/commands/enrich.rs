@@ -489,6 +489,7 @@ fn to_series_write(series_title: String, scored: Option<(TmdbMatch, f32)>) -> Se
                 poster_url: m.poster_url,
                 backdrop_url: m.backdrop_url,
                 overview: m.overview,
+                primary_genre: genres.first().cloned(),
                 genres_csv: (!genres.is_empty()).then(|| genres.join(", ")),
                 matched: true,
             }

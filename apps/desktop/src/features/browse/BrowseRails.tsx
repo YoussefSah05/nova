@@ -3,6 +3,7 @@
 //! (always render content — never a blank body); deeper genre rails lazy-load.
 //! Explicit empty + error states ensure the area always shows *something*.
 
+import { type RefObject } from "react";
 import { ClockIcon, FilmIcon, RotateCwIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -12,6 +13,8 @@ import type { ContinueWatchingItem } from "@/types";
 import { type PlayMedia, type PlayMediaKind } from "@/features/player/PlayerModal";
 import { Rail } from "./Rail";
 import { BrowseHero } from "./BrowseHero";
+import { BrowseGrid } from "./BrowseGrid";
+import { PosterFallback } from "./PosterFallback";
 import { type PosterCardHandlers } from "./PosterCard";
 import {
   genreRail,
@@ -33,6 +36,9 @@ interface BrowseRailsProps extends PosterCardHandlers {
   tab: BrowseTab;
   profileId: string;
   sourceId: number;
+  /// The shared browse scroll container — passed to the embedded "All" grid so
+  /// its row-windowing math stays correct.
+  scrollRef: RefObject<HTMLElement | null>;
   onPlay: (media: PlayMedia) => void;
   onSelectCategory: (category: string) => void;
 }
@@ -41,6 +47,7 @@ export function BrowseRails({
   tab,
   profileId,
   sourceId,
+  scrollRef,
   onPlay,
   onSelectCategory,
   ...handlers
@@ -49,6 +56,10 @@ export function BrowseRails({
   const { data: categories } = useCategories(tab, profileId, sourceId);
   const { data: count } = useBrowseCount(tab, profileId, sourceId);
   const genres = (categories ?? []).slice(0, MAX_GENRE_RAILS);
+  // Series rarely carry provider genres (until a TMDB run fills them), so the
+  // rails alone leave the page sparse. Append the full catalogue as a windowed
+  // grid so the surface is always rich — provider-independent, reusing list_series.
+  const showAllGrid = tab === "series" || genres.length === 0;
   // The primary rail is the source of truth for "is there anything here". The
   // count is only a hint — never hide present content because a (possibly
   // stale/poisoned) count says 0.
@@ -116,6 +127,22 @@ export function BrowseRails({
           {...handlers}
         />
       ))}
+
+      {showAllGrid && (
+        <section className="flex flex-col gap-3">
+          <h3 className="text-sm font-semibold text-foreground/90">
+            {tab === "series" ? "All Series" : tab === "movies" ? "All Movies" : "All Channels"}
+          </h3>
+          <BrowseGrid
+            tab={tab}
+            profileId={profileId}
+            sourceId={sourceId}
+            filters={{}}
+            scrollRef={scrollRef}
+            {...handlers}
+          />
+        </section>
+      )}
     </div>
   );
 }
@@ -198,8 +225,16 @@ function ContinueWatchingCard({
       )}
     >
       <div className="relative aspect-video w-48 overflow-hidden rounded-xl border border-border bg-muted">
-        {item.posterUrl && (
-          <img src={item.posterUrl} alt="" loading="lazy" className="h-full w-full object-cover" />
+        {item.posterUrl ? (
+          <img
+            src={item.posterUrl}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <PosterFallback title={item.title} live={item.mediaKind === "live"} />
         )}
         <div className="absolute inset-x-0 bottom-0 h-1 bg-black/40">
           <div className="h-full bg-primary" style={{ width: `${progress}%` }} />

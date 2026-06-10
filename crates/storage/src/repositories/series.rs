@@ -479,6 +479,22 @@ impl<'a> SeriesRepository<'a> {
             )
             .execute(&mut *tx)
             .await?;
+
+            // Fill an *empty* episode category with the matched genre so the
+            // genre-rail path lights up for series (provider categories, when
+            // present, are preserved).
+            if let Some(genre) = u.primary_genre.as_deref() {
+                sqlx::query!(
+                    "UPDATE series_episodes
+                     SET category = COALESCE(NULLIF(TRIM(category), ''), ?)
+                     WHERE source_id = ? AND series_title = ?",
+                    genre,
+                    source_id,
+                    u.series_title,
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
         }
         tx.commit().await?;
         Ok(())

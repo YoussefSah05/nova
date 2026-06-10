@@ -29,18 +29,26 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /// Live container width (drives responsive column count) via ResizeObserver.
+/// The callback is rAF-coalesced and only commits on a real change, so a flurry
+/// of resize ticks during scroll never re-chunks the grid every frame.
 function useElementWidth(ref: RefObject<HTMLElement | null>): number {
   const [width, setWidth] = useState(0);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     setWidth(el.clientWidth);
+    let raf = 0;
     const observer = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect.width;
-      if (w) setWidth(w);
+      if (!w) return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setWidth((prev) => (prev === w ? prev : w)));
     });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
   }, [ref]);
   return width;
 }
@@ -107,7 +115,7 @@ export function BrowseGrid({
         items={rows}
         scrollRef={scrollRef}
         estimateSize={live ? 150 : 280}
-        overscan={3}
+        overscan={6}
         className="rounded-none border-0 bg-transparent"
         keyFor={(_, index) => index}
         onEndReached={() => {

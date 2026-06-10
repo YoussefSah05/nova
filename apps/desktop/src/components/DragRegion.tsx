@@ -15,7 +15,7 @@ export function DragRegion({ className }: { className?: string }) {
   return (
     <div
       data-tauri-drag-region
-      className={cn("absolute inset-x-0 top-0 z-50 h-9", className)}
+      className={cn("fixed inset-x-0 top-0 z-50 h-9", className)}
       aria-hidden
     />
   );

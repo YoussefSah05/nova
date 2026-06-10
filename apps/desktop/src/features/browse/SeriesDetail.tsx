@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { SeriesEpisode, SeriesSummary } from "@/types";
 import { FavoriteButton } from "@/features/browse/FavoriteButton";
 import { WatchlistButton } from "@/features/browse/WatchlistButton";
+import { PosterFallback } from "@/features/browse/PosterFallback";
 
 interface SeriesDetailProps {
   profileId: string;
@@ -82,14 +83,19 @@ export function SeriesDetail({
       </button>
 
       <div className="flex items-start gap-4">
-        {series.posterUrl && (
-          <img
-            src={series.posterUrl}
-            alt={series.seriesTitle}
-            loading="lazy"
-            className="w-20 h-28 object-cover rounded-lg flex-shrink-0"
-          />
-        )}
+        <div className="h-28 w-20 flex-shrink-0 overflow-hidden rounded-lg">
+          {series.posterUrl ? (
+            <img
+              src={series.posterUrl}
+              alt={series.seriesTitle}
+              loading="lazy"
+              decoding="async"
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <PosterFallback title={series.canonicalTitle ?? series.seriesTitle} />
+          )}
+        </div>
         <div className="flex flex-1 items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-xl font-semibold text-white">
@@ -178,6 +184,7 @@ export function SeriesDetail({
                           src={ep.logoUrl}
                           alt=""
                           loading="lazy"
+                          decoding="async"
                           className="w-16 h-9 object-cover rounded flex-shrink-0 bg-neutral-800"
                         />
                       ) : (
