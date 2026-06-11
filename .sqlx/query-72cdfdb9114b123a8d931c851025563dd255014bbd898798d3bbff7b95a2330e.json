@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ts.id as \"segment_id!: i64\",\n                      ts.start_sec as \"start_sec!: f64\",\n                      ts.end_sec   as \"end_sec!: f64\",\n                      ts.text,\n                      tt.text      as \"translation?: String\"\n               FROM transcript_segments ts\n               LEFT JOIN transcript_translations tt\n                 ON tt.segment_id = ts.id AND tt.target_lang = ? AND tt.backend = ?\n               WHERE ts.transcript_id = ?\n               ORDER BY ts.start_sec ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "segment_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "start_sec!: f64",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "end_sec!: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "text",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "translation?: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "72cdfdb9114b123a8d931c851025563dd255014bbd898798d3bbff7b95a2330e"
+}

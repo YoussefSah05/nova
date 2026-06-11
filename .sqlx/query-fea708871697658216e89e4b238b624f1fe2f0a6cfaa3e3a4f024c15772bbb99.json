@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                 CAST(f.segment_id AS INTEGER) as \"segment_id!: i64\",\n                 ts.start_sec as \"start_sec!: f64\",\n                 ts.end_sec   as \"end_sec!: f64\",\n                 f.text       as \"text!: String\",\n                 f.kind       as \"kind!: String\",\n                 bm25(transcript_fts) as \"score!: f64\"\n               FROM transcript_fts f\n               JOIN transcript_segments ts ON ts.id = CAST(f.segment_id AS INTEGER)\n               WHERE ts.transcript_id = ? AND f.text MATCH ?\n               ORDER BY bm25(transcript_fts)\n               LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "segment_id!: i64",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "start_sec!: f64",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "end_sec!: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "text!: String",
+        "ordinal": 3,
+        "type_info": "Null"
+      },
+      {
+        "name": "kind!: String",
+        "ordinal": 4,
+        "type_info": "Null"
+      },
+      {
+        "name": "score!: f64",
+        "ordinal": 5,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "fea708871697658216e89e4b238b624f1fe2f0a6cfaa3e3a4f024c15772bbb99"
+}

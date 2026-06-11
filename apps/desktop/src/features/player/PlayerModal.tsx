@@ -13,6 +13,7 @@ import Hls, { type ErrorData } from "hls.js";
 import {
   AudioLines,
   Clapperboard,
+  ScrollText,
   Gauge,
   Maximize,
   MonitorCog,
@@ -45,6 +46,7 @@ import { useProfileSettings } from "@/features/settings/useProfileSettings";
 
 import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
 import { CaptionButton, type TargetLanguage } from "./CaptionPicker";
+import { TranscriptPanel } from "./TranscriptPanel";
 import { CaptionStyleButton } from "./CaptionStylePanel";
 import { CinemaEpisodeBrowser } from "./CinemaEpisodeBrowser";
 import { episodeToMedia } from "./episodeMedia";
@@ -261,6 +263,7 @@ export function PlayerModal({
   // -- caption state (Phase 5: inert; Phase 6/7 will populate the cue arrays) --
   const [captionMode, setCaptionMode] = useState<CaptionMode>("off");
   const [captionMenuOpen, setCaptionMenuOpen] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [captionStyleOpen, setCaptionStyleOpen] = useState(false);
   const captionStyleState = useCaptionStyle(profileId);
 
@@ -1902,6 +1905,16 @@ export function PlayerModal({
               />
             )}
 
+            {!isLive && (
+              <IconButton
+                onClick={() => setTranscriptOpen((v) => !v)}
+                label={transcriptOpen ? "Hide transcript" : "Transcript"}
+                active={transcriptOpen}
+              >
+                <ScrollText className="h-5 w-5" />
+              </IconButton>
+            )}
+
             <IconButton
               onClick={() => setCinema((v) => !v)}
               label={cinema ? "Exit cinema mode" : "Cinema mode"}
@@ -1934,6 +1947,20 @@ export function PlayerModal({
           sourceId={sourceId ?? null}
           currentMediaId={media.id}
           onSelectMedia={(m) => onPlayMedia?.(m)}
+        />
+      )}
+
+      {transcriptOpen && !isLive && (
+        <TranscriptPanel
+          profileId={profileId}
+          media={{ kind: media.kind, id: media.id }}
+          audioTrackIndex={selectedAudioTrack.index}
+          targetLang={targetLang}
+          currentTime={currentTime}
+          sourceCues={sourceCues}
+          translatedCues={translatedCues}
+          onSeek={seekTo}
+          onClose={() => setTranscriptOpen(false)}
         />
       )}
 
