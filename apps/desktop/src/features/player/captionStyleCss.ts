@@ -12,7 +12,7 @@ import type { CaptionStyle } from "@/types";
 /// Base caption font size in rem (the pre-6.2 `text-lg`); scaled by `fontScale`.
 const BASE_CAPTION_REM = 1.125;
 
-const FONT_STACKS: Record<CaptionStyle["fontFamily"], string> = {
+export const FONT_STACKS: Record<CaptionStyle["fontFamily"], string> = {
   sans: "ui-sans-serif, system-ui, sans-serif",
   serif: "ui-serif, Georgia, Cambria, 'Times New Roman', serif",
   mono: "ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
@@ -20,7 +20,7 @@ const FONT_STACKS: Record<CaptionStyle["fontFamily"], string> = {
   dyslexic: "'Comic Sans MS', 'Trebuchet MS', Verdana, sans-serif",
 };
 
-const TEXT_COLORS: Record<CaptionStyle["textColor"], string> = {
+export const TEXT_COLORS: Record<CaptionStyle["textColor"], string> = {
   white: "#ffffff",
   yellow: "#f5d90a",
   cyan: "#5fe3e0",

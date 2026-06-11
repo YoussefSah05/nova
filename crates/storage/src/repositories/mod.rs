@@ -11,6 +11,7 @@ pub mod series;
 pub mod sources;
 pub mod tmdb_cache;
 pub mod transcripts;
+pub mod translations;
 pub mod vod;
 pub mod watch_history;
 
@@ -28,6 +29,7 @@ pub use programs::{NowAndNext, ProgramsRepository};
 pub use series::SeriesRepository;
 pub use sources::SourceRepository;
 pub use tmdb_cache::TmdbCacheRepository;
-pub use transcripts::{StoredTranscript, TranscriptRepository};
+pub use transcripts::{SourceSegment, StoredTranscript, TranscriptRepository};
+pub use translations::{TranslationRepository, TranslationRow};
 pub use vod::VodRepository;
 pub use watch_history::{ResumePosition, WatchHistoryRepository, WatchSnapshot};

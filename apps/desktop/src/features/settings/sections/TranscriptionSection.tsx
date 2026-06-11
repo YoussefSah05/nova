@@ -22,16 +22,20 @@ interface ModelProgress {
 
 export function TranscriptionSection({ profileId }: { profileId: string }) {
   const [model, setModel] = useState<ModelStatus | null>(null);
+  const [nllb, setNllb] = useState<ModelStatus | null>(null);
   const [cache, setCache] = useState<CacheStats | null>(null);
-  const [busy, setBusy] = useState<null | "download" | "remove" | "clear">(null);
+  const [busy, setBusy] = useState<null | "download" | "remove" | "clear" | "nllb">(null);
   const [pct, setPct] = useState<number | null>(null);
+  const [nllbPct, setNllbPct] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
-    const [m, c] = await Promise.all([
+    const [m, n, c] = await Promise.all([
       invoke<ModelStatus>("get_model_status"),
+      invoke<ModelStatus>("get_nllb_model_status"),
       invoke<CacheStats>("get_transcription_cache_stats", { profileId }),
     ]);
     setModel(m);
+    setNllb(n);
     setCache(c);
   }, [profileId]);
 
@@ -41,8 +45,15 @@ export function TranscriptionSection({ profileId }: { profileId: string }) {
       const p = e.payload;
       setPct(p.totalBytes && p.totalBytes > 0 ? Math.round((p.downloadedBytes / p.totalBytes) * 100) : null);
     });
+    const unNllb = listen<ModelProgress>("nllb:download:progress", (e) => {
+      const p = e.payload;
+      setNllbPct(
+        p.totalBytes && p.totalBytes > 0 ? Math.round((p.downloadedBytes / p.totalBytes) * 100) : null
+      );
+    });
     return () => {
       void un.then((u) => u());
+      void unNllb.then((u) => u());
     };
   }, [refresh]);
 
@@ -55,6 +66,17 @@ export function TranscriptionSection({ profileId }: { profileId: string }) {
     } finally {
       setBusy(null);
       setPct(null);
+    }
+  };
+  const downloadNllb = async () => {
+    setBusy("nllb");
+    setNllbPct(0);
+    try {
+      await invoke("download_nllb_model");
+      await refresh();
+    } finally {
+      setBusy(null);
+      setNllbPct(null);
     }
   };
   const remove = async () => {
@@ -91,6 +113,26 @@ export function TranscriptionSection({ profileId }: { profileId: string }) {
           ) : (
             <SettingsButton variant="primary" onClick={download} disabled={busy !== null}>
               {busy === "download" ? (pct != null ? `Downloading… ${pct}%` : "Downloading…") : "Download (~500MB)"}
+            </SettingsButton>
+          )}
+        </SettingRow>
+        <SettingRow
+          title="Translation model"
+          description={
+            nllb
+              ? `${nllb.modelId} · ${nllb.installed ? "installed" : "not installed"}`
+              : "…"
+          }
+        >
+          {nllb?.installed ? (
+            <span className="text-sm text-muted-foreground">Installed</span>
+          ) : (
+            <SettingsButton variant="primary" onClick={downloadNllb} disabled={busy !== null}>
+              {busy === "nllb"
+                ? nllbPct != null
+                  ? `Downloading… ${nllbPct}%`
+                  : "Downloading…"
+                : "Download (~1GB)"}
             </SettingsButton>
           )}
         </SettingRow>

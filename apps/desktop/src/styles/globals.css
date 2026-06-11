@@ -125,6 +125,28 @@ html.nova-native-player-active .nova-native-player-shell * {
   }
 }
 
+/* Translation card entry (ARCHITECTURE.md §10): fade + subtle scale-up. */
+@keyframes nova-card-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.nova-caption-card {
+  animation: nova-card-in 200ms var(--ease-enter);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nova-caption-card {
+    animation: none;
+  }
+}
+
 /* Off-screen rails skip layout + paint entirely (rendered lazily as they near
    the viewport), so a tab with many rails scrolls cheaply. The intrinsic size
    reserves the row height so the scrollbar stays stable. */

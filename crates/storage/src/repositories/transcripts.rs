@@ -13,6 +13,16 @@ pub struct TranscriptRepository<'a> {
     pool: &'a SqlitePool,
 }
 
+/// A source segment with its DB id — the id is the translation-cache key, so the
+/// Phase 7 translation session needs it (plain `get_segments` omits it).
+#[derive(Debug, Clone)]
+pub struct SourceSegment {
+    pub id: i64,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub text: String,
+}
+
 /// A persisted transcript header (without segments).
 #[derive(Debug, Clone)]
 pub struct StoredTranscript {
@@ -308,6 +318,34 @@ impl<'a> TranscriptRepository<'a> {
             .execute(self.pool)
             .await?;
         Ok(paths)
+    }
+
+    /// Source segments with their DB ids, ordered by start. The id is the
+    /// translation-cache key (`transcript_translations.segment_id`), so the
+    /// Phase 7 streaming translator joins translations back to start/end times.
+    pub async fn segments_with_ids(
+        &self,
+        transcript_id: i64,
+    ) -> Result<Vec<SourceSegment>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT id as "id!: i64", start_sec as "start_sec!: f64",
+                      end_sec as "end_sec!: f64", text
+               FROM transcript_segments
+               WHERE transcript_id = ?
+               ORDER BY start_sec ASC"#,
+            transcript_id,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SourceSegment {
+                id: r.id,
+                start_sec: r.start_sec,
+                end_sec: r.end_sec,
+                text: r.text,
+            })
+            .collect())
     }
 
     /// All segments of a transcript, ordered. Used by Phase 7 translation and
