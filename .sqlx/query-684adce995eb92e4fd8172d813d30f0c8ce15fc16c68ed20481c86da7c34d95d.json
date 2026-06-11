@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT tt.segment_id as \"segment_id!: i64\", tt.text\n               FROM transcript_translations tt\n               JOIN transcript_segments s ON s.id = tt.segment_id\n               WHERE s.transcript_id = ? AND tt.target_lang = ? AND tt.backend = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "segment_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "text",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "684adce995eb92e4fd8172d813d30f0c8ce15fc16c68ed20481c86da7c34d95d"
+}

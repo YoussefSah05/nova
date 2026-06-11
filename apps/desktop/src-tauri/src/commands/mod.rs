@@ -21,6 +21,7 @@ pub mod playback;
 pub mod profile_settings;
 pub mod settings;
 pub mod transcription;
+pub mod translation;
 
 // ── Profile commands (Phase 1) ────────────────────────────────────────────────
 

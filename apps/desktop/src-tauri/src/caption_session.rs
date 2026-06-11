@@ -617,7 +617,7 @@ fn transcript_basename(
 /// Stable cache key for a media item: a SHA-256 of its upstream stream URL.
 /// Survives a playlist refresh (which renumbers `media_id`) as long as the
 /// provider keeps the URL stable, and keeps any credentials in the URL opaque.
-fn content_key(upstream_url: &str) -> String {
+pub(crate) fn content_key(upstream_url: &str) -> String {
     let digest = Sha256::digest(upstream_url.as_bytes());
     hex_lower(&digest)
 }

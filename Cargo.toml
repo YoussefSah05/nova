@@ -55,6 +55,9 @@ insta = { version = "1", features = ["json", "yaml"] }
 # On-device embeddings (catalog enrichment)
 fastembed = "4"
 
+# Local translation (NLLB-200 via CTranslate2 + Metal, bundled tokenizers)
+ct2rs = "0.9"
+
 # Utilities
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }

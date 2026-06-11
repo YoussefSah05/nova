@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO transcript_translations\n                   (segment_id, target_lang, backend, text, created_at)\n                 VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "36bd51942e8456910a24d576dda4d0f2084b2bb229df9f49ea2f6f8905e7cf2a"
+}

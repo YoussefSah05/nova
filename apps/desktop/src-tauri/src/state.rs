@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 
 use crate::airplay::AirPlayEngine;
 use crate::caption_session::CaptionSessionManager;
+use crate::translation_session::TranslationSessionManager;
 
 pub struct AppState {
     /// Pool for app.db (profiles, app_settings).
@@ -26,6 +27,9 @@ pub struct AppState {
     /// Drives streaming caption transcription for the open player (one active
     /// session at a time).
     pub caption_sessions: Arc<CaptionSessionManager>,
+    /// Drives streaming translation of the source captions (one active session
+    /// at a time), parallel to `caption_sessions`.
+    pub translation_sessions: Arc<TranslationSessionManager>,
 }
 
 impl AppState {
@@ -39,6 +43,7 @@ impl AppState {
             mpv_engine: MpvEngine::new(),
             airplay: AirPlayEngine::new(),
             caption_sessions: Arc::new(CaptionSessionManager::new()),
+            translation_sessions: Arc::new(TranslationSessionManager::new()),
         }
     }
 
