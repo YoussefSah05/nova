@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT se.series_title as \"series_title!: String\",\n                      MAX(sm.overview) as \"overview?: String\"\n               FROM series_episodes se\n               LEFT JOIN series_meta sm\n                 ON sm.source_id = se.source_id AND sm.series_title = se.series_title\n               WHERE se.source_id = ?\n                 AND NOT EXISTS (\n                   SELECT 1 FROM series_embeddings emb\n                   WHERE emb.source_id = se.source_id\n                     AND emb.series_title = se.series_title\n                     AND emb.model = ?\n                 )\n               GROUP BY se.series_title",
+  "describe": {
+    "columns": [
+      {
+        "name": "series_title!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "overview?: String",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "00674805540d23fe4db8565a32301f92bc3ac80c2cd04595682b13e97a8d5169"
+}

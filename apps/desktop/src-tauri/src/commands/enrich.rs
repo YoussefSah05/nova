@@ -144,6 +144,9 @@ async fn run_enrichment(
         .await?;
     let vod_rows = VodRepository::new(&pool).list_unenriched(source_id).await?;
     let total = ch_rows.len() + vod_rows.len();
+    // The catalog `spawn_blocking` below moves `cache_dir`; keep a copy for the
+    // independent series-embedding stage (series aren't in the catalog sweep).
+    let cache_dir_series = cache_dir.clone();
 
     let emit = |stage: &str, processed: usize, done: bool| {
         let _ = app.emit(
@@ -241,6 +244,33 @@ async fn run_enrichment(
         let embed_repo = EmbeddingRepository::new(&pool);
         embed_repo.upsert_many("live", MODEL_ID, &ch_embed).await?;
         embed_repo.upsert_many("movie", MODEL_ID, &vod_embed).await?;
+    }
+
+    // Series embedding stage — series are title-keyed (not in the catalog sweep),
+    // so they embed separately into series_embeddings. Idempotent: only titles
+    // not yet embedded for this model are processed. Title + TMDB overview (when
+    // present) gives the vector richer meaning than the bare title.
+    let series_repo = SeriesRepository::new(&pool);
+    let series_work = series_repo.list_for_embedding(source_id, MODEL_ID).await?;
+    if !series_work.is_empty() {
+        let texts: Vec<String> = series_work
+            .iter()
+            .map(|(title, overview)| match overview {
+                Some(o) if !o.trim().is_empty() => format!("{title}. {o}"),
+                _ => title.clone(),
+            })
+            .collect();
+        let titles: Vec<String> = series_work.iter().map(|(t, _)| t.clone()).collect();
+        let cdir = cache_dir_series;
+        let vectors = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<Vec<f32>>, String> {
+            let embedder = FastEmbedder::load(&cdir, false).map_err(|e| e.to_string())?;
+            embedder.embed(&texts).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(ApiError::Internal)?;
+        let rows: Vec<(String, Vec<f32>)> = titles.into_iter().zip(vectors).collect();
+        series_repo.apply_embeddings(source_id, MODEL_ID, &rows).await?;
     }
 
     // Phase C — opt-in TMDB pass (canonical titles, posters, backdrops, genres).

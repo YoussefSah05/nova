@@ -148,6 +148,13 @@ function setupInvoke(channelsFor: (args: InvokeArgs) => Channel[]) {
         return Promise.resolve([]);
       case "list_channel_groups":
         return Promise.resolve(channelsFor(args).map(groupFrom));
+      case "semantic_search_channels":
+        // Hybrid live search returns brand-family groups; the query is a
+        // top-level arg here (not wrapped in `filters`).
+        return Promise.resolve((args?.query ? [channel(1)] : []).map(groupFrom));
+      case "semantic_search_catalog":
+      case "semantic_search_series":
+        return Promise.resolve([]);
       case "list_channels":
       case "list_vod":
       case "list_series":
@@ -200,8 +207,8 @@ describe("Home", () => {
     expect(await screen.findByText("Channel 1")).toBeInTheDocument();
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith(
-        "list_channel_groups",
-        expect.objectContaining({ filters: expect.objectContaining({ query: "news" }) })
+        "semantic_search_channels",
+        expect.objectContaining({ query: "news" })
       )
     );
   });

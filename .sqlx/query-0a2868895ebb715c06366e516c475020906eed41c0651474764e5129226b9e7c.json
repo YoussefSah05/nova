@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR REPLACE INTO series_embeddings (source_id, series_title, model, vector)\n                 VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "0a2868895ebb715c06366e516c475020906eed41c0651474764e5129226b9e7c"
+}

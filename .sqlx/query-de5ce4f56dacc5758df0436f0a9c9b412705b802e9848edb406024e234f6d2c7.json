@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT series_title as \"series_title!: String\", vector as \"vector!: Vec<u8>\"\n               FROM series_embeddings WHERE source_id = ? AND model = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "series_title!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "vector!: Vec<u8>",
+        "ordinal": 1,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "de5ce4f56dacc5758df0436f0a9c9b412705b802e9848edb406024e234f6d2c7"
+}

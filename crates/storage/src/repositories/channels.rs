@@ -327,6 +327,79 @@ impl<'a> ChannelRepository<'a> {
             .collect())
     }
 
+    /// The brand-family group key (`COALESCE(channel_group, name)`, same as
+    /// `list_groups`) for each of `ids` — maps semantic-search channel hits back
+    /// onto the grouped live wall. Ids passed as a JSON array so one static query
+    /// handles a variable-length set (`json_each`).
+    pub async fn group_keys_for_ids(
+        &self,
+        source_id: i64,
+        ids: &[i64],
+    ) -> Result<Vec<(i64, String)>, StorageError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids_json = serde_json::to_string(ids)?;
+        let rows = sqlx::query!(
+            r#"SELECT id as "id!: i64",
+                      COALESCE(NULLIF(channel_group, ''), name) as "group_key!: String"
+               FROM channels
+               WHERE source_id = ? AND id IN (SELECT value FROM json_each(?))"#,
+            source_id,
+            ids_json,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| (r.id, r.group_key)).collect())
+    }
+
+    /// Hydrate brand-family groups by their group key (the aggregate shape of
+    /// `list_groups`), for semantic hits whose group wasn't in the lexical page.
+    pub async fn groups_by_keys(
+        &self,
+        source_id: i64,
+        keys: &[String],
+    ) -> Result<Vec<ChannelGroup>, StorageError> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys_json = serde_json::to_string(keys)?;
+        let rows = sqlx::query!(
+            r#"SELECT
+                 COALESCE(NULLIF(channel_group, ''), name) as "group_key!: String",
+                 COUNT(*) as "member_count!: i64",
+                 MIN(id) as "rep_id!: i64",
+                 MIN(name) as "name!: String",
+                 MIN(NULLIF(logo_url, '')) as "logo_url?: String",
+                 MIN(category) as "category?: String",
+                 MIN(region) as "region?: String",
+                 MAX(is_favorite) as "is_favorite!: i64",
+                 MAX(is_in_watchlist) as "is_in_watchlist!: i64"
+               FROM channels
+               WHERE source_id = ?
+                 AND COALESCE(NULLIF(channel_group, ''), name) IN (SELECT value FROM json_each(?))
+               GROUP BY COALESCE(NULLIF(channel_group, ''), name)"#,
+            source_id,
+            keys_json,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| ChannelGroup {
+                group: r.group_key,
+                member_count: r.member_count,
+                representative_id: r.rep_id,
+                title: r.name,
+                logo_url: r.logo_url,
+                category: r.category,
+                region: r.region,
+                is_favorite: r.is_favorite != 0,
+                is_in_watchlist: r.is_in_watchlist != 0,
+            })
+            .collect())
+    }
+
     /// All channels of one brand-family, in display order.
     pub async fn list_in_group(
         &self,

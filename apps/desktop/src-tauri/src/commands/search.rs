@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use nova_core::{ContentSort, VodItem};
+use nova_core::{ChannelGroup, ContentSort, SeriesSummary, VodItem};
 use nova_enrich::Embedder;
 use nova_storage::{
-    EmbeddingRepository, PlaybackRepository, SearchHit, SearchRepository, TranscriptRepository,
-    VodRepository,
+    ChannelRepository, EmbeddingRepository, PlaybackRepository, SearchHit, SearchRepository,
+    SeriesRepository, TranscriptRepository, VodRepository,
 };
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -89,11 +89,14 @@ async fn embed_query_vec(embedder: Arc<dyn Embedder>, query: String) -> Result<V
         .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
-/// Dedupe ids preserving first-seen order — turns FTS hits (which may repeat a
-/// segment for a source + a translation match) into one ranked id list for RRF.
-fn dedup_preserve_order(ids: impl IntoIterator<Item = i64>) -> Vec<i64> {
+/// Dedupe keys preserving first-seen order — turns hit lists (which may repeat a
+/// key, e.g. a segment matched as both source + translation, or several channels
+/// in one brand group) into one ranked list for RRF.
+fn dedup_preserve_order<T: Clone + Eq + std::hash::Hash>(
+    keys: impl IntoIterator<Item = T>,
+) -> Vec<T> {
     let mut seen = std::collections::HashSet::new();
-    ids.into_iter().filter(|id| seen.insert(*id)).collect()
+    keys.into_iter().filter(|k| seen.insert(k.clone())).collect()
 }
 
 /// Lazily embed any not-yet-embedded segments of a transcript (best-effort: the
@@ -358,5 +361,191 @@ pub async fn semantic_search_catalog(
     Ok(ordered
         .into_iter()
         .filter_map(|id| by_id.remove(&id))
+        .collect())
+}
+
+/// Hybrid live-channel search. Channel vectors are keyed by raw channel id, but
+/// the live wall shows brand-family **groups**, so cosine hits are mapped to
+/// their group key and fused (on the group key) with the lexical grouped search.
+/// Returns `ChannelGroup`s (same shape as `list_channel_groups`) so the grid
+/// renders unchanged. Lexical-only when no model/vectors.
+#[tauri::command]
+pub async fn semantic_search_channels(
+    profile_id: String,
+    source_id: i64,
+    query: String,
+    limit: Option<i64>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Vec<ChannelGroup>, ApiError> {
+    let q = query.trim().to_string();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let limit = limit.unwrap_or(60).clamp(1, 200);
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let ch = ChannelRepository::new(&pool);
+
+    // Lexical leg — existing grouped LIKE search.
+    let lexical = ch
+        .list_groups(source_id, None, None, Some(&q), false, false, (limit * 3).max(90), 0)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let lexical_keys = dedup_preserve_order(lexical.iter().map(|g| g.group.clone()));
+
+    // Semantic leg (optional) → map channel-id hits to their group keys.
+    let sem_keys: Vec<String> = match semantic_embedder(&app, &state).await {
+        Some(embedder) => {
+            let count = EmbeddingRepository::new(&pool)
+                .count_catalog(source_id, "live", MODEL_ID)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            if count == 0 {
+                Vec::new()
+            } else {
+                let pool2 = pool.clone();
+                let vectors = state
+                    .catalog_vectors(source_id, "live", count, || async move {
+                        EmbeddingRepository::new(&pool2)
+                            .load_catalog(source_id, "live", MODEL_ID)
+                            .await
+                            .map_err(|e| e.to_string())
+                    })
+                    .await
+                    .map_err(ApiError::Internal)?;
+                let qvec = embed_query_vec(embedder, q.clone()).await?;
+                let ids: Vec<i64> = nova_search::top_k(&qvec, &vectors, (limit as usize).max(60))
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect();
+                let key_of: HashMap<i64, String> = ch
+                    .group_keys_for_ids(source_id, &ids)
+                    .await
+                    .map_err(|e| ApiError::Internal(e.to_string()))?
+                    .into_iter()
+                    .collect();
+                dedup_preserve_order(ids.into_iter().filter_map(|id| key_of.get(&id).cloned()))
+            }
+        }
+        None => Vec::new(),
+    };
+
+    let ordered: Vec<String> = if sem_keys.is_empty() {
+        lexical_keys
+    } else {
+        nova_search::rrf_fuse(&[&lexical_keys[..], &sem_keys[..]], nova_search::RRF_K)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect()
+    };
+    let ordered: Vec<String> = ordered.into_iter().take(limit as usize).collect();
+
+    let mut by_key: HashMap<String, ChannelGroup> =
+        lexical.into_iter().map(|g| (g.group.clone(), g)).collect();
+    let missing: Vec<String> = ordered
+        .iter()
+        .filter(|k| !by_key.contains_key(*k))
+        .cloned()
+        .collect();
+    for g in ch
+        .groups_by_keys(source_id, &missing)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
+        by_key.insert(g.group.clone(), g);
+    }
+    Ok(ordered
+        .into_iter()
+        .filter_map(|k| by_key.remove(&k))
+        .collect())
+}
+
+/// Hybrid series search. Series are title-keyed, so vectors live in
+/// `series_embeddings` and fusion is on the `series_title` string. Returns
+/// `SeriesSummary`s (same shape as `list_series`). The series corpus is small,
+/// so its vectors load per search (no AppState cache). Lexical-only when no
+/// model/vectors.
+#[tauri::command]
+pub async fn semantic_search_series(
+    profile_id: String,
+    source_id: i64,
+    query: String,
+    limit: Option<i64>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Vec<SeriesSummary>, ApiError> {
+    let q = query.trim().to_string();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let limit = limit.unwrap_or(60).clamp(1, 200);
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let series = SeriesRepository::new(&pool);
+
+    // Lexical leg — existing LIKE series search.
+    let lexical = series
+        .list_series(
+            source_id,
+            None,
+            Some(&q),
+            false,
+            false,
+            ContentSort::Default,
+            (limit * 3).max(90),
+            0,
+        )
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let lexical_keys = dedup_preserve_order(lexical.iter().map(|s| s.series_title.clone()));
+
+    // Semantic leg (optional).
+    let sem_keys: Vec<String> = match semantic_embedder(&app, &state).await {
+        Some(embedder) => {
+            let vectors = series
+                .load_embeddings(source_id, MODEL_ID)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            if vectors.is_empty() {
+                Vec::new()
+            } else {
+                let qvec = embed_query_vec(embedder, q.clone()).await?;
+                nova_search::top_k(&qvec, &vectors, (limit as usize).max(60))
+                    .into_iter()
+                    .map(|(title, _)| title)
+                    .collect()
+            }
+        }
+        None => Vec::new(),
+    };
+
+    let ordered: Vec<String> = if sem_keys.is_empty() {
+        lexical_keys
+    } else {
+        nova_search::rrf_fuse(&[&lexical_keys[..], &sem_keys[..]], nova_search::RRF_K)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect()
+    };
+    let ordered: Vec<String> = ordered.into_iter().take(limit as usize).collect();
+
+    let mut by_title: HashMap<String, SeriesSummary> = lexical
+        .into_iter()
+        .map(|s| (s.series_title.clone(), s))
+        .collect();
+    let missing: Vec<String> = ordered
+        .iter()
+        .filter(|t| !by_title.contains_key(*t))
+        .cloned()
+        .collect();
+    for s in series
+        .list_by_titles(source_id, &missing)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
+        by_title.insert(s.series_title.clone(), s);
+    }
+    Ok(ordered
+        .into_iter()
+        .filter_map(|t| by_title.remove(&t))
         .collect())
 }

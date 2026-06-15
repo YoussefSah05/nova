@@ -2,6 +2,7 @@ use nova_core::{now_ts, ContentSort, SeriesEpisode, SeriesSummary};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
+use crate::repositories::embeddings::{from_blob, to_blob};
 use crate::repositories::enrich::{SeriesTmdbQuery, SeriesTmdbWrite};
 
 pub struct SeriesRepository<'a> {
@@ -498,6 +499,155 @@ impl<'a> SeriesRepository<'a> {
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Distinct series of a source not yet embedded for `model`, with their TMDB
+    /// overview when available — the semantic-search embed worklist. Idempotent:
+    /// re-running enrichment only embeds new titles.
+    pub async fn list_for_embedding(
+        &self,
+        source_id: i64,
+        model: &str,
+    ) -> Result<Vec<(String, Option<String>)>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT se.series_title as "series_title!: String",
+                      MAX(sm.overview) as "overview?: String"
+               FROM series_episodes se
+               LEFT JOIN series_meta sm
+                 ON sm.source_id = se.source_id AND sm.series_title = se.series_title
+               WHERE se.source_id = ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM series_embeddings emb
+                   WHERE emb.source_id = se.source_id
+                     AND emb.series_title = se.series_title
+                     AND emb.model = ?
+                 )
+               GROUP BY se.series_title"#,
+            source_id,
+            model,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.series_title, r.overview))
+            .collect())
+    }
+
+    /// Persist series embedding vectors for `model` (one transaction).
+    pub async fn apply_embeddings(
+        &self,
+        source_id: i64,
+        model: &str,
+        rows: &[(String, Vec<f32>)],
+    ) -> Result<(), StorageError> {
+        let mut tx = self.pool.begin().await?;
+        for (title, vector) in rows {
+            let blob = to_blob(vector);
+            sqlx::query!(
+                "INSERT OR REPLACE INTO series_embeddings (source_id, series_title, model, vector)
+                 VALUES (?, ?, ?, ?)",
+                source_id,
+                title,
+                model,
+                blob,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// How many series vectors exist for a source + model (cache-invalidation
+    /// signal for the in-memory index).
+    pub async fn count_embeddings(
+        &self,
+        source_id: i64,
+        model: &str,
+    ) -> Result<i64, StorageError> {
+        let row = sqlx::query!(
+            r#"SELECT COUNT(*) as "n!: i64" FROM series_embeddings
+               WHERE source_id = ? AND model = ?"#,
+            source_id,
+            model,
+        )
+        .fetch_one(self.pool)
+        .await?;
+        Ok(row.n)
+    }
+
+    /// Load series vectors for a source + model as `(series_title, vector)`.
+    pub async fn load_embeddings(
+        &self,
+        source_id: i64,
+        model: &str,
+    ) -> Result<Vec<(String, Vec<f32>)>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT series_title as "series_title!: String", vector as "vector!: Vec<u8>"
+               FROM series_embeddings WHERE source_id = ? AND model = ?"#,
+            source_id,
+            model,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.series_title, from_blob(&r.vector)))
+            .collect())
+    }
+
+    /// Hydrate series summaries by title (any order) — for semantic hits. Titles
+    /// passed as a JSON array so one static query handles a variable-length set.
+    pub async fn list_by_titles(
+        &self,
+        source_id: i64,
+        titles: &[String],
+    ) -> Result<Vec<SeriesSummary>, StorageError> {
+        if titles.is_empty() {
+            return Ok(Vec::new());
+        }
+        let titles_json = serde_json::to_string(titles)?;
+        let rows = sqlx::query!(
+            r#"SELECT se.series_title as "series_title!: String",
+                    MIN(se.category) as "category?: String",
+                    SUM(CASE WHEN se.season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
+                    COUNT(DISTINCT CASE WHEN se.season > 0 THEN se.season END) as "season_count!: i64",
+                    COALESCE(MAX(sm.poster_url), MIN(se.logo_url)) as "poster_url?: String",
+                    MAX(se.is_favorite) as "is_favorite!: i64",
+                    MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
+                    MAX(se.added_at) as "added_at?: i64",
+                    MAX(sm.canonical_title) as "canonical_title?: String",
+                    MAX(sm.backdrop_url) as "backdrop_url?: String",
+                    MAX(sm.overview) as "overview?: String"
+             FROM series_episodes se
+             LEFT JOIN series_meta sm
+               ON sm.source_id = se.source_id AND sm.series_title = se.series_title
+             WHERE se.source_id = ?
+               AND se.series_title IN (SELECT value FROM json_each(?))
+             GROUP BY se.series_title"#,
+            source_id,
+            titles_json,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SeriesSummary {
+                series_title: r.series_title,
+                source_id,
+                category: r.category,
+                episode_count: r.episode_count,
+                season_count: r.season_count,
+                poster_url: r.poster_url,
+                is_favorite: r.is_favorite != 0,
+                is_in_watchlist: r.is_in_watchlist != 0,
+                added_at: r.added_at,
+                canonical_title: r.canonical_title,
+                backdrop_url: r.backdrop_url,
+                overview: r.overview,
+            })
+            .collect())
     }
 }
 
