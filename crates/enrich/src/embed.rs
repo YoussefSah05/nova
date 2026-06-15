@@ -14,7 +14,14 @@ pub const MODEL: EmbeddingModel = EmbeddingModel::MultilingualE5Small;
 /// Produces embedding vectors for short catalog strings. `Send + Sync` so it can
 /// live in a background job behind an `Arc`.
 pub trait Embedder: Send + Sync {
+    /// Embed documents (catalog titles, transcript lines) — the corpus side.
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EnrichError>;
+
+    /// Embed a *search query*. e5 is asymmetric: the corpus is embedded with a
+    /// `passage:` prefix (see [`Embedder::embed`]) and queries with a `query:`
+    /// prefix. Using the wrong prefix measurably degrades recall, so semantic
+    /// search must route the user's text through here, not `embed`.
+    fn embed_query(&self, query: &str) -> Result<Vec<f32>, EnrichError>;
 }
 
 /// On-device embedder (fastembed + ONNX Runtime). The model is downloaded to
@@ -40,5 +47,15 @@ impl Embedder for FastEmbedder {
         self.model
             .embed(docs, None)
             .map_err(|e| EnrichError::Model(e.to_string()))
+    }
+
+    fn embed_query(&self, query: &str) -> Result<Vec<f32>, EnrichError> {
+        let one = vec![format!("query: {query}")];
+        let mut out = self
+            .model
+            .embed(one, None)
+            .map_err(|e| EnrichError::Model(e.to_string()))?;
+        out.pop()
+            .ok_or_else(|| EnrichError::Model("empty embedding result".into()))
     }
 }

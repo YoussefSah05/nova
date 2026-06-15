@@ -190,6 +190,51 @@ impl<'a> VodRepository<'a> {
         Ok(rows)
     }
 
+    /// Fetch movies by id (any order) for a source — hydrates semantic-search
+    /// hits whose ids came from the vector index, not a `list` page. Ids are
+    /// passed as a JSON array so one static query handles a variable-length set
+    /// (`json_each`), keeping the compile-time-checked-query rule.
+    pub async fn list_by_ids(
+        &self,
+        source_id: i64,
+        ids: &[i64],
+    ) -> Result<Vec<VodItem>, StorageError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids_json = serde_json::to_string(ids)?;
+        let rows = sqlx::query!(
+            r#"SELECT id as "id!: i64", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group, canonical_title, poster_url, backdrop_url, overview
+               FROM vod_items
+               WHERE source_id = ? AND id IN (SELECT value FROM json_each(?))"#,
+            source_id,
+            ids_json,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| VodItem {
+                id: r.id,
+                source_id: r.source_id,
+                name: r.name,
+                clean_title: r.clean_title,
+                year: r.year,
+                logo_url: r.logo_url,
+                stream_url: r.stream_url,
+                category: r.category,
+                is_favorite: r.is_favorite != 0,
+                is_in_watchlist: r.is_in_watchlist != 0,
+                added_at: r.added_at,
+                dedup_group: r.dedup_group,
+                canonical_title: r.canonical_title,
+                poster_url: r.poster_url,
+                backdrop_url: r.backdrop_url,
+                overview: r.overview,
+            })
+            .collect())
+    }
+
     pub async fn count_filtered(
         &self,
         source_id: i64,

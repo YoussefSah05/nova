@@ -178,6 +178,25 @@ async function fetchItems(
     return (await invoke<ChannelGroup[]>("list_channel_groups", args)).map(channelGroupToItem);
   }
   if (tab === "movies") {
+    // A free-text search with no other restrictive filter goes through hybrid
+    // (semantic + keyword) retrieval so concept queries — "space adventure" —
+    // surface thematically-matching films, not just literal substring matches.
+    // It returns one fused, ranked set (no pagination), so serve it on page 0
+    // only. Category / favourites / watchlist searches stay on the lexical path
+    // (the semantic command doesn't apply those filters).
+    const q = filters.query?.trim();
+    const plainSearch =
+      !!q && !filters.category && !filters.favoritesOnly && !filters.watchlistOnly;
+    if (plainSearch) {
+      if (offset > 0) return [];
+      const hits = await invoke<VodItem[]>("semantic_search_catalog", {
+        profileId,
+        sourceId,
+        query: q,
+        limit,
+      });
+      return collapseByKey(hits.map(vodToItem), (item) => movieVersionKey(item) ?? item.dedupGroup ?? null);
+    }
     // Gather the same film's language/source copies under one card (title-based,
     // from the raw name); fall back to the embeddings group when no real title.
     return collapseByKey(

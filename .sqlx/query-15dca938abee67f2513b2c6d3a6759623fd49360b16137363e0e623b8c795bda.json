@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as \"n!: i64\"\n                   FROM catalog_embeddings ce\n                   JOIN vod_items v ON v.id = ce.content_id\n                   WHERE ce.content_kind = 'movie' AND ce.model = ? AND v.source_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "15dca938abee67f2513b2c6d3a6759623fd49360b16137363e0e623b8c795bda"
+}

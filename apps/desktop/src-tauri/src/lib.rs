@@ -146,6 +146,8 @@ pub fn run() {
             // Phase 8 — Search (transcript companion panel + dialogue FTS)
             commands::search::get_transcript,
             commands::search::search_transcript,
+            // Semantic / hybrid search (catalog discovery)
+            commands::search::semantic_search_catalog,
             // Phase 6.2 — per-profile caption styling
             commands::caption_style::get_caption_style,
             commands::caption_style::set_caption_style,

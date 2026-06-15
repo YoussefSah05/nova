@@ -1,5 +1,6 @@
 pub mod caption_style;
 pub mod channels;
+pub mod embeddings;
 pub mod enrich;
 pub mod epg_sources;
 pub mod jobs;
@@ -18,6 +19,7 @@ pub mod watch_history;
 
 pub use caption_style::CaptionStyleRepository;
 pub use channels::ChannelRepository;
+pub use embeddings::{from_blob, to_blob, EmbeddingRepository};
 pub use enrich::{
     EnrichUpdate, SeriesTmdbQuery, SeriesTmdbWrite, TmdbQuery, TmdbWrite, UnenrichedRow,
 };

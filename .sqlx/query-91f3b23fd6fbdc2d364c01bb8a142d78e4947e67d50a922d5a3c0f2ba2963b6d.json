@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR REPLACE INTO catalog_embeddings (content_kind, content_id, model, vector)\n                 VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "91f3b23fd6fbdc2d364c01bb8a142d78e4947e67d50a922d5a3c0f2ba2963b6d"
+}

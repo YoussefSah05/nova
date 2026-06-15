@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group, canonical_title, poster_url, backdrop_url, overview\n               FROM vod_items\n               WHERE source_id = ? AND id IN (SELECT value FROM json_each(?))",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "clean_title",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "year",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "logo_url",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "stream_url",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "category",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_favorite",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_in_watchlist",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "added_at",
+        "ordinal": 10,
+        "type_info": "Integer"
+      },
+      {
+        "name": "dedup_group",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "canonical_title",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster_url",
+        "ordinal": 13,
+        "type_info": "Text"
+      },
+      {
+        "name": "backdrop_url",
+        "ordinal": 14,
+        "type_info": "Text"
+      },
+      {
+        "name": "overview",
+        "ordinal": 15,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1b10696607d7420667cb6112aba125a6fb988bc38779714adc460b475625ccfb"
+}
