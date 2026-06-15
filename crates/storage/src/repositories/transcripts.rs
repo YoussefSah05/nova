@@ -23,6 +23,17 @@ pub struct SourceSegment {
     pub text: String,
 }
 
+/// One transcript line for the Phase 8 companion panel: the source text plus its
+/// translation in the active target language (when one is cached).
+#[derive(Debug, Clone)]
+pub struct TranscriptLine {
+    pub segment_id: i64,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub text: String,
+    pub translation: Option<String>,
+}
+
 /// A persisted transcript header (without segments).
 #[derive(Debug, Clone)]
 pub struct StoredTranscript {
@@ -344,6 +355,46 @@ impl<'a> TranscriptRepository<'a> {
                 start_sec: r.start_sec,
                 end_sec: r.end_sec,
                 text: r.text,
+            })
+            .collect())
+    }
+
+    /// Source lines joined to their translation in `target_lang`/`backend` (when
+    /// cached), ordered by time — the Phase 8 companion panel's read. Passing an
+    /// empty `target_lang` (or one with no cached translations) leaves every
+    /// `translation` as `None`. `UNIQUE(segment_id,target_lang,backend)` keeps the
+    /// join to at most one translation row per segment.
+    pub async fn transcript_with_translations(
+        &self,
+        transcript_id: i64,
+        target_lang: &str,
+        backend: &str,
+    ) -> Result<Vec<TranscriptLine>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT ts.id as "segment_id!: i64",
+                      ts.start_sec as "start_sec!: f64",
+                      ts.end_sec   as "end_sec!: f64",
+                      ts.text,
+                      tt.text      as "translation?: String"
+               FROM transcript_segments ts
+               LEFT JOIN transcript_translations tt
+                 ON tt.segment_id = ts.id AND tt.target_lang = ? AND tt.backend = ?
+               WHERE ts.transcript_id = ?
+               ORDER BY ts.start_sec ASC"#,
+            target_lang,
+            backend,
+            transcript_id,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| TranscriptLine {
+                segment_id: r.segment_id,
+                start_sec: r.start_sec,
+                end_sec: r.end_sec,
+                text: r.text,
+                translation: r.translation,
             })
             .collect())
     }

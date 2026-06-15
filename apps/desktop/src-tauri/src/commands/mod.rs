@@ -19,6 +19,7 @@ pub mod enrich;
 pub mod epg;
 pub mod playback;
 pub mod profile_settings;
+pub mod search;
 pub mod settings;
 pub mod transcription;
 pub mod translation;

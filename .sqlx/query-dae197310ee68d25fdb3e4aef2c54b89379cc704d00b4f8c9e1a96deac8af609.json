@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as \"n!: i64\"\n                   FROM catalog_embeddings ce\n                   JOIN channels c ON c.id = ce.content_id\n                   WHERE ce.content_kind = 'live' AND ce.model = ? AND c.source_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dae197310ee68d25fdb3e4aef2c54b89379cc704d00b4f8c9e1a96deac8af609"
+}

@@ -13,8 +13,9 @@ use nova_enrich::{
     FastEmbedder, GenreClassifier, TmdbClient, TmdbMatch, MIN_CONFIDENCE, WEAK_CONFIDENCE,
 };
 use nova_storage::{
-    ChannelRepository, EnrichUpdate, ProfileSettingsRepository, SeriesRepository, SeriesTmdbQuery,
-    SeriesTmdbWrite, TmdbCacheRepository, TmdbQuery, TmdbWrite, UnenrichedRow, VodRepository,
+    ChannelRepository, EmbeddingRepository, EnrichUpdate, ProfileSettingsRepository,
+    SeriesRepository, SeriesTmdbQuery, SeriesTmdbWrite, TmdbCacheRepository, TmdbQuery, TmdbWrite,
+    UnenrichedRow, VodRepository,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -25,7 +26,7 @@ use crate::state::AppState;
 
 use super::require_profile_pool;
 
-const MODEL_ID: &str = "multilingual-e5-small";
+pub(crate) const MODEL_ID: &str = "multilingual-e5-small";
 /// Rows embedded per batch; small enough that progress advances visibly.
 const EMBED_CHUNK: usize = 256;
 /// TMDB results flushed to the DB this often, so a long pass persists progress
@@ -55,13 +56,13 @@ struct EnrichProgress {
     error: Option<String>,
 }
 
-fn embeddings_dir(app: &AppHandle) -> Result<PathBuf, ApiError> {
+pub(crate) fn embeddings_dir(app: &AppHandle) -> Result<PathBuf, ApiError> {
     Ok(app_data_dir(app)?.join("models").join("embeddings"))
 }
 
 /// Sentinel written after a successful download (fastembed's own cache layout is
 /// opaque, so we track installation with a marker like the whisper flow).
-fn marker(dir: &Path) -> PathBuf {
+pub(crate) fn marker(dir: &Path) -> PathBuf {
     dir.join(".installed")
 }
 
@@ -170,8 +171,10 @@ async fn run_enrichment(
         // async runtime. Embed in chunks and emit progress per chunk so the bar
         // actually moves (the whole-catalog single call looked stuck at 0).
         let app_bg = app.clone();
-        let (ch_updates, vod_updates) = tauri::async_runtime::spawn_blocking(
-            move || -> Result<(Vec<EnrichUpdate>, Vec<EnrichUpdate>), String> {
+        type EmbedRows = Vec<(i64, Vec<f32>)>;
+        #[allow(clippy::type_complexity)]
+        let (ch_updates, vod_updates, ch_embed, vod_embed) = tauri::async_runtime::spawn_blocking(
+            move || -> Result<(Vec<EnrichUpdate>, Vec<EnrichUpdate>, EmbedRows, EmbedRows), String> {
                 let embedder = FastEmbedder::load(&cache_dir, false).map_err(|e| e.to_string())?;
                 let genres = nova_core::classify::genres();
                 let genre_strings: Vec<String> = genres.iter().map(|g| g.to_string()).collect();
@@ -205,7 +208,20 @@ async fn run_enrichment(
                 let (ch_vecs, vod_vecs) = vectors.split_at(ch_n);
                 let ch = cluster_and_genre(&ch_rows, ch_vecs, &classifier);
                 let vod = cluster_and_genre(&vod_rows, vod_vecs, &classifier);
-                Ok((ch, vod))
+
+                // Keep the vectors for semantic search instead of dropping them —
+                // pair each row id with its embedding (zero extra inference).
+                let ch_embed: EmbedRows = ch_rows
+                    .iter()
+                    .zip(ch_vecs)
+                    .map(|(r, v)| (r.id, v.clone()))
+                    .collect();
+                let vod_embed: EmbedRows = vod_rows
+                    .iter()
+                    .zip(vod_vecs)
+                    .map(|(r, v)| (r.id, v.clone()))
+                    .collect();
+                Ok((ch, vod, ch_embed, vod_embed))
             },
         )
         .await
@@ -218,6 +234,13 @@ async fn run_enrichment(
         VodRepository::new(&pool)
             .apply_enrichment(&vod_updates)
             .await?;
+
+        // Persist the embeddings (same vectors we just clustered on) so semantic
+        // search is a free byproduct. `live`/`movie` match the catalog_embeddings
+        // content_kind convention.
+        let embed_repo = EmbeddingRepository::new(&pool);
+        embed_repo.upsert_many("live", MODEL_ID, &ch_embed).await?;
+        embed_repo.upsert_many("movie", MODEL_ID, &vod_embed).await?;
     }
 
     // Phase C — opt-in TMDB pass (canonical titles, posters, backdrops, genres).

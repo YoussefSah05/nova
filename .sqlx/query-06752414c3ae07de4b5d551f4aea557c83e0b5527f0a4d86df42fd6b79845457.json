@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ts.id as \"id!: i64\", ts.text as \"text!: String\"\n               FROM transcript_segments ts\n               WHERE ts.transcript_id = ?\n                 AND NOT EXISTS (\n                   SELECT 1 FROM catalog_embeddings ce\n                   WHERE ce.content_kind = 'segment' AND ce.content_id = ts.id AND ce.model = ?\n                 )\n               ORDER BY ts.start_sec ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "text!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "06752414c3ae07de4b5d551f4aea557c83e0b5527f0a4d86df42fd6b79845457"
+}

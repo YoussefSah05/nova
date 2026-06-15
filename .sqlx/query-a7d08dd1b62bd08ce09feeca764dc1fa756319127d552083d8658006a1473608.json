@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ce.content_id as \"id!: i64\", ce.vector as \"vector!: Vec<u8>\"\n                   FROM catalog_embeddings ce\n                   JOIN vod_items v ON v.id = ce.content_id\n                   WHERE ce.content_kind = 'movie' AND ce.model = ? AND v.source_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "vector!: Vec<u8>",
+        "ordinal": 1,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a7d08dd1b62bd08ce09feeca764dc1fa756319127d552083d8658006a1473608"
+}
