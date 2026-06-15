@@ -50,14 +50,15 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     dot / (na.sqrt() * nb.sqrt())
 }
 
-/// Brute-force nearest-neighbour search: score `query` against every `(id,
-/// vector)` in `corpus` by cosine and return the top `k` as `(id, score)`,
-/// highest first. At Nova's scale (tens of thousands of short vectors) this is a
-/// few milliseconds and needs no ANN index / native extension.
-pub fn top_k(query: &[f32], corpus: &[(i64, Vec<f32>)], k: usize) -> Vec<(i64, f32)> {
-    let mut scored: Vec<(i64, f32)> = corpus
+/// Brute-force nearest-neighbour search: score `query` against every `(key,
+/// vector)` in `corpus` by cosine and return the top `k` as `(key, score)`,
+/// highest first. Generic over the key type so the corpus can be keyed by row id
+/// (`i64`, movies/channels) or title (`String`, series). At Nova's scale (tens
+/// of thousands of short vectors) this is a few ms — no ANN index / extension.
+pub fn top_k<T: Clone>(query: &[f32], corpus: &[(T, Vec<f32>)], k: usize) -> Vec<(T, f32)> {
+    let mut scored: Vec<(T, f32)> = corpus
         .iter()
-        .map(|(id, v)| (*id, cosine(query, v)))
+        .map(|(key, v)| (key.clone(), cosine(query, v)))
         .collect();
     // Descending by score; NaN (shouldn't occur) sinks to the bottom.
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -69,27 +70,34 @@ pub fn top_k(query: &[f32], corpus: &[(i64, Vec<f32>)], k: usize) -> Vec<(i64, f
 /// contribution of rank position; 60 is the well-established default.
 pub const RRF_K: f64 = 60.0;
 
-/// Reciprocal Rank Fusion of several ranked id lists into one ranking.
+/// Reciprocal Rank Fusion of several ranked key lists into one ranking.
 ///
 /// Each input list is an ordering (best first) from one retriever — e.g. the
-/// FTS5/BM25 list and the cosine list. An id's fused score is
+/// FTS5/BM25 list and the cosine list. A key's fused score is
 /// `Σ 1/(k + rank)` over the lists it appears in (rank is 0-based). Operating on
 /// **ranks** (not raw scores) means we can fuse BM25 and cosine without any score
-/// normalization. Returns `(id, fused_score)` sorted highest first.
-pub fn rrf_fuse(lists: &[&[i64]], k: f64) -> Vec<(i64, f64)> {
+/// normalization. Generic over the key type so callers can fuse by row id
+/// (`i64`, movies/dialogue) or by group key (`String`, live channels). Returns
+/// `(key, fused_score)` sorted highest first.
+pub fn rrf_fuse<T: Clone + Eq + std::hash::Hash>(lists: &[&[T]], k: f64) -> Vec<(T, f64)> {
     use std::collections::HashMap;
-    let mut scores: HashMap<i64, f64> = HashMap::new();
-    let mut order: Vec<i64> = Vec::new(); // first-seen order, for stable tie-breaks
+    let mut scores: HashMap<T, f64> = HashMap::new();
+    let mut order: Vec<T> = Vec::new(); // first-seen order, for stable tie-breaks
     for list in lists {
-        for (rank, &id) in list.iter().enumerate() {
-            let entry = scores.entry(id).or_insert_with(|| {
-                order.push(id);
-                0.0
-            });
-            *entry += 1.0 / (k + rank as f64);
+        for (rank, key) in list.iter().enumerate() {
+            if !scores.contains_key(key) {
+                order.push(key.clone());
+            }
+            *scores.entry(key.clone()).or_insert(0.0) += 1.0 / (k + rank as f64);
         }
     }
-    let mut fused: Vec<(i64, f64)> = order.into_iter().map(|id| (id, scores[&id])).collect();
+    let mut fused: Vec<(T, f64)> = order
+        .into_iter()
+        .map(|key| {
+            let s = scores[&key];
+            (key, s)
+        })
+        .collect();
     fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     fused
 }
@@ -174,5 +182,15 @@ mod tests {
         let b = [2, 3];
         let fused = rrf_fuse(&[&a, &b], RRF_K);
         assert_eq!(fused[0].0, 2, "shared id ranks first");
+    }
+
+    #[test]
+    fn rrf_fuses_string_keys() {
+        // Live channels fuse on group-key strings, not ids.
+        let lexical = ["bein sports".to_string(), "espn".to_string()];
+        let semantic = ["espn".to_string(), "sky sports".to_string()];
+        let fused = rrf_fuse(&[&lexical[..], &semantic[..]], RRF_K);
+        assert_eq!(fused[0].0, "espn", "key in both lists wins");
+        assert_eq!(fused.len(), 3);
     }
 }

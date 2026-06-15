@@ -174,6 +174,26 @@ async function fetchItems(
 ): Promise<BrowseItem[]> {
   const args = { profileId, sourceId, limit, offset, filters: filterPayload(tab, filters) };
   if (tab === "live") {
+    // A plain free-text search runs hybrid (semantic + keyword) retrieval over
+    // channels, mapped back to brand-family bundles. Type/region/favourites
+    // searches stay on the lexical grouped path.
+    const q = filters.query?.trim();
+    const plainSearch =
+      !!q &&
+      !filters.category &&
+      !filters.region &&
+      !filters.favoritesOnly &&
+      !filters.watchlistOnly;
+    if (plainSearch) {
+      if (offset > 0) return [];
+      const hits = await invoke<ChannelGroup[]>("semantic_search_channels", {
+        profileId,
+        sourceId,
+        query: q,
+        limit,
+      });
+      return hits.map(channelGroupToItem);
+    }
     // Live is grouped into brand-family bundles server-side (one card per brand).
     return (await invoke<ChannelGroup[]>("list_channel_groups", args)).map(channelGroupToItem);
   }
@@ -203,6 +223,20 @@ async function fetchItems(
       (await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem),
       (item) => movieVersionKey(item) ?? item.dedupGroup ?? null
     );
+  }
+  // Series: plain free-text search → hybrid (semantic + keyword) retrieval.
+  const sq = filters.query?.trim();
+  const seriesPlain =
+    !!sq && !filters.category && !filters.favoritesOnly && !filters.watchlistOnly;
+  if (seriesPlain) {
+    if (offset > 0) return [];
+    const hits = await invoke<SeriesSummary[]>("semantic_search_series", {
+      profileId,
+      sourceId,
+      query: sq,
+      limit,
+    });
+    return collapseByKey(hits.map(seriesToItem), seriesGroupKey);
   }
   // Series have no backend dedup group; collapse exact-duplicate titles instead.
   return collapseByKey(

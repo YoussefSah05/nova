@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\",\n                      COALESCE(NULLIF(channel_group, ''), name) as \"group_key!: String\"\n               FROM channels\n               WHERE source_id = ? AND id IN (SELECT value FROM json_each(?))",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "group_key!: String",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "e36b7485752139d52df272603f6bf45e85267b969d51ffc5bc904d7a850f1958"
+}
