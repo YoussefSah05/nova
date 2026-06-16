@@ -2028,7 +2028,7 @@ function CinemaPanel({
   onSelectMedia: (m: PlayMedia) => void;
 }) {
   return (
-    <div className="h-56 shrink-0 overflow-hidden border-t border-white/10 bg-neutral-950">
+    <div className="h-56 shrink-0 overflow-hidden border-t border-white/10 bg-card">
       {isLive ? (
         <CinemaChannelStrip
           profileId={profileId}
@@ -2086,7 +2086,7 @@ function ChannelTile({
       onClick={onClick}
       className={cn(
         "flex w-28 flex-shrink-0 flex-col items-center gap-1.5 rounded-lg p-2 text-center transition-colors",
-        "focus:outline-none focus:ring-2 focus:ring-indigo-400",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         active ? "bg-white/15" : "hover:bg-white/10"
       )}
     >

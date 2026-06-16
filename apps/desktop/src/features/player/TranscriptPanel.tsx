@@ -169,7 +169,7 @@ export function TranscriptPanel({
   }, [activeIdx, searching]);
 
   return (
-    <div className="pointer-events-auto absolute right-0 top-0 bottom-0 z-40 flex w-[min(92vw,400px)] flex-col border-l border-white/10 bg-black/80 text-white backdrop-blur-xl">
+    <div className="nova-glass pointer-events-auto absolute right-0 top-0 bottom-0 z-40 flex w-[min(92vw,400px)] flex-col text-white">
       <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
         <span className="text-sm font-semibold">Transcript</span>
         <button

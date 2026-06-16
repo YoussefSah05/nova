@@ -107,6 +107,39 @@ body {
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
   padding: 0;
+  /* Premium app feel: chrome isn't selectable while navigating, and the default
+     cursor is an arrow (not a text I-beam). Selection is re-enabled on form
+     fields below. */
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* Let users actually select + type in form fields. */
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+/* Interactive chrome keeps a pointer cursor. */
+button,
+a,
+label,
+summary,
+[role="button"],
+[role="menuitem"],
+[role="menuitemradio"],
+[role="tab"] {
+  cursor: pointer;
+}
+
+/* No ghost-drag of images / video frames. */
+img,
+video {
+  -webkit-user-drag: none;
 }
 
 /* Display typeface for hero / section headings (not body/UI text). */

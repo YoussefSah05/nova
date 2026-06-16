@@ -36,8 +36,7 @@ export function CaptionStylePanel({ style, onChange, open, onClose }: PanelProps
       ref={ref}
       role="menu"
       className={cn(
-        "absolute bottom-12 right-0 z-30 w-72 overflow-hidden rounded-lg pb-1",
-        "bg-black/85 backdrop-blur-md border border-white/10 shadow-xl text-white"
+        "nova-glass absolute bottom-12 right-0 z-30 w-72 overflow-hidden rounded-lg pb-1 text-white"
       )}
     >
       <p className="px-3 py-2 text-[11px] uppercase tracking-wider text-white/55">Caption style</p>

@@ -82,8 +82,7 @@ export function CaptionPicker({
       ref={ref}
       role="menu"
       className={cn(
-        "absolute bottom-12 right-0 z-30 w-64 overflow-hidden rounded-lg",
-        "bg-black/85 backdrop-blur-md border border-white/10 shadow-xl",
+        "nova-glass absolute bottom-12 right-0 z-30 w-64 overflow-hidden rounded-lg",
         "text-sm text-white"
       )}
     >

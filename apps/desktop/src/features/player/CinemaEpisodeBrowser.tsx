@@ -118,7 +118,7 @@ export function CinemaEpisodeBrowser({
                 aria-current={active}
                 className={cn(
                   "group flex w-40 flex-shrink-0 flex-col gap-1.5 rounded-lg p-2 text-left transition-colors",
-                  "focus:outline-none focus:ring-2 focus:ring-indigo-400",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   active ? "bg-white/15" : "hover:bg-white/10"
                 )}
               >

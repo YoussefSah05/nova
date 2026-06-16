@@ -61,7 +61,7 @@ function Segment({
       className={cn(
         "flex h-8 min-w-8 flex-1 items-center justify-center rounded-md px-2 text-xs transition-colors",
         active
-          ? "bg-[var(--color-accent)] text-white"
+          ? "bg-primary font-medium text-primary-foreground"
           : "bg-white/10 text-white/80 hover:bg-white/20"
       )}
     >
@@ -127,7 +127,7 @@ export function CaptionStyleControls({
             onClick={() => onChange({ textColor: c.value })}
             className={cn(
               "h-8 w-8 rounded-full border-2 transition-transform hover:scale-105",
-              style.textColor === c.value ? "border-[var(--color-accent)]" : "border-white/25"
+              style.textColor === c.value ? "border-primary" : "border-white/25"
             )}
             style={{ backgroundColor: c.swatch }}
           />
@@ -156,7 +156,7 @@ export function CaptionStyleControls({
             step={0.05}
             value={style.bgOpacity}
             onChange={(e) => onChange({ bgOpacity: Number(e.target.value) })}
-            className="w-full accent-[var(--color-accent)]"
+            className="w-full accent-[var(--color-primary)]"
             aria-label="Box opacity"
           />
         </div>

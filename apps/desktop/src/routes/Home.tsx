@@ -811,10 +811,10 @@ const GenreChips = memo(function GenreChips({
 }) {
   const chip = (active: boolean) =>
     cn(
-      "shrink-0 rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      "shrink-0 rounded-full border px-3.5 py-1.5 text-xs font-medium transition-[color,background-color,box-shadow,transform] active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
       active
-        ? "border-transparent bg-primary text-primary-foreground"
-        : "border-border bg-secondary text-secondary-foreground hover:bg-accent hover:text-accent-foreground"
+        ? "border-transparent bg-primary text-primary-foreground shadow-sm"
+        : "border-white/10 bg-secondary text-secondary-foreground hover:border-white/20 hover:bg-accent hover:text-accent-foreground"
     );
   return (
     <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
