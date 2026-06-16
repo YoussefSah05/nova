@@ -14,6 +14,7 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [selectError, setSelectError] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<Profile[]>("list_profiles").then(setProfiles);
@@ -36,14 +37,25 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
   }
 
   async function handleSelect(profile: Profile) {
-    const selected = await invoke<Profile>("select_profile", { id: profile.id });
-    onSelect(selected);
+    setSelectError(null);
+    try {
+      const selected = await invoke<Profile>("select_profile", { id: profile.id });
+      onSelect(selected);
+    } catch (e) {
+      // Surface the failure instead of silently doing nothing (e.g. the
+      // profile DB can't be opened).
+      setSelectError(typeof e === "string" ? e : "Couldn't open this profile.");
+    }
   }
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-neutral-950">
       <DragRegion />
       <h1 className="text-3xl font-semibold text-white tracking-tight">Who's watching?</h1>
+
+      {selectError && (
+        <p className="-mt-6 max-w-md text-center text-sm text-rose-300">{selectError}</p>
+      )}
 
       <div className="flex flex-wrap justify-center gap-8">
         {profiles.map((p) => (

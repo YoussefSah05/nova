@@ -9,13 +9,21 @@ use crate::error::StorageError;
 
 pub async fn init_app_db(path: &str) -> Result<SqlitePool, StorageError> {
     let pool = open_pool(path).await?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    let mut migrator = sqlx::migrate!("./migrations");
+    migrator.set_ignore_missing(true);
+    migrator.run(&pool).await?;
     Ok(pool)
 }
 
 pub async fn init_profile_db(path: &str) -> Result<SqlitePool, StorageError> {
     let pool = open_pool(path).await?;
-    sqlx::migrate!("./migrations/profile").run(&pool).await?;
+    // `ignore_missing`: tolerate a DB that has *newer* migrations applied than
+    // this build knows about (e.g. after running a feature branch then an older
+    // one, or an app downgrade). Without it sqlx errors with VersionMissing and
+    // the profile won't open. Pending older migrations still apply normally.
+    let mut migrator = sqlx::migrate!("./migrations/profile");
+    migrator.set_ignore_missing(true);
+    migrator.run(&pool).await?;
     Ok(pool)
 }
 
