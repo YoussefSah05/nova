@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { motion, EASE_ENTER } from "@/lib/motion";
+import { Button } from "@/components/ui/button";
 
 const PALETTE = [
   "#6366f1",
@@ -42,15 +44,21 @@ export function CreateProfileModal({ onConfirm, onCancel }: CreateProfileModalPr
   }
 
   return (
-    <div
+    <motion.div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onCancel()}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.15 }}
     >
-      <form
+      <motion.form
         onSubmit={handleSubmit}
-        className="w-80 rounded-2xl bg-neutral-900 p-6 flex flex-col gap-5 shadow-2xl"
+        className="nova-glass flex w-80 flex-col gap-5 rounded-2xl p-6"
+        initial={{ opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.2, ease: EASE_ENTER }}
       >
-        <h2 className="text-lg font-semibold text-white">New Profile</h2>
+        <h2 className="font-display text-lg font-semibold text-white">New Profile</h2>
 
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-white/50 uppercase tracking-wider">Name</label>
@@ -65,9 +73,8 @@ export function CreateProfileModal({ onConfirm, onCancel }: CreateProfileModalPr
             }}
             placeholder="e.g. Alex"
             className={cn(
-              "rounded-lg bg-neutral-800 px-3 py-2 text-sm text-white placeholder-white/30",
-              "border border-transparent outline-none transition-colors",
-              "focus:border-indigo-500",
+              "rounded-lg border border-input bg-white/[0.04] px-3 py-2 text-sm text-white placeholder-white/30",
+              "outline-none transition-colors focus:ring-2 focus:ring-ring",
               error && "border-red-500"
             )}
           />
@@ -96,22 +103,14 @@ export function CreateProfileModal({ onConfirm, onCancel }: CreateProfileModalPr
         </div>
 
         <div className="flex gap-3 pt-1">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="flex-1 rounded-lg bg-neutral-800 py-2 text-sm font-medium text-white/70 hover:text-white transition-colors"
-          >
+          <Button type="button" variant="secondary" onClick={onCancel} className="flex-1">
             Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex-1 rounded-lg bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors disabled:opacity-50"
-          >
+          </Button>
+          <Button type="submit" disabled={loading} className="flex-1">
             {loading ? "Creating…" : "Create"}
-          </button>
+          </Button>
         </div>
-      </form>
-    </div>
+      </motion.form>
+    </motion.div>
   );
 }

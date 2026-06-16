@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ImportProgress } from "@/types";
 import { cn } from "@/lib/utils";
+import { motion, EASE_ENTER } from "@/lib/motion";
+import { Button } from "@/components/ui/button";
 
 interface AddSourceModalProps {
   profileId: string;
@@ -205,14 +207,22 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
         : `Server is generating your playlist… ${elapsedSecs}s`;
 
   return (
-    <div
+    <motion.div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && phase === "form" && onCancel()}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.15 }}
     >
-      <div className="w-96 rounded-2xl bg-neutral-900 p-6 flex flex-col gap-5 shadow-2xl">
+      <motion.div
+        className="nova-glass flex w-96 flex-col gap-5 rounded-2xl p-6"
+        initial={{ opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.2, ease: EASE_ENTER }}
+      >
         {phase === "form" ? (
           <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-            <h2 className="text-lg font-semibold text-white">Add Playlist</h2>
+            <h2 className="font-display text-lg font-semibold text-white">Add Playlist</h2>
 
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-white/50 uppercase tracking-wider">
@@ -223,7 +233,7 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="My IPTV"
-                className="rounded-lg bg-neutral-800 px-3 py-2 text-sm text-white placeholder-white/30 border border-transparent outline-none focus:border-indigo-500 transition-colors"
+                className="rounded-lg border border-input bg-white/[0.04] px-3 py-2 text-sm text-white placeholder-white/30 outline-none transition-colors focus:ring-2 focus:ring-ring"
               />
             </div>
 
@@ -241,8 +251,8 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
                 }}
                 placeholder="http://provider.com/playlist.m3u"
                 className={cn(
-                  "rounded-lg bg-neutral-800 px-3 py-2 text-sm text-white placeholder-white/30",
-                  "border border-transparent outline-none focus:border-indigo-500 transition-colors",
+                  "rounded-lg border border-input bg-white/[0.04] px-3 py-2 text-sm text-white placeholder-white/30",
+                  "outline-none transition-colors focus:ring-2 focus:ring-ring",
                   error && "border-red-500"
                 )}
               />
@@ -250,33 +260,26 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
             </div>
 
             <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="flex-1 rounded-lg bg-neutral-800 py-2 text-sm font-medium text-white/70 hover:text-white transition-colors"
-              >
+              <Button type="button" variant="secondary" onClick={onCancel} className="flex-1">
                 Cancel
-              </button>
-              <button
-                type="submit"
-                className="flex-1 rounded-lg bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors"
-              >
+              </Button>
+              <Button type="submit" className="flex-1">
                 Import
-              </button>
+              </Button>
             </div>
           </form>
         ) : (
           <div className="flex flex-col gap-5">
-            <h2 className="text-lg font-semibold text-white">{title}</h2>
+            <h2 className="font-display text-lg font-semibold text-white">{title}</h2>
 
             {/* Progress bar */}
             <div className="flex flex-col gap-2">
-              <div className="h-2 w-full rounded-full bg-neutral-800 overflow-hidden">
+              <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
                 {parsed === 0 ? (
-                  <div className="h-full w-full bg-indigo-500/60 rounded-full animate-pulse" />
+                  <div className="h-full w-full bg-primary/60 rounded-full animate-pulse" />
                 ) : (
                   <div
-                    className="h-full bg-indigo-500 rounded-full transition-all duration-300 ease-out"
+                    className="h-full bg-primary rounded-full transition-all duration-300 ease-out"
                     style={{ width: `${fillPct}%` }}
                   />
                 )}
@@ -295,7 +298,7 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
 
             {/* Per-type metrics — visible once entries start arriving */}
             {parsed > 0 && (
-              <div className="grid grid-cols-3 divide-x divide-white/10 rounded-xl bg-neutral-800 py-3">
+              <div className="grid grid-cols-3 divide-x divide-white/10 rounded-xl bg-white/[0.04] py-3">
                 <MetricPill label="Live" value={progress?.liveCount ?? 0} color="text-sky-400" />
                 <MetricPill
                   label="Movies"
@@ -313,16 +316,12 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
             {progress?.warning && <p className="text-xs text-amber-300">{progress.warning}</p>}
 
             {/* Cancel button — always visible while a slow server is being handled */}
-            <button
-              type="button"
-              onClick={handleCancel}
-              className="rounded-lg bg-neutral-800 py-2 text-sm font-medium text-white/50 hover:text-white transition-colors"
-            >
+            <Button type="button" variant="secondary" onClick={handleCancel}>
               Cancel
-            </button>
+            </Button>
           </div>
         )}
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
