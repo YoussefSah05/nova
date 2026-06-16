@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
+import { SimpleSelect } from "@/components/ui/select";
 
 /// A labelled row: title (+ optional description) on the left, control on the right.
 export function SettingRow({
@@ -66,20 +67,7 @@ export function SelectInput<T extends string>({
   onChange: (v: T) => void;
   ariaLabel?: string;
 }) {
-  return (
-    <select
-      aria-label={ariaLabel}
-      value={value}
-      onChange={(e) => onChange(e.target.value as T)}
-      className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  );
+  return <SimpleSelect value={value} options={options} onChange={onChange} ariaLabel={ariaLabel} />;
 }
 
 export function TextInput({
@@ -100,7 +88,7 @@ export function TextInput({
       placeholder={placeholder}
       aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-1.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+      className="w-full rounded-lg border border-input bg-white/[0.04] px-3 py-1.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-ring"
     />
   );
 }
@@ -123,7 +111,7 @@ export function SettingsButton({
       disabled={disabled}
       className={cn(
         "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-        variant === "primary" && "bg-[var(--color-accent)] text-white hover:brightness-110",
+        variant === "primary" && "bg-primary text-primary-foreground hover:brightness-110",
         variant === "danger" && "bg-rose-500/15 text-rose-300 hover:bg-rose-500/25",
         variant === "default" && "bg-white/10 text-white/85 hover:bg-white/20"
       )}

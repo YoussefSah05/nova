@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DragRegion } from "@/components/DragRegion";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SettingsModal } from "@/features/settings/SettingsModal";
@@ -735,22 +736,24 @@ function FilterSelect({
   options: string[];
   onChange: (value: string) => void;
 }) {
+  // Radix Select forbids an empty-string item value, so the "All" choice uses a
+  // sentinel mapped back to "" (the no-filter value the rest of Home expects).
+  const ALL = "__all__";
   return (
-    <label className="relative">
-      <ListFilterIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-input bg-card pl-9 pr-3 text-sm text-foreground outline-none transition-colors hover:border-border-strong focus:border-primary focus:ring-2 focus:ring-ring/40"
-      >
-        <option value="">All {label.toLowerCase()}s</option>
+    <Select value={value || ALL} onValueChange={(v) => onChange(v === ALL ? "" : v)}>
+      <SelectTrigger aria-label={label} className="relative h-10 w-full pl-9">
+        <ListFilterIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ALL}>All {label.toLowerCase()}s</SelectItem>
         {options.map((option) => (
-          <option key={option} value={option}>
+          <SelectItem key={option} value={option}>
             {option}
-          </option>
+          </SelectItem>
         ))}
-      </select>
-    </label>
+      </SelectContent>
+    </Select>
   );
 }
 
