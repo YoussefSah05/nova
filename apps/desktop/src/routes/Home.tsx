@@ -17,7 +17,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { DragRegion } from "@/components/DragRegion";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SettingsModal } from "@/features/settings/SettingsModal";
@@ -140,9 +146,21 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       const entries = await Promise.all(
         sources.map(async (source) => {
           const [live, movies, nextSeries] = await Promise.all([
-            invoke<number>("count_channels", { profileId: profile.id, sourceId: source.id, filters: null }),
-            invoke<number>("count_vod", { profileId: profile.id, sourceId: source.id, filters: null }),
-            invoke<number>("count_series", { profileId: profile.id, sourceId: source.id, filters: null }),
+            invoke<number>("count_channels", {
+              profileId: profile.id,
+              sourceId: source.id,
+              filters: null,
+            }),
+            invoke<number>("count_vod", {
+              profileId: profile.id,
+              sourceId: source.id,
+              filters: null,
+            }),
+            invoke<number>("count_series", {
+              profileId: profile.id,
+              sourceId: source.id,
+              filters: null,
+            }),
           ]);
           return [source.id, live + movies + nextSeries] as const;
         })
@@ -329,7 +347,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
         invalidateMembershipRails(qc, profile.id, activeSourceId, tabForKind(item.kind));
       } catch (error: unknown) {
         rollback();
-        if (item.kind === "series") setSelectedSeries(patchSelected(item, { isInWatchlist: !next }));
+        if (item.kind === "series")
+          setSelectedSeries(patchSelected(item, { isInWatchlist: !next }));
         setSourceError(errorMessage(error));
       }
     },
@@ -553,22 +572,42 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
             </div>
 
             {categoryOptions.length > 0 && (
-              <GenreChips options={categoryOptions} value={categoryFilter} onChange={setCategoryFilter} />
+              <GenreChips
+                options={categoryOptions}
+                value={categoryFilter}
+                onChange={setCategoryFilter}
+              />
             )}
 
             {searchOrFilterActive && (
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
                 {searchQuery && (
-                  <FilterChip label="Search" value={searchQuery} onClear={() => setSearchQuery("")} />
+                  <FilterChip
+                    label="Search"
+                    value={searchQuery}
+                    onClear={() => setSearchQuery("")}
+                  />
                 )}
                 {regionFilter && (
-                  <FilterChip label="Region" value={regionFilter} onClear={() => setRegionFilter("")} />
+                  <FilterChip
+                    label="Region"
+                    value={regionFilter}
+                    onClear={() => setRegionFilter("")}
+                  />
                 )}
                 {countryFilter && (
-                  <FilterChip label="Country" value={countryFilter} onClear={() => setCountryFilter("")} />
+                  <FilterChip
+                    label="Country"
+                    value={countryFilter}
+                    onClear={() => setCountryFilter("")}
+                  />
                 )}
                 {categoryFilter && (
-                  <FilterChip label="Category" value={categoryFilter} onClear={() => setCategoryFilter("")} />
+                  <FilterChip
+                    label="Category"
+                    value={categoryFilter}
+                    onClear={() => setCategoryFilter("")}
+                  />
                 )}
                 <Button
                   variant="link"
@@ -707,7 +746,10 @@ function patchSelected(
   patch: Partial<Pick<SeriesSummary, "isFavorite" | "isInWatchlist">>
 ): (cur: SeriesSummary | null) => SeriesSummary | null {
   return (cur) =>
-    cur && item.series && cur.seriesTitle === item.series.seriesTitle && cur.sourceId === item.series.sourceId
+    cur &&
+    item.series &&
+    cur.seriesTitle === item.series.seriesTitle &&
+    cur.sourceId === item.series.sourceId
       ? { ...cur, ...patch }
       : cur;
 }

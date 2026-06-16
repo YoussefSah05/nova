@@ -22,7 +22,15 @@ interface RailProps extends PosterCardHandlers {
   onSeeAll?: (spec: RailSpec) => void;
 }
 
-export function Rail({ tab, profileId, sourceId, spec, eager = false, onSeeAll, ...handlers }: RailProps) {
+export function Rail({
+  tab,
+  profileId,
+  sourceId,
+  spec,
+  eager = false,
+  onSeeAll,
+  ...handlers
+}: RailProps) {
   const ref = useRef<HTMLElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const [inView, setInView] = useState(eager);
@@ -76,10 +84,22 @@ export function Rail({ tab, profileId, sourceId, spec, eager = false, onSeeAll, 
             </Button>
           )}
           <div className="hidden gap-1 opacity-0 transition-opacity group-hover/rail:opacity-100 md:flex">
-            <Button type="button" variant="ghost" size="iconSm" aria-label="Scroll left" onClick={() => nudge(-1)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="iconSm"
+              aria-label="Scroll left"
+              onClick={() => nudge(-1)}
+            >
               <ChevronLeftIcon className="h-4 w-4" aria-hidden />
             </Button>
-            <Button type="button" variant="ghost" size="iconSm" aria-label="Scroll right" onClick={() => nudge(1)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="iconSm"
+              aria-label="Scroll right"
+              onClick={() => nudge(1)}
+            >
               <ChevronRightIcon className="h-4 w-4" aria-hidden />
             </Button>
           </div>

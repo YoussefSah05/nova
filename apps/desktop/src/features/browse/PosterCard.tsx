@@ -81,7 +81,9 @@ export const PosterCard = memo(function PosterCard({
 
       <div className="min-w-0">
         <p className="line-clamp-1 text-xs font-medium text-foreground">{item.title}</p>
-        {item.subtitle && <p className="truncate text-[11px] text-muted-foreground">{item.subtitle}</p>}
+        {item.subtitle && (
+          <p className="truncate text-[11px] text-muted-foreground">{item.subtitle}</p>
+        )}
       </div>
     </div>
   );

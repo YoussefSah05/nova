@@ -129,7 +129,9 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
         >
           <Toggle
             checked={settings.tmdbEnabled}
-            onChange={(v) => void persist({ ...settings, tmdbEnabled: v, tmdbApiKey: keyDraft || null })}
+            onChange={(v) =>
+              void persist({ ...settings, tmdbEnabled: v, tmdbApiKey: keyDraft || null })
+            }
             label="Use TMDB"
           />
         </SettingRow>
@@ -159,7 +161,8 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
       <p className="text-xs text-white/40">
         Cleans the catalog with on-device AI: collapses duplicate channels/movies into one card and
         fills in missing genres. Runs automatically after an import once the model is installed —
-        re-run here anytime. This product uses the TMDB API but is not endorsed or certified by TMDB.
+        re-run here anytime. This product uses the TMDB API but is not endorsed or certified by
+        TMDB.
       </p>
     </div>
   );

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Captions, Cpu, Sparkles, Tv, UserCog, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { motion } from "@/lib/motion";
 import type { Profile } from "@/types";
 import { PlaybackCaptionsSection } from "./sections/PlaybackCaptionsSection";
 import { TranscriptionSection } from "./sections/TranscriptionSection";
@@ -37,8 +38,18 @@ export function SettingsModal({
   const [active, setActive] = useState<SectionId>("playback");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-6">
-      <div className="flex h-[80vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-neutral-950 shadow-2xl">
+    <motion.div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-6"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.15 }}
+    >
+      <motion.div
+        className="flex h-[80vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-neutral-950 shadow-2xl"
+        initial={{ opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+      >
         {/* Sidebar */}
         <aside className="flex w-60 shrink-0 flex-col border-r border-white/10 bg-white/[0.02] p-3">
           <p className="px-2 py-2 text-sm font-semibold text-white">Settings</p>
@@ -50,7 +61,9 @@ export function SettingsModal({
                 onClick={() => setActive(s.id)}
                 className={cn(
                   "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
-                  active === s.id ? "bg-white/10 text-white" : "text-white/65 hover:bg-white/5 hover:text-white"
+                  active === s.id
+                    ? "bg-white/10 text-white"
+                    : "text-white/65 hover:bg-white/5 hover:text-white"
                 )}
               >
                 {s.icon}
@@ -94,7 +107,7 @@ export function SettingsModal({
             )}
           </div>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }

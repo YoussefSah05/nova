@@ -154,9 +154,7 @@ function TranslationCard({
             {source}
           </p>
         )}
-        {source != null && translated != null && (
-          <div className="my-2 h-px bg-white/[0.06]" />
-        )}
+        {source != null && translated != null && <div className="my-2 h-px bg-white/[0.06]" />}
         {translated != null && (
           <p
             dir={tgt.rtl ? "rtl" : "ltr"}

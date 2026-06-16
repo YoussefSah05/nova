@@ -3,12 +3,7 @@
 //! Playback & Captions section so the two can't drift.
 
 import { cn } from "@/lib/utils";
-import type {
-  CaptionBackground,
-  CaptionFontFamily,
-  CaptionStyle,
-  CaptionTextColor,
-} from "@/types";
+import type { CaptionBackground, CaptionFontFamily, CaptionStyle, CaptionTextColor } from "@/types";
 import { captionTextClass, captionTextStyle } from "./captionStyleCss";
 
 const SIZES: { label: string; value: number }[] = [
@@ -65,7 +60,9 @@ function Segment({
       onClick={onClick}
       className={cn(
         "flex h-8 min-w-8 flex-1 items-center justify-center rounded-md px-2 text-xs transition-colors",
-        active ? "bg-[var(--color-accent)] text-white" : "bg-white/10 text-white/80 hover:bg-white/20"
+        active
+          ? "bg-[var(--color-accent)] text-white"
+          : "bg-white/10 text-white/80 hover:bg-white/20"
       )}
     >
       {children}

@@ -11,7 +11,13 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualRows } from "./VirtualRows";
 import { PosterCard, type PosterCardHandlers } from "./PosterCard";
-import { useBrowseCount, useBrowseGrid, type BrowseFilters, type BrowseItem, type BrowseTab } from "./queries";
+import {
+  useBrowseCount,
+  useBrowseGrid,
+  type BrowseFilters,
+  type BrowseItem,
+  type BrowseTab,
+} from "./queries";
 
 interface BrowseGridProps extends PosterCardHandlers {
   tab: BrowseTab;
@@ -86,7 +92,10 @@ export function BrowseGrid({
 
   if (isLoading) {
     return (
-      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+      <div
+        className="grid gap-3"
+        style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+      >
         {Array.from({ length: columns * 4 }, (_, i) => (
           <Skeleton key={i} className={live ? "aspect-video" : "aspect-[2/3]"} />
         ))}
@@ -99,7 +108,9 @@ export function BrowseGrid({
       <Card className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
         <SearchXIcon className="h-8 w-8 text-muted-foreground" aria-hidden />
         <p className="text-sm font-medium text-foreground">Nothing matches this view</p>
-        <p className="max-w-sm text-sm text-muted-foreground">Clear filters or try a broader search.</p>
+        <p className="max-w-sm text-sm text-muted-foreground">
+          Clear filters or try a broader search.
+        </p>
       </Card>
     );
   }

@@ -215,7 +215,10 @@ async function fetchItems(
         query: q,
         limit,
       });
-      return collapseByKey(hits.map(vodToItem), (item) => movieVersionKey(item) ?? item.dedupGroup ?? null);
+      return collapseByKey(
+        hits.map(vodToItem),
+        (item) => movieVersionKey(item) ?? item.dedupGroup ?? null
+      );
     }
     // Gather the same film's language/source copies under one card (title-based,
     // from the raw name); fall back to the embeddings group when no real title.
@@ -226,8 +229,7 @@ async function fetchItems(
   }
   // Series: plain free-text search → hybrid (semantic + keyword) retrieval.
   const sq = filters.query?.trim();
-  const seriesPlain =
-    !!sq && !filters.category && !filters.favoritesOnly && !filters.watchlistOnly;
+  const seriesPlain = !!sq && !filters.category && !filters.favoritesOnly && !filters.watchlistOnly;
   if (seriesPlain) {
     if (offset > 0) return [];
     const hits = await invoke<SeriesSummary[]>("semantic_search_series", {
@@ -250,7 +252,10 @@ async function fetchItems(
 /// dropped, so quality/backup versions stay reachable). `keyOf` returns the
 /// grouping key, or `null`/`""` for items that should never group. Page-local —
 /// exact for rails (one page) and good enough for the grid's pages.
-function collapseByKey(items: BrowseItem[], keyOf: (item: BrowseItem) => string | null): BrowseItem[] {
+function collapseByKey(
+  items: BrowseItem[],
+  keyOf: (item: BrowseItem) => string | null
+): BrowseItem[] {
   const repAt = new Map<string, number>();
   const out: BrowseItem[] = [];
   for (const item of items) {
@@ -286,13 +291,59 @@ function seriesGroupKey(item: BrowseItem): string | null {
 
 /// Quality/codec/source junk dropped anywhere in a movie title.
 const MOVIE_JUNK = new Set([
-  "hd", "fhd", "uhd", "sd", "hq", "4k", "8k", "hdr", "sdr", "hevc", "avc", "h264", "h265", "x264",
-  "x265", "aac", "ac3", "dts", "multi", "dual", "vostfr", "vost", "webdl", "webrip", "hdtv",
-  "bluray", "brrip", "bdrip", "hdrip", "dvdrip", "remux", "truefrench",
+  "hd",
+  "fhd",
+  "uhd",
+  "sd",
+  "hq",
+  "4k",
+  "8k",
+  "hdr",
+  "sdr",
+  "hevc",
+  "avc",
+  "h264",
+  "h265",
+  "x264",
+  "x265",
+  "aac",
+  "ac3",
+  "dts",
+  "multi",
+  "dual",
+  "vostfr",
+  "vost",
+  "webdl",
+  "webrip",
+  "hdtv",
+  "bluray",
+  "brrip",
+  "bdrip",
+  "hdrip",
+  "dvdrip",
+  "remux",
+  "truefrench",
 ]);
 /// Language tags stripped only at the END of the title (where providers append
 /// them, e.g. "… Fr"); never mid-title so "Un Homme en colère" keeps "en".
-const TRAILING_LANG = new Set(["fr", "en", "ar", "eng", "ara", "fra", "vo", "vf", "vff", "vfq", "es", "esp", "de", "it", "pt", "tr"]);
+const TRAILING_LANG = new Set([
+  "fr",
+  "en",
+  "ar",
+  "eng",
+  "ara",
+  "fra",
+  "vo",
+  "vf",
+  "vff",
+  "vfq",
+  "es",
+  "esp",
+  "de",
+  "it",
+  "pt",
+  "tr",
+]);
 
 /// Grouping key for a movie's language/source versions, derived from the RAW name
 /// (which keeps the real title even when `clean_title` is broken). Drops the

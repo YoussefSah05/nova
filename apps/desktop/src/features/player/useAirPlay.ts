@@ -170,9 +170,7 @@ export function useAirPlay({
   // Subscribe once; handlers read mutable state from refs.
   useEffect(() => {
     if (!enabled) return;
-    const statusUnlisten = listen<AirPlayStatus>("airplay:status", (e) =>
-      handleStatus(e.payload)
-    );
+    const statusUnlisten = listen<AirPlayStatus>("airplay:status", (e) => handleStatus(e.payload));
     const pickerUnlisten = listen("airplay:picker-closed", () => void handlePickerClosed());
     return () => {
       void statusUnlisten.then((f) => f());

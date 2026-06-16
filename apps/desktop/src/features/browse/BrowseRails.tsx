@@ -188,7 +188,11 @@ function ContinueWatchingRail({
       </div>
       <div className="-mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {data.map((item) => (
-          <ContinueWatchingCard key={`${item.mediaKind}-${item.mediaId}`} item={item} onPlay={onPlay} />
+          <ContinueWatchingCard
+            key={`${item.mediaKind}-${item.mediaId}`}
+            item={item}
+            onPlay={onPlay}
+          />
         ))}
       </div>
     </section>
@@ -241,7 +245,9 @@ function ContinueWatchingCard({
         </div>
       </div>
       <p className="line-clamp-1 text-xs font-medium text-foreground">{item.title}</p>
-      {item.subtitle && <p className="truncate text-[11px] text-muted-foreground">{item.subtitle}</p>}
+      {item.subtitle && (
+        <p className="truncate text-[11px] text-muted-foreground">{item.subtitle}</p>
+      )}
     </button>
   );
 }

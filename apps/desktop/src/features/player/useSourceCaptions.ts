@@ -213,9 +213,7 @@ export function useSourceCaptions(
 
     // Push the live playhead so the backend anchors/throttles to playback.
     const interval = window.setInterval(() => {
-      void invoke("set_caption_playhead", { sec: playheadRef.current() }).catch(
-        () => undefined
-      );
+      void invoke("set_caption_playhead", { sec: playheadRef.current() }).catch(() => undefined);
     }, PLAYHEAD_PUSH_MS);
 
     return () => {

@@ -84,7 +84,14 @@ const profile: Profile = {
 };
 
 const sources: Source[] = [
-  { id: 1, kind: "m3u", name: "Primary", url: "http://example.com/one.m3u", lastRefreshedAt: 1, autoRefreshHours: 24 },
+  {
+    id: 1,
+    kind: "m3u",
+    name: "Primary",
+    url: "http://example.com/one.m3u",
+    lastRefreshedAt: 1,
+    autoRefreshHours: 24,
+  },
 ];
 
 function channel(id: number): Channel {

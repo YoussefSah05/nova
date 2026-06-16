@@ -43,12 +43,18 @@ export function TranscriptionSection({ profileId }: { profileId: string }) {
     void refresh();
     const un = listen<ModelProgress>("model:download:progress", (e) => {
       const p = e.payload;
-      setPct(p.totalBytes && p.totalBytes > 0 ? Math.round((p.downloadedBytes / p.totalBytes) * 100) : null);
+      setPct(
+        p.totalBytes && p.totalBytes > 0
+          ? Math.round((p.downloadedBytes / p.totalBytes) * 100)
+          : null
+      );
     });
     const unNllb = listen<ModelProgress>("nllb:download:progress", (e) => {
       const p = e.payload;
       setNllbPct(
-        p.totalBytes && p.totalBytes > 0 ? Math.round((p.downloadedBytes / p.totalBytes) * 100) : null
+        p.totalBytes && p.totalBytes > 0
+          ? Math.round((p.downloadedBytes / p.totalBytes) * 100)
+          : null
       );
     });
     return () => {
@@ -89,7 +95,8 @@ export function TranscriptionSection({ profileId }: { profileId: string }) {
     }
   };
   const clearCache = async () => {
-    if (!window.confirm("Delete all cached transcripts? They'll be re-generated on next watch.")) return;
+    if (!window.confirm("Delete all cached transcripts? They'll be re-generated on next watch."))
+      return;
     setBusy("clear");
     try {
       await invoke("clear_transcription_cache", { profileId });
@@ -104,7 +111,9 @@ export function TranscriptionSection({ profileId }: { profileId: string }) {
       <SettingsCard title="On-device model">
         <SettingRow
           title="Whisper model"
-          description={model ? `${model.modelId} · ${model.installed ? "installed" : "not installed"}` : "…"}
+          description={
+            model ? `${model.modelId} · ${model.installed ? "installed" : "not installed"}` : "…"
+          }
         >
           {model?.installed ? (
             <SettingsButton variant="danger" onClick={remove} disabled={busy !== null}>
@@ -112,16 +121,18 @@ export function TranscriptionSection({ profileId }: { profileId: string }) {
             </SettingsButton>
           ) : (
             <SettingsButton variant="primary" onClick={download} disabled={busy !== null}>
-              {busy === "download" ? (pct != null ? `Downloading… ${pct}%` : "Downloading…") : "Download (~500MB)"}
+              {busy === "download"
+                ? pct != null
+                  ? `Downloading… ${pct}%`
+                  : "Downloading…"
+                : "Download (~500MB)"}
             </SettingsButton>
           )}
         </SettingRow>
         <SettingRow
           title="Translation model"
           description={
-            nllb
-              ? `${nllb.modelId} · ${nllb.installed ? "installed" : "not installed"}`
-              : "…"
+            nllb ? `${nllb.modelId} · ${nllb.installed ? "installed" : "not installed"}` : "…"
           }
         >
           {nllb?.installed ? (
@@ -141,7 +152,11 @@ export function TranscriptionSection({ profileId }: { profileId: string }) {
       <SettingsCard title="Cache">
         <SettingRow
           title="Cached transcripts"
-          description={cache ? `${cache.transcripts} item${cache.transcripts === 1 ? "" : "s"} · ${formatBytes(cache.bytes)}` : "…"}
+          description={
+            cache
+              ? `${cache.transcripts} item${cache.transcripts === 1 ? "" : "s"} · ${formatBytes(cache.bytes)}`
+              : "…"
+          }
         >
           <SettingsButton
             variant="danger"

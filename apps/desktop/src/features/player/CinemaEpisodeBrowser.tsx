@@ -71,7 +71,7 @@ export function CinemaEpisodeBrowser({
     setSeason(current?.season ?? seasons[0] ?? null);
   }, [episodes, seasons, season, currentEpisodeId]);
 
-  const shown = season != null ? bySeason.get(season) ?? [] : [];
+  const shown = season != null ? (bySeason.get(season) ?? []) : [];
 
   return (
     <div className="flex h-full flex-col gap-2 px-6 py-3">
@@ -88,7 +88,9 @@ export function CinemaEpisodeBrowser({
                 onClick={() => setSeason(s)}
                 className={cn(
                   "shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors",
-                  s === season ? "bg-white/20 text-white" : "bg-white/5 text-white/60 hover:bg-white/10"
+                  s === season
+                    ? "bg-white/20 text-white"
+                    : "bg-white/5 text-white/60 hover:bg-white/10"
                 )}
               >
                 Season {s}
@@ -101,7 +103,9 @@ export function CinemaEpisodeBrowser({
       {loading ? (
         <p className="flex flex-1 items-center text-sm text-white/45">Loading episodes…</p>
       ) : episodes.length === 0 ? (
-        <p className="flex flex-1 items-center text-sm text-white/45">No other episodes available.</p>
+        <p className="flex flex-1 items-center text-sm text-white/45">
+          No other episodes available.
+        </p>
       ) : (
         <div className="-mx-1 flex flex-1 gap-3 overflow-x-auto px-1 [scrollbar-width:thin]">
           {shown.map((ep) => {

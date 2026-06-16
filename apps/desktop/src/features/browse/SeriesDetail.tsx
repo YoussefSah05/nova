@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { motion, AnimatePresence, EASE_ENTER } from "@/lib/motion";
 import type { SeriesEpisode, SeriesSummary } from "@/types";
 import { FavoriteButton } from "@/features/browse/FavoriteButton";
 import { WatchlistButton } from "@/features/browse/WatchlistButton";
@@ -102,8 +105,8 @@ export function SeriesDetail({
               {series.canonicalTitle ?? series.seriesTitle}
             </h2>
             <p className="text-sm text-white/50 mt-1">
-              {seasonCount} season{seasonCount !== 1 ? "s" : ""} ·{" "}
-              {episodeCount} episode{episodeCount !== 1 ? "s" : ""}
+              {seasonCount} season{seasonCount !== 1 ? "s" : ""} · {episodeCount} episode
+              {episodeCount !== 1 ? "s" : ""}
               {series.category ? ` · ${series.category}` : ""}
             </p>
             {series.overview && (
@@ -155,9 +158,15 @@ export function SeriesDetail({
           const eps = bySeasonMap.get(season) ?? [];
           const isOpen = openSeasons.has(season);
           return (
-            <div key={season} className="rounded-xl bg-neutral-900 overflow-hidden">
+            <div
+              key={season}
+              className="overflow-hidden rounded-xl border border-white/5 bg-white/[0.02]"
+            >
               <button
-                className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-white hover:bg-neutral-800 transition-colors"
+                className={cn(
+                  "flex w-full items-center justify-between px-4 py-3 text-sm font-medium transition-colors",
+                  isOpen ? "text-white" : "text-white/85 hover:bg-white/[0.04]"
+                )}
                 onClick={() =>
                   setOpenSeasons((prev) => {
                     const next = new Set(prev);
@@ -167,37 +176,56 @@ export function SeriesDetail({
                   })
                 }
               >
-                <span>Season {season}</span>
-                <span className="text-white/40">{isOpen ? "▲" : "▼"}</span>
+                <span>
+                  Season {season}
+                  <span className="ml-2 text-xs font-normal text-white/40">{eps.length} ep</span>
+                </span>
+                <ChevronDown
+                  className={cn(
+                    "h-4 w-4 text-white/50 transition-transform duration-200",
+                    isOpen && "rotate-180 text-primary"
+                  )}
+                  aria-hidden
+                />
               </button>
-              {isOpen && (
-                <div className="divide-y divide-white/5">
-                  {eps.map((ep) => (
-                    <button
-                      key={ep.id}
-                      onClick={() => onPlayEpisode(ep)}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-white/[0.04] focus:outline-none focus:bg-white/[0.04]"
-                      aria-label={`Play ${series.seriesTitle} S${season} E${ep.episode}`}
-                    >
-                      {ep.logoUrl ? (
-                        <img
-                          src={ep.logoUrl}
-                          alt=""
-                          loading="lazy"
-                          decoding="async"
-                          className="w-16 h-9 object-cover rounded flex-shrink-0 bg-neutral-800"
-                        />
-                      ) : (
-                        <div className="w-16 h-9 rounded bg-neutral-800 flex-shrink-0" />
-                      )}
-                      <span className="text-sm text-white/80">
-                        E{String(ep.episode).padStart(2, "0")}
-                        {ep.episodeTitle ? ` — ${ep.episodeTitle}` : ""}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
+              <AnimatePresence initial={false}>
+                {isOpen && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2, ease: EASE_ENTER }}
+                    className="overflow-hidden"
+                  >
+                    <div className="divide-y divide-white/5">
+                      {eps.map((ep) => (
+                        <button
+                          key={ep.id}
+                          onClick={() => onPlayEpisode(ep)}
+                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-white/[0.04] focus:outline-none focus:bg-white/[0.04]"
+                          aria-label={`Play ${series.seriesTitle} S${season} E${ep.episode}`}
+                        >
+                          {ep.logoUrl ? (
+                            <img
+                              src={ep.logoUrl}
+                              alt=""
+                              loading="lazy"
+                              decoding="async"
+                              className="w-16 h-9 object-cover rounded flex-shrink-0 bg-neutral-800"
+                            />
+                          ) : (
+                            <div className="w-16 h-9 rounded bg-neutral-800 flex-shrink-0" />
+                          )}
+                          <span className="text-sm text-white/80">
+                            E{String(ep.episode).padStart(2, "0")}
+                            {ep.episodeTitle ? ` — ${ep.episodeTitle}` : ""}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           );
         })}

@@ -37,7 +37,9 @@ export class BrowseBoundary extends Component<Props, State> {
           <AlertTriangleIcon className="h-8 w-8 text-muted-foreground" aria-hidden />
           <div>
             <p className="text-sm font-medium text-foreground">This view hit an error</p>
-            <p className="mt-1 max-w-md text-sm text-muted-foreground">{this.state.error.message}</p>
+            <p className="mt-1 max-w-md text-sm text-muted-foreground">
+              {this.state.error.message}
+            </p>
           </div>
           <Button
             variant="outline"

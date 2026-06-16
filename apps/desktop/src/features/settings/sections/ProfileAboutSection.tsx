@@ -31,7 +31,9 @@ export function ProfileAboutSection({
   const [info, setInfo] = useState<AppInfo | null>(null);
 
   useEffect(() => {
-    void invoke<AppInfo>("get_app_info").then(setInfo).catch(() => undefined);
+    void invoke<AppInfo>("get_app_info")
+      .then(setInfo)
+      .catch(() => undefined);
   }, []);
 
   const dirty = name.trim() !== profile.name || color !== profile.avatarColor;
@@ -50,7 +52,8 @@ export function ProfileAboutSection({
     }
   };
   const remove = async () => {
-    if (!window.confirm(`Delete profile “${profile.name}”? This removes its library and settings.`)) return;
+    if (!window.confirm(`Delete profile “${profile.name}”? This removes its library and settings.`))
+      return;
     await invoke("delete_profile", { id: profile.id });
     onSwitchProfile();
   };
@@ -78,8 +81,12 @@ export function ProfileAboutSection({
             ))}
           </div>
         </SettingRow>
-        <SettingRow title="" >
-          <SettingsButton variant="primary" onClick={save} disabled={!dirty || saving || !name.trim()}>
+        <SettingRow title="">
+          <SettingsButton
+            variant="primary"
+            onClick={save}
+            disabled={!dirty || saving || !name.trim()}
+          >
             {saving ? "Saving…" : "Save changes"}
           </SettingsButton>
         </SettingRow>
@@ -90,7 +97,9 @@ export function ProfileAboutSection({
           <SettingsButton onClick={onSwitchProfile}>Switch</SettingsButton>
         </SettingRow>
         <SettingRow title="Delete this profile" description="Permanently removes this profile.">
-          <SettingsButton variant="danger" onClick={remove}>Delete</SettingsButton>
+          <SettingsButton variant="danger" onClick={remove}>
+            Delete
+          </SettingsButton>
         </SettingRow>
       </SettingsCard>
 

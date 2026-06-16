@@ -410,9 +410,7 @@ export function PlayerModal({
     onEngage: () => {
       // Pause the local session so its audio/video stop while the TV plays.
       if (nativeTokenRef.current && latestPlaybackRef.current.playing) {
-        void invoke("mpv_toggle_pause", { token: nativeTokenRef.current }).catch(
-          () => undefined
-        );
+        void invoke("mpv_toggle_pause", { token: nativeTokenRef.current }).catch(() => undefined);
       }
     },
     onDisengage: (positionSec, wasPlaying) => {
@@ -1256,12 +1254,7 @@ export function PlayerModal({
     const match = audioTracks.find((t) => t.lang?.toLowerCase().startsWith(pref.toLowerCase()));
     if (match && match.id !== audioTrackId) selectAudioTrack(match.id);
     preferredAudioAppliedRef.current = true;
-  }, [
-    audioTracks,
-    audioTrackId,
-    selectAudioTrack,
-    profileSettings.settings.preferredAudioLang,
-  ]);
+  }, [audioTracks, audioTrackId, selectAudioTrack, profileSettings.settings.preferredAudioLang]);
 
   const changeSpeed = useCallback(
     (next: number) => {
@@ -1620,7 +1613,9 @@ export function PlayerModal({
                     </button>
                   </>
                 ) : (
-                  <span>Preparing captions — {sourceCaptionNote(sourceCaptions) ?? "working…"}</span>
+                  <span>
+                    Preparing captions — {sourceCaptionNote(sourceCaptions) ?? "working…"}
+                  </span>
                 )}
               </div>
             </div>
@@ -2097,7 +2092,12 @@ function ChannelTile({
     >
       <div className="flex h-16 w-full items-center justify-center overflow-hidden rounded bg-neutral-800">
         {logoUrl ? (
-          <img src={logoUrl} alt="" loading="lazy" className="max-h-full max-w-full object-contain" />
+          <img
+            src={logoUrl}
+            alt=""
+            loading="lazy"
+            className="max-h-full max-w-full object-contain"
+          />
         ) : (
           <Radio className="h-5 w-5 text-white/40" />
         )}

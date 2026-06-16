@@ -12,11 +12,7 @@ import type { AirPlayStatus } from "./useAirPlay";
 /// Control-bar slot the native `AVRoutePickerView` overlays. We render a faint
 /// AirPlay glyph as a visual anchor; the native picker sits on top and handles
 /// the actual click + system route sheet.
-export function AirPlayButton({
-  slotRef,
-}: {
-  slotRef: React.RefObject<HTMLDivElement | null>;
-}) {
+export function AirPlayButton({ slotRef }: { slotRef: React.RefObject<HTMLDivElement | null> }) {
   return (
     <div
       ref={slotRef}
@@ -60,9 +56,7 @@ export function AirPlayOverlay({
   const pct = duration && duration > 0 ? Math.min(100, (position / duration) * 100) : 0;
 
   const seekTo = useCallback((sec: number) => {
-    void invoke("airplay_seek_absolute", { positionSec: Math.max(0, sec) }).catch(
-      () => undefined
-    );
+    void invoke("airplay_seek_absolute", { positionSec: Math.max(0, sec) }).catch(() => undefined);
   }, []);
 
   return (

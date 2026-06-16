@@ -75,12 +75,22 @@ function LiveBundleDetail({
   return (
     <div className="min-h-screen bg-neutral-950 px-8 pb-6 pt-10 text-white">
       <DragRegion />
-      <Button variant="ghost" size="sm" onClick={onBack} className="gap-2 text-white/70 hover:text-white">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={onBack}
+        className="gap-2 text-white/70 hover:text-white"
+      >
         <ArrowLeft className="h-4 w-4" /> Back
       </Button>
       <div className="mt-4 flex items-center gap-4">
         {item.posterUrl && (
-          <img src={item.posterUrl} alt="" decoding="async" className="h-16 w-28 rounded-lg object-contain bg-neutral-900 p-2" />
+          <img
+            src={item.posterUrl}
+            alt=""
+            decoding="async"
+            className="h-16 w-28 rounded-lg object-contain bg-neutral-900 p-2"
+          />
         )}
         <div>
           <h1 className="font-display text-2xl font-semibold">{item.title}</h1>
@@ -103,7 +113,13 @@ function LiveBundleDetail({
             >
               <div className="flex h-16 w-full items-center justify-center">
                 {c.posterUrl ? (
-                  <img src={c.posterUrl} alt="" loading="lazy" decoding="async" className="max-h-16 max-w-full object-contain" />
+                  <img
+                    src={c.posterUrl}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    className="max-h-16 max-w-full object-contain"
+                  />
                 ) : (
                   <Play className="h-6 w-6 text-white/40" />
                 )}
@@ -159,7 +175,12 @@ export function ContentDetail({
       {/* Backdrop */}
       <div className="absolute inset-x-0 top-0 h-[60vh] overflow-hidden">
         {backdrop ? (
-          <img src={backdrop} alt="" decoding="async" className="h-full w-full object-cover object-top" />
+          <img
+            src={backdrop}
+            alt=""
+            decoding="async"
+            className="h-full w-full object-cover object-top"
+          />
         ) : (
           <div className="h-full w-full bg-gradient-to-br from-primary/20 via-neutral-900 to-neutral-950" />
         )}

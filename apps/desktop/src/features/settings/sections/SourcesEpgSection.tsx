@@ -48,7 +48,9 @@ export function SourcesEpgSection({
   };
   const setAutoRefresh = async (id: number, hours: number) => {
     setSources((prev) => prev.map((s) => (s.id === id ? { ...s, autoRefreshHours: hours } : s)));
-    await invoke("set_source_auto_refresh", { profileId, sourceId: id, hours }).catch(() => undefined);
+    await invoke("set_source_auto_refresh", { profileId, sourceId: id, hours }).catch(
+      () => undefined
+    );
   };
   const remove = async (s: Source) => {
     if (!window.confirm(`Remove “${s.name}” and all its imported content?`)) return;
@@ -89,7 +91,10 @@ export function SourcesEpgSection({
               options={REFRESH_OPTIONS}
             />
           </SettingRow>
-          <SettingRow title="EPG (XMLTV) URL" description="Add a community guide feed for this source.">
+          <SettingRow
+            title="EPG (XMLTV) URL"
+            description="Add a community guide feed for this source."
+          >
             <div className="flex w-72 items-center gap-2">
               <TextInput
                 value={epgUrl[s.id] ?? ""}
@@ -100,7 +105,10 @@ export function SourcesEpgSection({
               <SettingsButton onClick={() => addEpg(s.id)}>Add</SettingsButton>
             </div>
           </SettingRow>
-          <SettingRow title="Remove source" description="Deletes the source and everything it imported.">
+          <SettingRow
+            title="Remove source"
+            description="Deletes the source and everything it imported."
+          >
             <SettingsButton variant="danger" onClick={() => remove(s)} disabled={busy === s.id}>
               Remove
             </SettingsButton>

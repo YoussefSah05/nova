@@ -240,10 +240,7 @@ export function TranscriptPanel({
               >
                 <span className="text-[11px] text-white/35">{formatTime(l.startSec)}</span>
                 <span
-                  className={cn(
-                    "text-sm leading-snug",
-                    active ? "text-white" : "text-white/80"
-                  )}
+                  className={cn("text-sm leading-snug", active ? "text-white" : "text-white/80")}
                 >
                   {l.text}
                 </span>

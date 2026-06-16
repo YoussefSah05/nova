@@ -25,13 +25,7 @@ export function SettingRow({
   );
 }
 
-export function SettingsCard({
-  title,
-  children,
-}: {
-  title?: string;
-  children: React.ReactNode;
-}) {
+export function SettingsCard({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
     <section className="rounded-xl border border-white/10 bg-white/[0.02] px-4">
       {title && (

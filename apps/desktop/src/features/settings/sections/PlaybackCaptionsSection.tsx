@@ -23,7 +23,10 @@ export function PlaybackCaptionsSection({ profileId }: { profileId: string }) {
             label="Autoplay next episode"
           />
         </SettingRow>
-        <SettingRow title="Default playback route" description="How streams are delivered to the player.">
+        <SettingRow
+          title="Default playback route"
+          description="How streams are delivered to the player."
+        >
           <SelectInput<DefaultPlaybackRoute>
             value={settings.defaultPlaybackRoute}
             onChange={(v) => setSettings({ defaultPlaybackRoute: v })}
@@ -49,7 +52,10 @@ export function PlaybackCaptionsSection({ profileId }: { profileId: string }) {
             ]}
           />
         </SettingRow>
-        <SettingRow title="Preferred audio language" description="ISO code (e.g. en, fr, ar). Optional.">
+        <SettingRow
+          title="Preferred audio language"
+          description="ISO code (e.g. en, fr, ar). Optional."
+        >
           <div className="w-40">
             <TextInput
               value={settings.preferredAudioLang ?? ""}
