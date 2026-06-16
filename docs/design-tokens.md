@@ -24,7 +24,7 @@ Weights: **400** (regular) and **500** (medium) only.
 | `surface` | `#0a0a0c` | App background (never pure black) |
 | `surface-raised` | `#111113` | Cards, panels |
 | `surface-overlay` | `#1a1a1e` | Popovers, dropdowns |
-| `accent` | `#6366f1` | Primary interactive elements |
+| `accent` (brand) | `#e0a33e` | Primary interactive elements — cinematic amber-gold (`--color-primary` / `--color-ring` / `--color-brand`) |
 | `text-primary` | `rgba(255,255,255,0.96)` | Main content |
 | `text-secondary` | `rgba(255,255,255,0.55)` | Supporting text |
 | `text-muted` | `rgba(255,255,255,0.30)` | Placeholders, disabled |

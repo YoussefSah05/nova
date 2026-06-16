@@ -59,7 +59,9 @@ export function Rail({ tab, profileId, sourceId, spec, eager = false, onSeeAll, 
   return (
     <section ref={ref} className="rail-contain group/rail flex flex-col gap-2">
       <div className="flex items-center justify-between pr-1">
-        <h3 className="text-sm font-semibold text-foreground/90">{spec.title}</h3>
+        <h3 className="font-display text-[15px] font-semibold tracking-tight text-foreground/90">
+          {spec.title}
+        </h3>
         <div className="flex items-center gap-1">
           {onSeeAll && (
             <Button

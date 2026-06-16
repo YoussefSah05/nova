@@ -412,7 +412,9 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
         className="flex items-center justify-between border-b border-border py-4 pl-20 pr-6"
       >
         <div>
-          <span className="text-lg font-semibold tracking-tight text-foreground">Nova</span>
+          <span className="font-display text-xl font-semibold tracking-tight text-foreground">
+            Nova
+          </span>
           {activeSource && (
             <p className="mt-0.5 text-xs text-muted-foreground">
               Browsing {formatCount(counts.live + counts.movies + counts.series)} imported items

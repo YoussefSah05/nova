@@ -98,7 +98,7 @@ export function SeriesDetail({
         </div>
         <div className="flex flex-1 items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-xl font-semibold text-white">
+            <h2 className="font-display text-xl font-semibold text-white">
               {series.canonicalTitle ?? series.seriesTitle}
             </h2>
             <p className="text-sm text-white/50 mt-1">

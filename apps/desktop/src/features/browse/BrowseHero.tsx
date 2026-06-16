@@ -63,7 +63,7 @@ export function BrowseHero({
           <Tv2Icon className="h-3 w-3" aria-hidden />
           {KIND_LABEL[tab]}
         </Badge>
-        <h2 className="line-clamp-2 text-3xl font-semibold tracking-tight text-white drop-shadow-lg md:text-4xl">
+        <h2 className="font-display line-clamp-2 text-3xl font-semibold tracking-tight text-white drop-shadow-lg md:text-4xl">
           {featured.title}
         </h2>
         {featured.subtitle && (

@@ -5,6 +5,7 @@ import { ProfileCard } from "./ProfileCard";
 import { CreateProfileModal } from "./CreateProfileModal";
 import { PlusIcon } from "lucide-react";
 import { DragRegion } from "@/components/DragRegion";
+import { Reveal, Stagger, StaggerItem } from "@/lib/motion";
 
 interface ProfilePickerProps {
   onSelect: (profile: Profile) => void;
@@ -51,35 +52,42 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-neutral-950">
       <DragRegion />
-      <h1 className="text-3xl font-semibold text-white tracking-tight">Who's watching?</h1>
+      <Reveal>
+        <h1 className="font-display text-4xl font-semibold text-white tracking-tight">
+          Who's watching?
+        </h1>
+      </Reveal>
 
       {selectError && (
         <p className="-mt-6 max-w-md text-center text-sm text-rose-300">{selectError}</p>
       )}
 
-      <div className="flex flex-wrap justify-center gap-8">
+      <Stagger className="flex flex-wrap justify-center gap-8">
         {profiles.map((p) => (
-          <ProfileCard
-            key={p.id}
-            profile={p}
-            onClick={handleSelect}
-            onDelete={handleDelete}
-            isDeleting={deletingId === p.id}
-          />
+          <StaggerItem key={p.id}>
+            <ProfileCard
+              profile={p}
+              onClick={handleSelect}
+              onDelete={handleDelete}
+              isDeleting={deletingId === p.id}
+            />
+          </StaggerItem>
         ))}
 
-        <button
-          onClick={() => setShowCreate(true)}
-          className="group flex flex-col items-center gap-3 cursor-pointer"
-        >
-          <div className="flex h-20 w-20 items-center justify-center rounded-full border-2 border-dashed border-white/20 text-white/40 transition-all group-hover:border-white/60 group-hover:text-white/80 group-hover:scale-105">
-            <PlusIcon className="h-8 w-8" />
-          </div>
-          <span className="text-sm font-medium text-white/40 group-hover:text-white/70 transition-colors">
-            Add Profile
-          </span>
-        </button>
-      </div>
+        <StaggerItem>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="group flex flex-col items-center gap-3 cursor-pointer"
+          >
+            <div className="flex h-20 w-20 items-center justify-center rounded-full border-2 border-dashed border-white/20 text-white/40 transition-all group-hover:border-primary/60 group-hover:text-white/80 group-hover:scale-105">
+              <PlusIcon className="h-8 w-8" />
+            </div>
+            <span className="text-sm font-medium text-white/40 group-hover:text-white/70 transition-colors">
+              Add Profile
+            </span>
+          </button>
+        </StaggerItem>
+      </Stagger>
 
       {showCreate && (
         <CreateProfileModal onConfirm={handleCreate} onCancel={() => setShowCreate(false)} />

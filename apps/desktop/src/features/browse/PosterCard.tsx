@@ -35,7 +35,7 @@ export const PosterCard = memo(function PosterCard({
         onClick={() => onActivate(item)}
         className={cn(
           "relative w-full overflow-hidden rounded-xl border border-border bg-muted ring-0 ring-ring transition-[transform,box-shadow,border-color] duration-200",
-          "hover:-translate-y-1 hover:border-border-strong hover:shadow-2xl hover:shadow-black/40 focus:outline-none focus-visible:ring-2",
+          "hover:-translate-y-1 hover:border-primary/40 hover:shadow-2xl hover:shadow-black/50 focus:outline-none focus-visible:ring-2",
           live ? "aspect-video" : "aspect-[2/3]"
         )}
         aria-label={item.title}

@@ -83,7 +83,7 @@ function LiveBundleDetail({
           <img src={item.posterUrl} alt="" decoding="async" className="h-16 w-28 rounded-lg object-contain bg-neutral-900 p-2" />
         )}
         <div>
-          <h1 className="text-2xl font-semibold">{item.title}</h1>
+          <h1 className="font-display text-2xl font-semibold">{item.title}</h1>
           <p className="mt-1 text-sm text-white/55">
             {channels.length || item.memberCount} channels
             {item.subtitle ? ` · ${item.subtitle}` : ""}
@@ -188,7 +188,7 @@ export function ContentDetail({
             />
           )}
           <div className="min-w-0 max-w-2xl">
-            <h1 className="text-3xl font-semibold tracking-tight drop-shadow-lg md:text-4xl">
+            <h1 className="font-display text-3xl font-semibold tracking-tight drop-shadow-lg md:text-4xl">
               {item.title}
             </h1>
             {item.subtitle && <p className="mt-2 text-sm text-white/70">{item.subtitle}</p>}

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { motion, pressable } from "@/lib/motion";
 import type { Profile } from "@/types";
 
 interface ProfileCardProps {
@@ -21,11 +22,12 @@ export function ProfileCard({ profile, onClick, onDelete, isDeleting }: ProfileC
       className="group flex flex-col items-center gap-3 cursor-pointer"
       onClick={() => onClick(profile)}
     >
-      <div
+      <motion.div
+        {...pressable}
         className={cn(
           "relative flex h-20 w-20 items-center justify-center rounded-full text-2xl font-semibold text-white",
-          "ring-2 ring-transparent transition-all duration-200",
-          "group-hover:ring-white group-hover:scale-105"
+          "ring-2 ring-transparent transition-[box-shadow,ring-color] duration-200",
+          "group-hover:ring-primary group-hover:[box-shadow:var(--shadow-brand-glow)]"
         )}
         style={{ backgroundColor: profile.avatarColor }}
       >
@@ -47,7 +49,7 @@ export function ProfileCard({ profile, onClick, onDelete, isDeleting }: ProfileC
             ×
           </button>
         )}
-      </div>
+      </motion.div>
       <span className="text-sm font-medium text-white/80 group-hover:text-white transition-colors">
         {profile.name}
       </span>
