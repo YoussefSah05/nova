@@ -192,9 +192,12 @@ describe("Home", () => {
 
     renderHome();
 
-    expect(await screen.findByRole("tab", { name: /live\s+250/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /movies\s+12/i })).toBeInTheDocument();
-    expect(screen.getByLabelText("Playlist")).toHaveValue("1");
+    // Content type lives in the sidebar rail now (buttons, not tabs); counts
+    // render as compact numbers inside each item.
+    expect(await screen.findByRole("button", { name: "Live" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Movies" })).toBeInTheDocument();
+    expect(await screen.findByText("250")).toBeInTheDocument();
+    expect(screen.getByLabelText("Playlist")).toBeInTheDocument();
   });
 
   it("switches to the search grid and queries with the typed text", async () => {
@@ -205,7 +208,7 @@ describe("Home", () => {
     });
 
     renderHome();
-    await screen.findByRole("tab", { name: /live\s+250/i });
+    await screen.findByRole("button", { name: "Live" });
 
     // Type a term distinct from the result title so the active-filter chip
     // (which echoes the query) doesn't collide with the card's title text.

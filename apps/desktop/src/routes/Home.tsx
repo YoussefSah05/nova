@@ -1,32 +1,25 @@
-import { memo, useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircleIcon,
   DatabaseIcon,
-  ListFilterIcon,
   PlusIcon,
   RotateCwIcon,
   SearchIcon,
-  SettingsIcon,
   XIcon,
 } from "lucide-react";
 import type { ImportProgress, Profile, SeriesSummary, Source } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SimpleSelect } from "@/components/ui/select";
 import { DragRegion } from "@/components/DragRegion";
 import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SettingsModal } from "@/features/settings/SettingsModal";
+import { Sidebar } from "@/features/browse/Sidebar";
+import { FilterPanel } from "@/features/browse/FilterPanel";
 import { SeriesDetail } from "@/features/browse/SeriesDetail";
 import { ContentDetail } from "@/features/browse/ContentDetail";
 import { BrowseRails } from "@/features/browse/BrowseRails";
@@ -91,8 +84,6 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const scrollRef = useRef<HTMLElement>(null);
   const scrollByTabRef = useRef<Record<Tab, number>>({ live: 0, movies: 0, series: 0 });
 
-  const activeSource = sources.find((source) => source.id === activeSourceId) ?? null;
-
   const counts: Record<Tab, number> = {
     live: useBrowseCount("live", profile.id, activeSourceId).data ?? 0,
     movies: useBrowseCount("movies", profile.id, activeSourceId).data ?? 0,
@@ -109,6 +100,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const region = tab === "live" ? filterParam(regionFilter) : null;
   const filters: BrowseFilters = { query, category, country, region };
   const searchOrFilterActive = Boolean(query || category || country || region);
+  // Count of dropdown/genre filters (not search) — drives the Filters badge.
+  const activeFilterCount = [category, country, region].filter(Boolean).length;
 
   // ── Sources ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -426,124 +419,37 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background text-foreground">
-      <header
-        data-tauri-drag-region
-        className="flex items-center justify-between border-b border-border py-4 pl-20 pr-6"
-      >
-        <div>
-          <span className="font-display text-xl font-semibold tracking-tight text-foreground">
-            Nova
-          </span>
-          {activeSource && (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Browsing {formatCount(counts.live + counts.movies + counts.series)} imported items
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setShowSettings(true)}
-            aria-label="Settings"
-            title="Settings"
-            className="rounded-full text-muted-foreground"
-          >
-            <SettingsIcon className="h-5 w-5" aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={onSwitchProfile}
-            className="gap-2 px-2 text-sm text-muted-foreground"
-          >
-            <div
-              className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold text-white"
-              style={{ backgroundColor: profileView.avatarColor }}
-            >
-              {profileView.name.slice(0, 2).toUpperCase()}
+    <div className="flex min-h-screen bg-background text-foreground">
+      {sources.length > 0 && (
+        <Sidebar
+          tab={tab}
+          onTabChange={handleTabChange}
+          counts={counts}
+          profile={profileView}
+          onSettings={() => setShowSettings(true)}
+          onSwitchProfile={onSwitchProfile}
+        />
+      )}
+      <main className="flex min-w-0 flex-1 flex-col">
+        {sources.length === 0 ? (
+          <>
+            <DragRegion />
+            <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+              <DatabaseIcon className="h-10 w-10 text-muted-foreground" aria-hidden />
+              <div>
+                <p className="text-sm font-medium text-foreground">No playlists yet</p>
+                <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                  Import an M3U or Xtream playlist to browse live channels, movies, and series.
+                </p>
+              </div>
+              {sourceError && <ErrorMessage message={sourceError} />}
+              <Button onClick={() => setShowAddSource(true)}>Add playlist</Button>
             </div>
-            {profileView.name}
-          </Button>
-        </div>
-      </header>
-
-      {sources.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-          <DatabaseIcon className="h-10 w-10 text-muted-foreground" aria-hidden />
-          <div>
-            <p className="text-sm font-medium text-foreground">No playlists yet</p>
-            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-              Import an M3U or Xtream playlist to browse live channels, movies, and series.
-            </p>
-          </div>
-          {sourceError && <ErrorMessage message={sourceError} />}
-          <Button onClick={() => setShowAddSource(true)}>Add playlist</Button>
-        </div>
-      ) : (
-        <main className="flex flex-1 flex-col">
-          <section className="flex flex-col gap-3 px-6 pb-3 pt-4 md:flex-row md:items-center md:justify-between">
-            <label className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
-              Playlist
-              <select
-                value={activeSourceId ?? ""}
-                onChange={(event) => handleSourceChange(event.target.value)}
-                className="h-10 rounded-md border border-input bg-card px-3 text-sm font-medium text-foreground outline-none transition-colors hover:border-border-strong focus:border-primary focus:ring-2 focus:ring-ring/40"
-              >
-                {sources.map((source) => {
-                  const total = sourceTotals[source.id];
-                  return (
-                    <option key={source.id} value={source.id}>
-                      {source.name}
-                      {total !== undefined ? ` (${formatCount(total)})` : ""}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={handleRefresh}
-                disabled={activeSourceId === null || refreshing}
-                title="Re-fetch this playlist from the provider"
-              >
-                <RotateCwIcon className={cn("h-4 w-4", refreshing && "animate-spin")} aria-hidden />
-                {refreshing ? "Refreshing…" : "Refresh"}
-              </Button>
-              <Button onClick={() => setShowAddSource(true)}>
-                <PlusIcon className="h-4 w-4" aria-hidden />
-                Add playlist
-              </Button>
-            </div>
-          </section>
-
-          <section className="px-6 pb-3">
-            <Tabs value={tab} onValueChange={(v) => handleTabChange(v as Tab)}>
-              <TabsList>
-                {TABS.map((nextTab) => (
-                  <TabsTrigger key={nextTab} value={nextTab}>
-                    {nextTab}
-                    <Badge
-                      variant={tab === nextTab ? "secondary" : "muted"}
-                      className="ml-0.5 px-1.5 py-0 text-[11px]"
-                    >
-                      {formatCount(counts[nextTab])}
-                    </Badge>
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
-          </section>
-
-          <section className="px-6 pb-3">
-            <div
-              className={cn(
-                "grid gap-2",
-                tab === "live" ? "md:grid-cols-[minmax(0,1fr)_220px]" : "md:grid-cols-1"
-              )}
-            >
-              <div className="relative">
+          </>
+        ) : (
+          <>
+            <header data-tauri-drag-region className="flex items-center gap-2 px-6 py-3">
+              <div className="relative max-w-md flex-1">
                 <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={searchQuery}
@@ -552,35 +458,55 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                   className="pl-9"
                 />
               </div>
-
-              {tab === "live" && regionOptions.length > 0 && (
-                <FilterSelect
-                  label="Region"
-                  value={regionFilter}
-                  options={regionOptions}
-                  onChange={setRegionFilter}
+              <div className="ml-auto flex items-center gap-2">
+                <SimpleSelect
+                  value={activeSourceId != null ? String(activeSourceId) : ""}
+                  options={sources.map((source) => ({
+                    value: String(source.id),
+                    label:
+                      sourceTotals[source.id] !== undefined
+                        ? `${source.name} (${formatCount(sourceTotals[source.id])})`
+                        : source.name,
+                  }))}
+                  onChange={handleSourceChange}
+                  ariaLabel="Playlist"
+                  className="h-10 min-w-[180px]"
                 />
-              )}
-              {tab === "live" && (
-                <FilterSelect
-                  label="Country"
-                  value={countryFilter}
-                  options={countryOptions}
-                  onChange={setCountryFilter}
+                <FilterPanel
+                  tab={tab}
+                  regionFilter={regionFilter}
+                  setRegionFilter={setRegionFilter}
+                  regionOptions={regionOptions}
+                  countryFilter={countryFilter}
+                  setCountryFilter={setCountryFilter}
+                  countryOptions={countryOptions}
+                  categoryFilter={categoryFilter}
+                  setCategoryFilter={setCategoryFilter}
+                  categoryOptions={categoryOptions}
+                  activeCount={activeFilterCount}
                 />
-              )}
-            </div>
-
-            {categoryOptions.length > 0 && (
-              <GenreChips
-                options={categoryOptions}
-                value={categoryFilter}
-                onChange={setCategoryFilter}
-              />
-            )}
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={handleRefresh}
+                  disabled={activeSourceId === null || refreshing}
+                  aria-label="Refresh"
+                  title="Re-fetch this playlist from the provider"
+                >
+                  <RotateCwIcon
+                    className={cn("h-4 w-4", refreshing && "animate-spin")}
+                    aria-hidden
+                  />
+                </Button>
+                <Button onClick={() => setShowAddSource(true)} title="Add playlist">
+                  <PlusIcon className="h-4 w-4" aria-hidden />
+                  Add
+                </Button>
+              </div>
+            </header>
 
             {searchOrFilterActive && (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+              <div className="flex flex-wrap items-center gap-1.5 px-6 pb-2 text-xs">
                 {searchQuery && (
                   <FilterChip
                     label="Search"
@@ -619,49 +545,49 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                 </Button>
               </div>
             )}
-          </section>
 
-          <section
-            ref={scrollRef}
-            onScroll={(event) => {
-              scrollByTabRef.current[tab] = event.currentTarget.scrollTop;
-            }}
-            className="relative flex-1 overflow-y-auto px-6 pb-6"
-          >
-            {sourceError && <ErrorMessage message={sourceError} />}
-            {activeSourceId !== null && (
-              <BrowseBoundary resetKey={`${tab}-${activeSourceId}-${searchOrFilterActive}`}>
-                <div key={`${tab}-${searchOrFilterActive}`} className="nova-fade-in">
-                  {searchOrFilterActive ? (
-                    <BrowseGrid
-                      tab={tab}
-                      profileId={profile.id}
-                      sourceId={activeSourceId}
-                      filters={filters}
-                      scrollRef={scrollRef}
-                      onActivate={activate}
-                      onToggleFavorite={toggleFavorite}
-                      onToggleWatchlist={toggleWatchlist}
-                    />
-                  ) : (
-                    <BrowseRails
-                      tab={tab}
-                      profileId={profile.id}
-                      sourceId={activeSourceId}
-                      scrollRef={scrollRef}
-                      onPlay={setPlayingMedia}
-                      onSelectCategory={setCategoryFilter}
-                      onActivate={activate}
-                      onToggleFavorite={toggleFavorite}
-                      onToggleWatchlist={toggleWatchlist}
-                    />
-                  )}
-                </div>
-              </BrowseBoundary>
-            )}
-          </section>
-        </main>
-      )}
+            <section
+              ref={scrollRef}
+              onScroll={(event) => {
+                scrollByTabRef.current[tab] = event.currentTarget.scrollTop;
+              }}
+              className="relative flex-1 overflow-y-auto px-6 pb-6"
+            >
+              {sourceError && <ErrorMessage message={sourceError} />}
+              {activeSourceId !== null && (
+                <BrowseBoundary resetKey={`${tab}-${activeSourceId}-${searchOrFilterActive}`}>
+                  <div key={`${tab}-${searchOrFilterActive}`} className="nova-fade-in">
+                    {searchOrFilterActive ? (
+                      <BrowseGrid
+                        tab={tab}
+                        profileId={profile.id}
+                        sourceId={activeSourceId}
+                        filters={filters}
+                        scrollRef={scrollRef}
+                        onActivate={activate}
+                        onToggleFavorite={toggleFavorite}
+                        onToggleWatchlist={toggleWatchlist}
+                      />
+                    ) : (
+                      <BrowseRails
+                        tab={tab}
+                        profileId={profile.id}
+                        sourceId={activeSourceId}
+                        scrollRef={scrollRef}
+                        onPlay={setPlayingMedia}
+                        onSelectCategory={setCategoryFilter}
+                        onActivate={activate}
+                        onToggleFavorite={toggleFavorite}
+                        onToggleWatchlist={toggleWatchlist}
+                      />
+                    )}
+                  </div>
+                </BrowseBoundary>
+              )}
+            </section>
+          </>
+        )}
+      </main>
 
       {showAddSource && (
         <AddSourceModal
@@ -766,77 +692,6 @@ function onIdle(cb: () => void): () => void {
 }
 
 // ── Filter chrome (presentational) ────────────────────────────────────────────
-
-function FilterSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (value: string) => void;
-}) {
-  // Radix Select forbids an empty-string item value, so the "All" choice uses a
-  // sentinel mapped back to "" (the no-filter value the rest of Home expects).
-  const ALL = "__all__";
-  return (
-    <Select value={value || ALL} onValueChange={(v) => onChange(v === ALL ? "" : v)}>
-      <SelectTrigger aria-label={label} className="relative h-10 w-full pl-9">
-        <ListFilterIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL}>All {label.toLowerCase()}s</SelectItem>
-        {options.map((option) => (
-          <SelectItem key={option} value={option}>
-            {option}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-// Horizontal, scrollable genre chip-bar; tapping a chip filters and opens the grid.
-const GenreChips = memo(function GenreChips({
-  options,
-  value,
-  onChange,
-}: {
-  options: string[];
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const chip = (active: boolean) =>
-    cn(
-      "shrink-0 rounded-full border px-3.5 py-1.5 text-xs font-medium transition-[color,background-color,box-shadow,transform] active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-      active
-        ? "border-transparent bg-primary text-primary-foreground shadow-sm"
-        : "border-white/10 bg-secondary text-secondary-foreground hover:border-white/20 hover:bg-accent hover:text-accent-foreground"
-    );
-  return (
-    <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      <button className={chip(value === "")} onClick={() => onChange("")}>
-        All
-      </button>
-      {options.map((option) => {
-        const active = value === option;
-        return (
-          <button
-            key={option}
-            className={chip(active)}
-            onClick={() => onChange(active ? "" : option)}
-            aria-pressed={active}
-          >
-            {option}
-          </button>
-        );
-      })}
-    </div>
-  );
-});
 
 function FilterChip({
   label,
