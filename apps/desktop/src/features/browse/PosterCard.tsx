@@ -3,9 +3,10 @@
 //! actions reveal on hover/focus and sit as siblings of the activate button
 //! (never nested) so the markup stays valid and clicks don't conflict.
 
-import { memo } from "react";
+import { memo, useRef } from "react";
 import { Play, Plus, Check, Heart, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AnimatePresence } from "@/lib/motion";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -13,6 +14,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { HoverPreview, useHoverPreview } from "./HoverPreview";
 import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
 import { PosterFallback } from "./PosterFallback";
@@ -31,15 +33,33 @@ export const PosterCard = memo(function PosterCard({
   onToggleWatchlist,
 }: { item: BrowseItem } & PosterCardHandlers) {
   const live = item.kind === "live";
+  const cardRef = useRef<HTMLDivElement>(null);
+  const preview = useHoverPreview();
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
+          ref={cardRef}
+          onMouseEnter={preview.onEnter}
+          onMouseLeave={preview.onLeave}
           className={cn(
             "group relative flex flex-shrink-0 snap-start flex-col gap-2 [contain:layout_paint]",
             live ? "w-44" : "w-36"
           )}
         >
+          <AnimatePresence>
+            {preview.open && cardRef.current && (
+              <HoverPreview
+                item={item}
+                anchor={cardRef.current.getBoundingClientRect()}
+                live={live}
+                onActivate={onActivate}
+                onToggleFavorite={onToggleFavorite}
+                onToggleWatchlist={onToggleWatchlist}
+                onClose={preview.close}
+              />
+            )}
+          </AnimatePresence>
           <button
             type="button"
             onClick={() => onActivate(item)}
