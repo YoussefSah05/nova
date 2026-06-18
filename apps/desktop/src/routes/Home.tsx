@@ -41,6 +41,8 @@ import {
   type BrowseTab,
 } from "@/features/browse/queries";
 import { PlayerModal, type PlayMedia } from "@/features/player/PlayerModal";
+import { useProfileSettings } from "@/features/settings/useProfileSettings";
+import { useAccentTheme } from "@/lib/useAccentTheme";
 import { cn } from "@/lib/utils";
 
 type Tab = BrowseTab;
@@ -69,6 +71,9 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   useEffect(() => {
     setProfileView(profile);
   }, [profile]);
+  // Apply the profile's chosen accent theme to the app's CSS vars (live).
+  const { settings: profileSettings } = useProfileSettings(profile.id);
+  useAccentTheme(profileSettings.accentColor);
   const [searchQuery, setSearchQuery] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
   const [regionFilter, setRegionFilter] = useState("");

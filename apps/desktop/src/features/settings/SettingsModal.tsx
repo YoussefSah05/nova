@@ -1,7 +1,7 @@
 //! Settings overlay — left section sidebar + right content pane.
 
 import { useState } from "react";
-import { Captions, Cpu, Sparkles, Tv, UserCog, X } from "lucide-react";
+import { Captions, Cpu, Palette, Sparkles, Tv, UserCog, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { motion } from "@/lib/motion";
@@ -9,12 +9,14 @@ import type { Profile } from "@/types";
 import { PlaybackCaptionsSection } from "./sections/PlaybackCaptionsSection";
 import { TranscriptionSection } from "./sections/TranscriptionSection";
 import { EnrichmentSection } from "./sections/EnrichmentSection";
+import { AppearanceSection } from "./sections/AppearanceSection";
 import { SourcesEpgSection } from "./sections/SourcesEpgSection";
 import { ProfileAboutSection } from "./sections/ProfileAboutSection";
 
-type SectionId = "playback" | "transcription" | "enrichment" | "sources" | "profile";
+type SectionId = "appearance" | "playback" | "transcription" | "enrichment" | "sources" | "profile";
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
+  { id: "appearance", label: "Appearance", icon: <Palette className="h-4 w-4" /> },
   { id: "playback", label: "Playback & Captions", icon: <Captions className="h-4 w-4" /> },
   { id: "transcription", label: "Transcription & Cache", icon: <Cpu className="h-4 w-4" /> },
   { id: "enrichment", label: "Catalog Enrichment", icon: <Sparkles className="h-4 w-4" /> },
@@ -92,6 +94,7 @@ export function SettingsModal({
             </button>
           </header>
           <div className="flex-1 overflow-y-auto px-6 py-5">
+            {active === "appearance" && <AppearanceSection profileId={profile.id} />}
             {active === "playback" && <PlaybackCaptionsSection profileId={profile.id} />}
             {active === "transcription" && <TranscriptionSection profileId={profile.id} />}
             {active === "enrichment" && <EnrichmentSection profileId={profile.id} />}

@@ -28,6 +28,10 @@
   --color-brand: #e0a33e;
   --color-brand-hover: #eab861;
   --color-accent-hover: #eab861;
+  /* Gradient endpoints for brand (pill) buttons. The accent-theme picker
+     overrides --color-brand-hi/-lo/-primary/-ring/-glow at runtime on :root. */
+  --color-brand-hi: #e9b65f;
+  --color-brand-lo: #dd9f37;
 
   /* Text */
   --color-text-primary: rgba(255, 255, 255, 0.96);
@@ -192,6 +196,33 @@ html.nova-native-player-active .nova-native-player-shell * {
 
 @media (prefers-reduced-motion: reduce) {
   .nova-fade-in {
+    animation: none;
+  }
+}
+
+/* Skeleton shimmer: a soft highlight sweeping across the placeholder. */
+@keyframes nova-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.nova-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.nova-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: nova-shimmer 1.6s var(--ease-enter) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nova-shimmer::after {
     animation: none;
   }
 }

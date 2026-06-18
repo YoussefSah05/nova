@@ -94,11 +94,11 @@ export function PosterCardSkeleton({ live = false }: { live?: boolean }) {
     <div className={cn("flex flex-shrink-0 flex-col gap-2", live ? "w-44" : "w-36")}>
       <div
         className={cn(
-          "w-full animate-pulse rounded-xl border border-border bg-muted",
+          "nova-shimmer w-full rounded-xl border border-border bg-muted",
           live ? "aspect-video" : "aspect-[2/3]"
         )}
       />
-      <div className="h-3 w-3/4 animate-pulse rounded bg-muted" />
+      <div className="nova-shimmer h-3 w-3/4 rounded bg-muted" />
     </div>
   );
 }

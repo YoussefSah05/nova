@@ -336,6 +336,9 @@ pub struct ProfileSettings {
     pub tmdb_enabled: bool,
     /// User-supplied TMDB API key (v3 auth). `None` keeps enrichment fully offline.
     pub tmdb_api_key: Option<String>,
+    /// UI accent theme id: `amber` | `teal` | `rose` | `violet` | `blue`.
+    /// `#[serde(default)]` on the container → old blobs without it load fine.
+    pub accent_color: String,
 }
 
 impl Default for ProfileSettings {
@@ -348,6 +351,7 @@ impl Default for ProfileSettings {
             default_playback_route: "auto".to_string(),
             tmdb_enabled: false,
             tmdb_api_key: None,
+            accent_color: "amber".to_string(),
         }
     }
 }

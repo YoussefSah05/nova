@@ -222,6 +222,8 @@ export interface ProfileSettings {
   // Catalog enrichment (Phase C) — opt-in TMDB, user-supplied key.
   tmdbEnabled: boolean;
   tmdbApiKey: string | null;
+  // UI accent theme id (amber | teal | rose | violet | blue).
+  accentColor: string;
 }
 
 export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
@@ -232,6 +234,7 @@ export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
   defaultPlaybackRoute: "auto",
   tmdbEnabled: false,
   tmdbApiKey: null,
+  accentColor: "amber",
 };
 
 // ── IPC errors ────────────────────────────────────────────────────────────────
