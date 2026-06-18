@@ -89,7 +89,7 @@ function prettyBrand(title: string): string {
   return title.replace(/\s+\d+$/, "").trim() || title;
 }
 
-function channelGroupToItem(g: ChannelGroup): BrowseItem {
+export function channelGroupToItem(g: ChannelGroup): BrowseItem {
   const bundle = g.memberCount > 1;
   return {
     key: `live-group-${g.group}`,
@@ -106,7 +106,7 @@ function channelGroupToItem(g: ChannelGroup): BrowseItem {
   };
 }
 
-function vodToItem(v: VodItem): BrowseItem {
+export function vodToItem(v: VodItem): BrowseItem {
   // Prefer the TMDB-enriched display layer, falling back to rules-cleaned / raw.
   const title = v.canonicalTitle ?? v.cleanTitle ?? v.name;
   return {
@@ -124,7 +124,7 @@ function vodToItem(v: VodItem): BrowseItem {
   };
 }
 
-function seriesToItem(s: SeriesSummary): BrowseItem {
+export function seriesToItem(s: SeriesSummary): BrowseItem {
   return {
     key: `series-${s.sourceId}-${s.seriesTitle}`,
     kind: "series",

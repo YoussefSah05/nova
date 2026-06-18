@@ -20,6 +20,7 @@ import { AddSourceModal } from "@/features/source/AddSourceModal";
 import { SettingsModal } from "@/features/settings/SettingsModal";
 import { Sidebar } from "@/features/browse/Sidebar";
 import { FilterPanel } from "@/features/browse/FilterPanel";
+import { CommandPalette } from "@/features/browse/CommandPalette";
 import { SeriesDetail } from "@/features/browse/SeriesDetail";
 import { ContentDetail } from "@/features/browse/ContentDetail";
 import { BrowseRails } from "@/features/browse/BrowseRails";
@@ -66,6 +67,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const [playingMedia, setPlayingMedia] = useState<PlayMedia | null>(null);
   const [showAddSource, setShowAddSource] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showPalette, setShowPalette] = useState(false);
   // Local copy of the profile so a rename/recolour in Settings shows immediately.
   const [profileView, setProfileView] = useState(profile);
   useEffect(() => {
@@ -236,6 +238,18 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     const el = scrollRef.current;
     if (el) el.scrollTop = scrollByTabRef.current[tab] ?? 0;
   }, [tab]);
+
+  // Global ⌘K / Ctrl+K toggles the command palette.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setShowPalette((v) => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // ── Actions ──────────────────────────────────────────────────────────────────
   function handleTabChange(nextTab: Tab) {
@@ -593,6 +607,19 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           </>
         )}
       </main>
+
+      <CommandPalette
+        open={showPalette}
+        onOpenChange={setShowPalette}
+        profileId={profile.id}
+        sourceId={activeSourceId}
+        onActivate={activate}
+        onGoToTab={handleTabChange}
+        onOpenSettings={() => setShowSettings(true)}
+        onAddPlaylist={() => setShowAddSource(true)}
+        onSwitchProfile={onSwitchProfile}
+        onRefresh={handleRefresh}
+      />
 
       {showAddSource && (
         <AddSourceModal
