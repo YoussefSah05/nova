@@ -7,6 +7,7 @@ import { InfoIcon, PlayIcon, PlusIcon, CheckIcon, Tv2Icon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { motion, Stagger, StaggerItem, useReducedMotion } from "@/lib/motion";
+import { AmbientGlow, useAmbientColor } from "@/lib/ambient";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,6 +40,7 @@ export function BrowseHero({
     : null;
 
   const reduce = useReducedMotion();
+  const ambient = useAmbientColor(live ? null : heroImage);
 
   if (isLoading || !data) {
     return <Skeleton className="h-[42vh] min-h-[300px] w-full rounded-2xl" />;
@@ -67,6 +69,8 @@ export function BrowseHero({
       {/* Scrims for legibility. */}
       <div className="absolute inset-0 bg-gradient-to-t from-background via-background/55 to-transparent" />
       <div className="absolute inset-0 bg-gradient-to-r from-background/85 via-background/25 to-transparent" />
+      {/* Ambient aura in the featured artwork's own colour (screen-blended). */}
+      <AmbientGlow color={ambient} className="mix-blend-screen" />
 
       <Stagger className="absolute inset-x-0 bottom-0 flex flex-col gap-3 p-6 md:max-w-xl md:p-8">
         <StaggerItem>

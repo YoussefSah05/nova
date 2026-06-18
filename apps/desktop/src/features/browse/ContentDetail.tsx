@@ -16,6 +16,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
+import { AmbientGlow, useAmbientColor } from "@/lib/ambient";
+import { motion, useReducedMotion, EASE_ENTER } from "@/lib/motion";
 import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
 import { fetchChannelsInGroup, type BrowseItem } from "./queries";
@@ -149,6 +151,8 @@ export function ContentDetail({
   onToggleWatchlist,
 }: ContentDetailProps) {
   const { settings, setSettings } = useProfileSettings(profileId);
+  const reduce = useReducedMotion();
+  const ambient = useAmbientColor(item.vod?.backdropUrl ?? item.posterUrl);
 
   // Live brand bundle → channel grid; movies → the overview hero below.
   if (item.kind === "live") {
@@ -175,11 +179,14 @@ export function ContentDetail({
       {/* Backdrop */}
       <div className="absolute inset-x-0 top-0 h-[60vh] overflow-hidden">
         {backdrop ? (
-          <img
+          <motion.img
             src={backdrop}
             alt=""
             decoding="async"
             className="h-full w-full object-cover object-top"
+            initial={reduce ? false : { scale: 1.06, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.6, ease: EASE_ENTER }}
           />
         ) : (
           <div className="h-full w-full bg-gradient-to-br from-primary/20 via-neutral-900 to-neutral-950" />
@@ -188,7 +195,17 @@ export function ContentDetail({
         <div className="absolute inset-0 bg-gradient-to-r from-neutral-950/85 to-transparent" />
       </div>
 
-      <div className="relative z-10 flex flex-col gap-6 px-8 pb-12 pt-10">
+      {/* Ambient tint from the artwork's own palette — a coloured aura over the
+          darkened hero that bleeds down into the page (screen-blended so it adds
+          light rather than covering content). */}
+      <AmbientGlow color={ambient} className="h-[70vh] mix-blend-screen" />
+
+      <motion.div
+        className="relative z-10 flex flex-col gap-6 px-8 pb-12 pt-10"
+        initial={reduce ? false : { y: 16, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.4, ease: EASE_ENTER, delay: 0.08 }}
+      >
         <Button
           variant="ghost"
           size="sm"
@@ -290,7 +307,7 @@ export function ContentDetail({
             label={item.title}
           />
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
