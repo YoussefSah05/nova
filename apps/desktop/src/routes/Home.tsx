@@ -438,7 +438,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   }
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
       {sources.length > 0 && (
         <Sidebar
           tab={tab}
@@ -449,7 +449,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           onSwitchProfile={onSwitchProfile}
         />
       )}
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         {sources.length === 0 ? (
           <>
             <DragRegion />
