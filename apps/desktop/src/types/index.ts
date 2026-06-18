@@ -8,6 +8,15 @@ export interface Profile {
   lastUsedAt: number | null;
 }
 
+/// At-a-glance per-profile summary for the picker (from `get_profile_overview`).
+export interface ProfileOverview {
+  accentColor: string;
+  sourceCount: number;
+  itemCount: number;
+  continueCount: number;
+  lastTitle: string | null;
+}
+
 // ── Sources ───────────────────────────────────────────────────────────────────
 
 export interface Source {

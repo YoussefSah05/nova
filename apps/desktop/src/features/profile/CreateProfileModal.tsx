@@ -19,11 +19,23 @@ const PALETTE = [
 interface CreateProfileModalProps {
   onConfirm: (name: string, avatarColor: string) => Promise<void>;
   onCancel: () => void;
+  /// When editing, prefill the form and relabel it.
+  initialName?: string;
+  initialColor?: string;
+  title?: string;
+  submitLabel?: string;
 }
 
-export function CreateProfileModal({ onConfirm, onCancel }: CreateProfileModalProps) {
-  const [name, setName] = useState("");
-  const [color, setColor] = useState(PALETTE[0]);
+export function CreateProfileModal({
+  onConfirm,
+  onCancel,
+  initialName,
+  initialColor,
+  title = "New Profile",
+  submitLabel = "Create",
+}: CreateProfileModalProps) {
+  const [name, setName] = useState(initialName ?? "");
+  const [color, setColor] = useState(initialColor ?? PALETTE[0]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,7 +70,7 @@ export function CreateProfileModal({ onConfirm, onCancel }: CreateProfileModalPr
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.2, ease: EASE_ENTER }}
       >
-        <h2 className="font-display text-lg font-semibold text-white">New Profile</h2>
+        <h2 className="font-display text-lg font-semibold text-white">{title}</h2>
 
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-white/50 uppercase tracking-wider">Name</label>
@@ -107,7 +119,7 @@ export function CreateProfileModal({ onConfirm, onCancel }: CreateProfileModalPr
             Cancel
           </Button>
           <Button type="submit" disabled={loading} className="flex-1">
-            {loading ? "Creating…" : "Create"}
+            {loading ? "Saving…" : submitLabel}
           </Button>
         </div>
       </motion.form>

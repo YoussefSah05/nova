@@ -1,30 +1,65 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { Profile } from "@/types";
-import { ProfileCard } from "./ProfileCard";
-import { CreateProfileModal } from "./CreateProfileModal";
-import { PlusIcon } from "lucide-react";
+import { PlusIcon, SlidersHorizontal, Check } from "lucide-react";
+import type { Profile, ProfileOverview } from "@/types";
+import { Button } from "@/components/ui/button";
 import { DragRegion } from "@/components/DragRegion";
 import { Reveal, Stagger, StaggerItem } from "@/lib/motion";
+import { ProfileCard } from "./ProfileCard";
+import { CreateProfileModal } from "./CreateProfileModal";
+import { AuroraBackdrop } from "./AuroraBackdrop";
 
 interface ProfilePickerProps {
   onSelect: (profile: Profile) => void;
 }
 
+/// Most-recently-used first; never-used profiles trail by creation order.
+function byRecency(a: Profile, b: Profile): number {
+  return (b.lastUsedAt ?? -1) - (a.lastUsedAt ?? -1) || a.createdAt - b.createdAt;
+}
+
 export function ProfilePicker({ onSelect }: ProfilePickerProps) {
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [overviews, setOverviews] = useState<Record<string, ProfileOverview>>({});
   const [showCreate, setShowCreate] = useState(false);
+  const [editing, setEditing] = useState<Profile | null>(null);
+  const [managing, setManaging] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [selectError, setSelectError] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<Profile[]>("list_profiles").then(setProfiles);
+    let cancelled = false;
+    void invoke<Profile[]>("list_profiles").then((list) => {
+      if (cancelled) return;
+      setProfiles([...list].sort(byRecency));
+      // Warm each profile's at-a-glance overview (also pre-opens its DB, so the
+      // subsequent select is instant). Failures are silent — the card still shows.
+      for (const p of list) {
+        void invoke<ProfileOverview>("get_profile_overview", { profileId: p.id })
+          .then((ov) => !cancelled && setOverviews((m) => ({ ...m, [p.id]: ov })))
+          .catch(() => undefined);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function handleCreate(name: string, avatarColor: string) {
     const profile = await invoke<Profile>("create_profile", { name, avatarColor });
-    setProfiles((prev) => [...prev, profile]);
+    setProfiles((prev) => [...prev, profile].sort(byRecency));
     setShowCreate(false);
+  }
+
+  async function handleEditConfirm(name: string, avatarColor: string) {
+    if (!editing) return;
+    const updated = await invoke<Profile>("update_profile", {
+      id: editing.id,
+      name,
+      avatarColor,
+    });
+    setProfiles((prev) => prev.map((p) => (p.id === updated.id ? updated : p)).sort(byRecency));
+    setEditing(null);
   }
 
   async function handleDelete(profile: Profile) {
@@ -43,17 +78,17 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
       const selected = await invoke<Profile>("select_profile", { id: profile.id });
       onSelect(selected);
     } catch (e) {
-      // Surface the failure instead of silently doing nothing (e.g. the
-      // profile DB can't be opened).
       setSelectError(typeof e === "string" ? e : "Couldn't open this profile.");
     }
   }
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-neutral-950">
+    <div className="relative flex min-h-screen flex-col items-center justify-center gap-10 px-6">
+      <AuroraBackdrop />
       <DragRegion />
+
       <Reveal>
-        <h1 className="font-display text-4xl font-semibold text-white tracking-tight">
+        <h1 className="font-display text-center text-5xl font-semibold tracking-tight text-white">
           Who's watching?
         </h1>
       </Reveal>
@@ -62,12 +97,15 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
         <p className="-mt-6 max-w-md text-center text-sm text-rose-300">{selectError}</p>
       )}
 
-      <Stagger className="flex flex-wrap justify-center gap-8">
+      <Stagger className="flex max-w-3xl flex-wrap justify-center gap-6">
         {profiles.map((p) => (
           <StaggerItem key={p.id}>
             <ProfileCard
               profile={p}
+              overview={overviews[p.id]}
+              managing={managing}
               onClick={handleSelect}
+              onEdit={setEditing}
               onDelete={handleDelete}
               isDeleting={deletingId === p.id}
             />
@@ -77,20 +115,42 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
         <StaggerItem>
           <button
             onClick={() => setShowCreate(true)}
-            className="group flex flex-col items-center gap-3 cursor-pointer"
+            className="group flex h-full min-h-[180px] w-44 cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-white/15 transition-all hover:border-primary/60 hover:bg-white/[0.03]"
           >
-            <div className="flex h-20 w-20 items-center justify-center rounded-full border-2 border-dashed border-white/20 text-white/40 transition-all group-hover:border-primary/60 group-hover:text-white/80 group-hover:scale-105">
-              <PlusIcon className="h-8 w-8" />
+            <div className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-dashed border-white/20 text-white/40 transition-all group-hover:scale-105 group-hover:border-primary/60 group-hover:text-white/80">
+              <PlusIcon className="h-7 w-7" />
             </div>
-            <span className="text-sm font-medium text-white/40 group-hover:text-white/70 transition-colors">
+            <span className="text-sm font-medium text-white/40 transition-colors group-hover:text-white/70">
               Add Profile
             </span>
           </button>
         </StaggerItem>
       </Stagger>
 
+      {profiles.length > 0 && (
+        <Reveal>
+          <Button
+            variant={managing ? "default" : "secondary"}
+            onClick={() => setManaging((m) => !m)}
+          >
+            {managing ? <Check className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" />}
+            {managing ? "Done" : "Manage profiles"}
+          </Button>
+        </Reveal>
+      )}
+
       {showCreate && (
         <CreateProfileModal onConfirm={handleCreate} onCancel={() => setShowCreate(false)} />
+      )}
+      {editing && (
+        <CreateProfileModal
+          title="Edit Profile"
+          submitLabel="Save"
+          initialName={editing.name}
+          initialColor={editing.avatarColor}
+          onConfirm={handleEditConfirm}
+          onCancel={() => setEditing(null)}
+        />
       )}
     </div>
   );

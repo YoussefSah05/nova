@@ -227,6 +227,56 @@ html.nova-native-player-active .nova-native-player-shell * {
   }
 }
 
+/* Aurora backdrop (profile picker): a few slow-drifting blurred blobs in the
+   brand accent. Transform/opacity only (GPU-cheap); colour comes from the live
+   --color-brand* vars so it follows the theme. Static under reduced-motion. */
+@keyframes nova-aurora-a {
+  0% {
+    transform: translate3d(-6%, -4%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(8%, 6%, 0) scale(1.18);
+  }
+  100% {
+    transform: translate3d(-6%, -4%, 0) scale(1);
+  }
+}
+
+@keyframes nova-aurora-b {
+  0% {
+    transform: translate3d(6%, 4%, 0) scale(1.1);
+  }
+  50% {
+    transform: translate3d(-8%, -6%, 0) scale(0.92);
+  }
+  100% {
+    transform: translate3d(6%, 4%, 0) scale(1.1);
+  }
+}
+
+.nova-aurora-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(80px);
+  opacity: 0.5;
+  will-change: transform;
+}
+
+.nova-aurora-a {
+  animation: nova-aurora-a 22s ease-in-out infinite;
+}
+
+.nova-aurora-b {
+  animation: nova-aurora-b 28s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nova-aurora-a,
+  .nova-aurora-b {
+    animation: none;
+  }
+}
+
 /* Translation card entry (ARCHITECTURE.md §10): fade + subtle scale-up. */
 @keyframes nova-card-in {
   from {

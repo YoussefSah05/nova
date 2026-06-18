@@ -3,8 +3,9 @@ use nova_core::{
     ParsedEntry, Profile, SeriesEpisode, SeriesSummary, Source, VodItem,
 };
 use nova_storage::{
-    init_profile_db, ChannelRepository, EpgSourcesRepository, ProfileRepository, SeriesRepository,
-    SourceRepository, VodRepository, WatchHistoryRepository, WatchSnapshot,
+    init_profile_db, ChannelRepository, EpgSourcesRepository, ProfileRepository,
+    ProfileSettingsRepository, SeriesRepository, SourceRepository, VodRepository,
+    WatchHistoryRepository, WatchSnapshot,
 };
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, State};
@@ -73,13 +74,83 @@ pub async fn select_profile(
     repo.update_last_used(&id).await.map_err(ApiError::from)?;
     let profile = repo.get(&id).await.map_err(ApiError::from)?;
 
-    // Ensure per-profile DB is open
-    if state.profile_pool(&id).await.is_none() {
-        open_profile_db(&id, &state, &app).await?;
-    }
+    ensure_profile_pool(&id, &state, &app).await?;
 
     *state.active_profile_id.write().await = Some(id);
     Ok(profile)
+}
+
+/// Open the per-profile DB pool if it isn't already (no side effects — does *not*
+/// mark the profile active or touch `last_used_at`). Used by `select_profile` and
+/// by read-only aggregate commands that need a profile's own DB.
+pub(crate) async fn ensure_profile_pool(
+    profile_id: &str,
+    state: &AppState,
+    app: &AppHandle,
+) -> Result<(), ApiError> {
+    if state.profile_pool(profile_id).await.is_none() {
+        open_profile_db(profile_id, state, app).await?;
+    }
+    Ok(())
+}
+
+/// At-a-glance summary for the profile picker: accent theme, source/item counts
+/// and continue-watching state, aggregated from the profile's own DB. Opens that
+/// DB if needed (warming the pool, so the subsequent `select_profile` is instant).
+#[tauri::command]
+pub async fn get_profile_overview(
+    profile_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<nova_core::ProfileOverview, ApiError> {
+    ensure_profile_pool(&profile_id, &state, &app).await?;
+    let pool = require_profile_pool(&profile_id, &state).await?;
+
+    let accent_color = ProfileSettingsRepository::new(&pool)
+        .get()
+        .await
+        .map(|s| s.accent_color)
+        .unwrap_or_else(|_| "amber".to_string());
+
+    let sources = SourceRepository::new(&pool)
+        .list()
+        .await
+        .unwrap_or_default();
+    let source_count = sources.len() as i64;
+
+    let channels = ChannelRepository::new(&pool);
+    let vod = VodRepository::new(&pool);
+    let series = SeriesRepository::new(&pool);
+    let mut item_count = 0i64;
+    for source in &sources {
+        item_count += channels
+            .count_filtered(source.id, None, None, None, None, false, false)
+            .await
+            .unwrap_or(0);
+        item_count += vod
+            .count_filtered(source.id, None, None, false, false)
+            .await
+            .unwrap_or(0);
+        item_count += series
+            .count_series(source.id, None, None, false, false)
+            .await
+            .unwrap_or(0);
+    }
+
+    let continuing = WatchHistoryRepository::new(&pool)
+        .list_continue_watching(20)
+        .await
+        .unwrap_or_default();
+    let continue_count = continuing.len() as i64;
+    let last_title = continuing.first().map(|i| i.title.clone());
+
+    Ok(nova_core::ProfileOverview {
+        accent_color,
+        source_count,
+        item_count,
+        continue_count,
+        last_title,
+    })
 }
 
 // ── Source commands (Phase 2) ─────────────────────────────────────────────────

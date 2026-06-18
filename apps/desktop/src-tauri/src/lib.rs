@@ -75,6 +75,7 @@ pub fn run() {
             commands::create_profile,
             commands::delete_profile,
             commands::select_profile,
+            commands::get_profile_overview,
             // Phase 2
             commands::list_sources,
             commands::add_source,

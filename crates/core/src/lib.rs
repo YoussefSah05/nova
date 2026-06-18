@@ -21,6 +21,22 @@ pub struct Profile {
     pub last_used_at: Option<i64>,
 }
 
+/// At-a-glance, per-profile summary surfaced on the profile picker. Aggregated
+/// from a profile's own DB (accent + sources + counts + continue-watching) so the
+/// entry screen can show recency, stats and resume without N separate IPC calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileOverview {
+    /// The profile's saved accent theme id (e.g. "amber"); defaults applied on read.
+    pub accent_color: String,
+    pub source_count: i64,
+    pub item_count: i64,
+    /// Number of in-progress items (capped at the query limit — for display only).
+    pub continue_count: i64,
+    /// Title of the most-recent in-progress item, if any (the resume hint).
+    pub last_title: Option<String>,
+}
+
 // ── Media classification ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
