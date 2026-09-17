@@ -50,6 +50,8 @@ of the native Rust/React application. No Docker wrapper is needed for macOS E2E.
 ## Changes and remaining work
 
 Update manifest and relevant native lock/config files together in dedicated PRs.
+Catalog fingerprint format v1 uses the existing locked sha2 0.10.9 dependency;
+the core crate now declares that workspace dependency without upgrading any package.
 CI validates repository consistency; `doctor` additionally compares executable
 versions. The existing macOS CI still uses Homebrew mpv, so its native closure is
 not reproducible yet. Model revision/hash verification, actual linked SQLite patch

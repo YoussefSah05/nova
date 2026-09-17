@@ -8,6 +8,8 @@
 - Catalog and player runtime behavior remain on the existing implementation.
 - Add unconsumed catalog source contracts with typed IDs, bounded preserved evidence,
   explicit unknown numbering and diagnostic redaction; no profile migration yet.
+- Add bounded snapshot capture, immutable completion receipts and safe per-endpoint
+  partial-refresh selection, plus versioned SHA-256 metadata/locator fingerprints.
 
 ## 0.1.0 — pre-migration historical baseline
 

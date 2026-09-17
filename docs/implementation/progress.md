@@ -59,12 +59,41 @@ authorized by passing local tests alone. No branch is represented as merged. Rev
 environment → mechanical format → source contract in that order once remote CI is
 available. No temporary compatibility layer or permanent feature flag was added.
 
-Next implementation slice: SourceSnapshot completeness/lifecycle and reproducible
-fingerprints, then fixture infrastructure. Do not connect the module to actual
+Next implementation slice started below: SourceSnapshot completeness/lifecycle and
+reproducible fingerprints, then fixture infrastructure. Do not connect the module to actual
 import/publication or migrate favorites/history until the required fixture, storage
 and app E2E gates exist. The full Catalog Compiler is not implemented yet.
 
-## Outstanding integration gates
+## Completed local increment: snapshot receipts and fingerprints
+
+Goal: bounded endpoint capture, immutable completion receipts and reproducible
+fingerprints in core/catalog submodules. No network, persistence, publication or
+existing importer changes. Research: pinned sha2 streaming API and Rust's warning
+that DefaultHasher is not stable across releases. Tests: fixed hash vectors,
+chunk/order invariance, field-boundary separation, explicit partial/empty scopes,
+terminal lifecycle errors, foreign records and quota failures. E2E: not required
+until wired into app paths. No DB migration; rollback removes unconsumed APIs.
+Acceptance: focused tests, full regression, Clippy, formatting and manifest checks.
+
+Implemented on `feat/catalog-snapshots`: complete/partial/failed/cancelled capture,
+immutable receipt, safe scope fallback, bounded streaming payload digest, framed v1
+metadata and locator fingerprints. Thirteen new regression tests pass, including
+independent fixed encoding vectors. Full workspace: 174 Rust tests pass; workspace
+Clippy with warnings denied and rustfmt pass. Frontend: 9 tests, typecheck and lint
+pass. Tooling: 7 tests and manifest verification pass. Existing sha2 0.10.9 is now a
+direct core dependency; Cargo.lock changes only that edge, with no package upgrades.
+
+Research and the capture-versus-compiler lifecycle decision are in ADR 0003. No
+durable snapshot files, encryption/key storage, compilation, migrations, provider
+requests or publication are implemented by this slice. No user-data changes. No
+performance improvement is claimed; the helper retains only fixed hash state and
+counters, and actual import performance awaits the adapter/staging benchmark.
+
+Next: deterministic sanitized provider fixtures and adapter contract tests, followed
+by protected snapshot persistence with crash/replay tests. Keep existing import
+behavior until the storage and actual-app E2E gates are satisfied.
+
+## Remaining gates
 
 - Remote CI/protection/merge unavailable without GitHub authentication.
 - No deterministic native E2E harness yet.

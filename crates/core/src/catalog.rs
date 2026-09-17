@@ -12,6 +12,9 @@ use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Serialize};
 
+pub mod fingerprint;
+pub mod snapshot;
+
 pub const MAX_FIELD_BYTES: usize = 16 * 1024;
 pub const MAX_RECORD_BYTES: usize = 128 * 1024;
 pub const MAX_ATTRIBUTES: usize = 64;
@@ -63,6 +66,7 @@ macro_rules! opaque_id {
 opaque_id!(
     SourceId,
     SnapshotId,
+    EndpointScope,
     SourceRecordId,
     EntityId,
     EditionId,

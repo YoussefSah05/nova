@@ -8,3 +8,4 @@ description = "Domain types, traits, and errors shared across all Nova crates"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+sha2 = { workspace = true }

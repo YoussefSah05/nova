@@ -2,7 +2,7 @@
 
 The current serving catalog remains the existing provider-row implementation.
 `nova_core::catalog` is an additive, unconsumed domain module. It does not yet
-implement a Catalog Compiler, canonical database, snapshot store or identity resolver.
+implement a Catalog Compiler, canonical database, durable snapshot store or identity resolver.
 
 Implemented contracts:
 
@@ -35,8 +35,43 @@ ID serde validation, redaction, oversized input, upstream collisions, separate
 entity/variant identity, unknown numbering and compile-time ID incompatibility.
 There are no data migrations, runtime feature flags or compatibility adapters yet.
 
-Next steps: durable SourceSnapshot lifecycle/completeness and fingerprint contracts,
-then fixture-backed adapters and storage staging. Actual import/publication changes
+## Snapshot capture and fingerprints
+
+`catalog::snapshot` now provides bounded capture and immutable endpoint receipts:
+
+- `SnapshotCapture` hashes replay bytes incrementally and counts accepted records.
+  It rejects records belonging to a different source/snapshot. Limits are explicit,
+  nonzero caller-supplied byte and record budgets.
+- Successful sealing records Complete or Partial; Failed and Cancelled produce no
+  receipt. Every terminal state rejects further input. A quota error is terminal
+  so truncated input cannot later be accidentally sealed as complete.
+- `select_snapshot` replaces a scope only with a complete candidate. Partial
+  refreshes retain the previous complete scope with a stale marker. Partial first
+  import is an explicit status, not a deletion-authoritative complete result.
+- Receipt completion does not certify catalog validity or durable payload storage.
+  Compiler validation/publication states will be separate. Empty complete endpoints
+  still require destructive-collapse policy checks before publishing deletions.
+
+`catalog::fingerprint` defines `sha256-framed-v1`. Exact replay payload bytes use
+standard SHA-256. Metadata frames the domain tag, kind, optional upstream namespace
+and value, raw title, optional group/logo/EPG ID, then sorted attributes/count.
+Optional values include a presence byte, distinguishing missing from empty. Every
+variable field has a u64 big-endian byte length. Locator hashes frame their own
+domain tag, canonical locator bytes and credential revision.
+
+Metadata excludes capture IDs and opaque locator references. It remains conservative:
+all unknown metadata attributes participate, so adapters must keep token/credential
+data in the transport boundary to avoid unnecessary semantic invalidation. Fingerprints
+are change/integrity keys, not canonical identities or encryption. Debug hides digest
+values; explicit hex export is intended for protected persistence/integrity checks.
+
+`sha2` 0.10.9 was already in Cargo.lock and workspace dependencies; core now uses it.
+No external package version changed. Independent Python hashlib vectors validate the
+Rust metadata/locator encoding, in addition to the standard SHA-256 payload vector.
+No Python dependency or virtual environment is required by the Rust tests.
+
+Next steps: fixture-backed source adapters and protected snapshot storage staging,
+including record uniqueness, durable completion markers and crash recovery. Actual import/publication changes
 require regression, migration and real-app E2E evidence before activation. See the
 production blueprint for the proposed full architecture; do not confuse it with
 the implementation described here.
