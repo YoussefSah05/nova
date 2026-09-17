@@ -55,8 +55,10 @@ the core crate now declares that workspace dependency without upgrading any pack
 The test-only `nova-iptv-fixture` workspace tool uses existing Axum/Tokio packages;
 its parser clients are dev-dependencies, never dependencies of the desktop app.
 The snapshot-store prototype uses existing ring 0.17.14, zeroize 1.8.2,
-tempfile 3.27.0 and libc 0.2.186 packages. Keychain integration is still pending;
-the storage API requires an explicitly supplied profile key.
+tempfile 3.27.0 and libc 0.2.186 packages. The macOS profile-key adapter uses
+security-framework 3.7.0 (OSX_10_15 feature) and core-foundation 0.10.1. Its native
+probe currently fails with MissingEntitlement; signed-app integration is pending.
+The snapshot storage API still requires an explicitly supplied profile key.
 CI validates repository consistency; `doctor` additionally compares executable
 versions. The existing macOS CI still uses Homebrew mpv, so its native closure is
 not reproducible yet. Model revision/hash verification, actual linked SQLite patch

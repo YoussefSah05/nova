@@ -23,7 +23,10 @@
     "ring": "0.17.14",
     "zeroize": "1.8.2",
     "tempfile": "3.27.0",
-    "libc": "0.2.186"
+    "libc": "0.2.186",
+    "security-framework": "3.7.0",
+    "security-framework-sys": "2.17.0",
+    "core-foundation": "0.10.1"
   },
   "jsPackages": {
     "react": "19.2.6",

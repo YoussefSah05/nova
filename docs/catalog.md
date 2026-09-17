@@ -77,7 +77,12 @@ staging/commit boundary. See [ADR 0004](adr/0004-protected-snapshot-files.md) fo
 format, trust boundary, 16 MiB ceiling and cancellation semantics. The store is
 not connected to imports and does not persist normalized SourceRecords yet.
 
-Next steps: Keychain-backed key lifecycle, streaming/aggregate retention, then
+`ProfileKeyVault` separates new-key provisioning from read-only loading; its
+macOS adapter uses the data-protection Keychain without overwriting existing keys.
+The native provisioning probe failed with MissingEntitlement, so this remains
+unconnected to imports. See [ADR 0005](adr/0005-profile-snapshot-keys.md).
+
+Next steps: signed-app Keychain validation, durable key lifecycle, streaming/aggregate retention, then
 fixture-backed lossless source adapters and record persistence. Actual import/publication changes
 require regression, migration and real-app E2E evidence before activation. See the
 production blueprint for the proposed full architecture; do not confuse it with

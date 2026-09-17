@@ -16,6 +16,8 @@
   with real-provider and running-app validation still outstanding.
 - Add an unconnected encrypted snapshot file-store prototype with authenticated
   replay, private files, no-overwrite commits and process-interruption tests.
+- Add profile snapshot-key provision/load contracts and a macOS Keychain adapter;
+  native provisioning still requires signing-entitlement validation.
 
 ## 0.1.0 — pre-migration historical baseline
 

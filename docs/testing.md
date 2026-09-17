@@ -44,6 +44,12 @@ abrupt subprocess exits at staging/commit boundaries. The ignored subprocess hel
 is explicitly executed by those boundary tests. These are process-restart tests,
 not a physical power-loss or app E2E certification.
 
-Next gates: Keychain/retention integration and adapter evidence completeness;
+Profile-key lifecycle tests run in the ordinary storage suite using an in-memory
+backend. The native Keychain roundtrip is explicitly opt-in and currently fails
+provisioning with MissingEntitlement in the Cargo executable; see
+[ADR 0005](adr/0005-profile-snapshot-keys.md) for the command and signed-app gate.
+Do not interpret ordinary unit-test success as native Keychain validation.
+
+Next gates: signed-app Keychain/retention integration and adapter evidence completeness;
 then real macOS app E2E using an isolated test profile. Playable media, segmented
 fault injection, sleep/wake, caption quality and AirPlay still need distinct coverage.

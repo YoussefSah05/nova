@@ -67,6 +67,8 @@ ring = "0.17"
 zeroize = "1"
 tempfile = "3"
 libc = "0.2"
+security-framework = { version = "3.7", features = ["OSX_10_15"] }
+core-foundation = "0.10"
 
 # Apple native view interop
 objc2 = "0.6"

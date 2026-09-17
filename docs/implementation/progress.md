@@ -150,6 +150,33 @@ streaming beyond 16 MiB, aggregate quotas, cleanup leases, normalized records an
 app import wiring remain separate required work. No production security or E2E
 certification is claimed for this prototype.
 
+## Completed local contract increment: profile snapshot-key lifecycle
+
+Goal: separate key creation from loading, prevent replacement or silent recovery,
+and implement the native macOS boundary. Scope: an unconsumed storage module and
+already-locked native dependencies; no profile/schema/import changes. Research,
+failure behavior and recovery limits: [ADR 0005](../adr/0005-profile-snapshot-keys.md).
+
+Implemented on `feat/profile-snapshot-keys`: random 32-byte key provisioning via
+insert-only backend, read-only loading with distinct missing/invalid/access/signing
+errors, and native data-protection Keychain operations on blocking workers. Six
+backend tests plus one OSStatus classification test pass after a failed-first test
+compile. The native roundtrip was actually attempted: the absent-item read passed
+and provisioning failed with MissingEntitlement. Native validation is still blocked;
+the regular suite intentionally does not execute that environment-dependent test.
+Do not change signing identities or relax storage protection as a test workaround.
+
+Regular workspace regression: 201 Rust tests pass; Clippy with warnings denied,
+rustfmt, seven environment tests and manifest verification pass. Two entries are
+ignored by ordinary discovery: the crash subprocess helper (executed by its parent
+tests) and native Keychain probe (explicitly attempted and failed as recorded above).
+Frontend code is unchanged; prior frontend checks were not rerun in this Rust slice.
+Rollback removes the unconsumed module and
+dependency edges; no production key or user data changed. Next independent work:
+streaming and aggregate retention. Signed-app validation and durable profile key
+provisioning/recovery remain required before import wiring; rotation/deletion are
+not implemented by this increment.
+
 ## Remaining integration gates
 
 - Remote CI/protection/merge unavailable without GitHub authentication.
