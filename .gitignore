@@ -1,7 +1,7 @@
 # Rust
 target/
 **/*.rs.bk
-Cargo.lock
+# Application dependency resolution is committed in Cargo.lock.
 
 # Node / pnpm
 node_modules/
