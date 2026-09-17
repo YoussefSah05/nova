@@ -39,7 +39,7 @@ are migration concerns, not changes made in this checkpoint.
 - Sandbox denied socket binding in two hls-proxy HTTP tests; rerun with local
   socket access distinguishes environment restrictions from regressions.
 - `cargo fmt --all -- --check` finds pre-existing formatting differences in
-  11 files. Do not hide this or mix wholesale formatting into environment work.
+  10 files. Do not hide this or mix wholesale formatting into environment work.
 - No current app E2E runner, device certification or packaged-app validation.
 
 Observed tools: Rust/Cargo 1.95.0, pnpm 9.15.4, just 1.51.0; selected existing

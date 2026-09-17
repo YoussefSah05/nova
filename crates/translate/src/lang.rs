@@ -20,20 +20,76 @@ pub struct TargetLanguage {
 /// Curated target languages for the picker (display order). The same NLLB codes
 /// back `to_nllb` for the source side.
 pub const TARGET_LANGUAGES: &[TargetLanguage] = &[
-    TargetLanguage { label: "English", bcp47: "en", nllb: "eng_Latn" },
-    TargetLanguage { label: "French", bcp47: "fr", nllb: "fra_Latn" },
-    TargetLanguage { label: "Arabic", bcp47: "ar", nllb: "arb_Arab" },
-    TargetLanguage { label: "Spanish", bcp47: "es", nllb: "spa_Latn" },
-    TargetLanguage { label: "German", bcp47: "de", nllb: "deu_Latn" },
-    TargetLanguage { label: "Italian", bcp47: "it", nllb: "ita_Latn" },
-    TargetLanguage { label: "Portuguese", bcp47: "pt", nllb: "por_Latn" },
-    TargetLanguage { label: "Turkish", bcp47: "tr", nllb: "tur_Latn" },
-    TargetLanguage { label: "Russian", bcp47: "ru", nllb: "rus_Cyrl" },
-    TargetLanguage { label: "Hindi", bcp47: "hi", nllb: "hin_Deva" },
-    TargetLanguage { label: "Chinese (Simplified)", bcp47: "zh", nllb: "zho_Hans" },
-    TargetLanguage { label: "Japanese", bcp47: "ja", nllb: "jpn_Jpan" },
-    TargetLanguage { label: "Korean", bcp47: "ko", nllb: "kor_Hang" },
-    TargetLanguage { label: "Dutch", bcp47: "nl", nllb: "nld_Latn" },
+    TargetLanguage {
+        label: "English",
+        bcp47: "en",
+        nllb: "eng_Latn",
+    },
+    TargetLanguage {
+        label: "French",
+        bcp47: "fr",
+        nllb: "fra_Latn",
+    },
+    TargetLanguage {
+        label: "Arabic",
+        bcp47: "ar",
+        nllb: "arb_Arab",
+    },
+    TargetLanguage {
+        label: "Spanish",
+        bcp47: "es",
+        nllb: "spa_Latn",
+    },
+    TargetLanguage {
+        label: "German",
+        bcp47: "de",
+        nllb: "deu_Latn",
+    },
+    TargetLanguage {
+        label: "Italian",
+        bcp47: "it",
+        nllb: "ita_Latn",
+    },
+    TargetLanguage {
+        label: "Portuguese",
+        bcp47: "pt",
+        nllb: "por_Latn",
+    },
+    TargetLanguage {
+        label: "Turkish",
+        bcp47: "tr",
+        nllb: "tur_Latn",
+    },
+    TargetLanguage {
+        label: "Russian",
+        bcp47: "ru",
+        nllb: "rus_Cyrl",
+    },
+    TargetLanguage {
+        label: "Hindi",
+        bcp47: "hi",
+        nllb: "hin_Deva",
+    },
+    TargetLanguage {
+        label: "Chinese (Simplified)",
+        bcp47: "zh",
+        nllb: "zho_Hans",
+    },
+    TargetLanguage {
+        label: "Japanese",
+        bcp47: "ja",
+        nllb: "jpn_Jpan",
+    },
+    TargetLanguage {
+        label: "Korean",
+        bcp47: "ko",
+        nllb: "kor_Hang",
+    },
+    TargetLanguage {
+        label: "Dutch",
+        bcp47: "nl",
+        nllb: "nld_Latn",
+    },
 ];
 
 /// Normalize a BCP-47 / ISO tag to its lowercase base language subtag

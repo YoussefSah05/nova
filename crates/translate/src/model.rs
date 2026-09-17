@@ -77,7 +77,10 @@ pub async fn ensure_model(
         )
         .await?;
     }
-    if !VOCAB_CANDIDATES.iter().any(|v| models_dir.join(v).is_file()) {
+    if !VOCAB_CANDIDATES
+        .iter()
+        .any(|v| models_dir.join(v).is_file())
+    {
         // Try each candidate; the first that returns 200 wins.
         let mut got = false;
         for v in VOCAB_CANDIDATES {

@@ -96,7 +96,9 @@ fn dedup_preserve_order<T: Clone + Eq + std::hash::Hash>(
     keys: impl IntoIterator<Item = T>,
 ) -> Vec<T> {
     let mut seen = std::collections::HashSet::new();
-    keys.into_iter().filter(|k| seen.insert(k.clone())).collect()
+    keys.into_iter()
+        .filter(|k| seen.insert(k.clone()))
+        .collect()
 }
 
 /// Lazily embed any not-yet-embedded segments of a transcript (best-effort: the
@@ -388,7 +390,16 @@ pub async fn semantic_search_channels(
 
     // Lexical leg — existing grouped LIKE search.
     let lexical = ch
-        .list_groups(source_id, None, None, Some(&q), false, false, (limit * 3).max(90), 0)
+        .list_groups(
+            source_id,
+            None,
+            None,
+            Some(&q),
+            false,
+            false,
+            (limit * 3).max(90),
+            0,
+        )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let lexical_keys = dedup_preserve_order(lexical.iter().map(|g| g.group.clone()));

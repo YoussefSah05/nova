@@ -281,10 +281,7 @@ async fn run_session_inner(
                 text: text.clone(),
             })
             .collect();
-        trepo
-            .insert_batch(&rows)
-            .await
-            .map_err(|e| e.to_string())?;
+        trepo.insert_batch(&rows).await.map_err(|e| e.to_string())?;
 
         // Emit the freshly-translated cues.
         let cues: Vec<CueDto> = pending

@@ -243,7 +243,9 @@ async fn run_enrichment(
         // content_kind convention.
         let embed_repo = EmbeddingRepository::new(&pool);
         embed_repo.upsert_many("live", MODEL_ID, &ch_embed).await?;
-        embed_repo.upsert_many("movie", MODEL_ID, &vod_embed).await?;
+        embed_repo
+            .upsert_many("movie", MODEL_ID, &vod_embed)
+            .await?;
     }
 
     // Series embedding stage — series are title-keyed (not in the catalog sweep),
@@ -262,15 +264,18 @@ async fn run_enrichment(
             .collect();
         let titles: Vec<String> = series_work.iter().map(|(t, _)| t.clone()).collect();
         let cdir = cache_dir_series;
-        let vectors = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<Vec<f32>>, String> {
-            let embedder = FastEmbedder::load(&cdir, false).map_err(|e| e.to_string())?;
-            embedder.embed(&texts).map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .map_err(ApiError::Internal)?;
+        let vectors =
+            tauri::async_runtime::spawn_blocking(move || -> Result<Vec<Vec<f32>>, String> {
+                let embedder = FastEmbedder::load(&cdir, false).map_err(|e| e.to_string())?;
+                embedder.embed(&texts).map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .map_err(ApiError::Internal)?;
         let rows: Vec<(String, Vec<f32>)> = titles.into_iter().zip(vectors).collect();
-        series_repo.apply_embeddings(source_id, MODEL_ID, &rows).await?;
+        series_repo
+            .apply_embeddings(source_id, MODEL_ID, &rows)
+            .await?;
     }
 
     // Phase C — opt-in TMDB pass (canonical titles, posters, backdrops, genres).

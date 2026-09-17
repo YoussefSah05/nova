@@ -561,11 +561,7 @@ impl<'a> SeriesRepository<'a> {
 
     /// How many series vectors exist for a source + model (cache-invalidation
     /// signal for the in-memory index).
-    pub async fn count_embeddings(
-        &self,
-        source_id: i64,
-        model: &str,
-    ) -> Result<i64, StorageError> {
+    pub async fn count_embeddings(&self, source_id: i64, model: &str) -> Result<i64, StorageError> {
         let row = sqlx::query!(
             r#"SELECT COUNT(*) as "n!: i64" FROM series_embeddings
                WHERE source_id = ? AND model = ?"#,

@@ -236,7 +236,10 @@ mod tests {
         let repo = EmbeddingRepository::new(&pool);
         // Initially missing, then embedded.
         assert_eq!(
-            repo.segments_missing_embeddings(id, "m").await.unwrap().len(),
+            repo.segments_missing_embeddings(id, "m")
+                .await
+                .unwrap()
+                .len(),
             1
         );
         repo.upsert_many("segment", "m", &[(seg, vec![1.0, 0.0, 0.0])])

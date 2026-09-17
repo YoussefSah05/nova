@@ -33,7 +33,9 @@ impl NllbTranslator {
     /// Load the CTranslate2 model + SentencePiece tokenizer from `models_dir`.
     pub fn load(models_dir: &Path) -> Result<Self, TranslateError> {
         if !model::is_installed(models_dir) {
-            return Err(TranslateError::ModelMissing(models_dir.display().to_string()));
+            return Err(TranslateError::ModelMissing(
+                models_dir.display().to_string(),
+            ));
         }
         let spm = model::spm_path(models_dir);
         // NLLB shares one SentencePiece model for both sides.
@@ -87,18 +89,13 @@ impl NllbTranslator {
                 .map_err(|e| TranslateError::Inference(e.to_string()))?;
 
             for r in results {
-                let hyp = r
-                    .hypotheses
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| TranslateError::Inference("no hypothesis returned".into()))?;
+                let hyp =
+                    r.hypotheses.into_iter().next().ok_or_else(|| {
+                        TranslateError::Inference("no hypothesis returned".into())
+                    })?;
                 // Drop the target-lang prefix token and any trailing EOS, then
                 // detokenize back to text.
-                let toks: Vec<String> = hyp
-                    .into_iter()
-                    .skip(1)
-                    .filter(|t| t != "</s>")
-                    .collect();
+                let toks: Vec<String> = hyp.into_iter().skip(1).filter(|t| t != "</s>").collect();
                 let text = self
                     .sp
                     .decode(toks)

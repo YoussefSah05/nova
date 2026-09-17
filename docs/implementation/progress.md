@@ -4,7 +4,7 @@
 
 - Source: c2841bc, preserved in local baseline commit 679c251 and immutable v0.1.0 tag.
 - 150 Rust tests pass with localhost access; 9 frontend tests, typecheck and Clippy pass.
-- Pre-existing formatting differences in 11 files; no real-app E2E/device certification.
+- Pre-existing formatting differences in 10 files; no real-app E2E/device certification.
 - Remote protection/CI cannot be verified: GitHub CLI has no authentication.
 - Main remains untouched. No push/publication or claim of remote CI success.
 
@@ -26,7 +26,13 @@ remaining native/model gaps. Frontend 9 tests/typecheck/lint and locked workspac
 check pass after the app version change. Bootstrap shell syntax and Justfile parse
 pass; clean setup and remote CI are not claimed.
 
-Next: commit; introduce a small pure
+Environment checkpoint: `90a4536` on `feat/baseline-environment`.
+
+Mechanical formatting follow-up: run the selected rustfmt on the 10 pre-existing
+files in a separate branch/commit; no intentional semantic changes. Formatting
+now passes. This does not change the historical baseline's recorded debt.
+
+Next: introduce a small pure
 catalog domain module with opaque typed IDs, preserved source evidence and explicit
 unknowns. Do not connect it to real imports or migrate user state before fixture/E2E
 coverage. Every compatibility layer will require a removal condition.

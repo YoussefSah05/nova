@@ -79,10 +79,7 @@ impl AppState {
     /// The shared embedder, loading it (downloading nothing — the model must
     /// already be installed) on first use. The cold ONNX init runs on a blocking
     /// thread; the async lock serializes concurrent first-loads so we load once.
-    pub async fn semantic_embedder(
-        &self,
-        model_dir: &Path,
-    ) -> Result<Arc<dyn Embedder>, String> {
+    pub async fn semantic_embedder(&self, model_dir: &Path) -> Result<Arc<dyn Embedder>, String> {
         let mut guard = self.semantic_embedder.lock().await;
         if let Some(e) = guard.as_ref() {
             return Ok(e.clone());

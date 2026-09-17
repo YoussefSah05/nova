@@ -115,10 +115,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let seg0: i64 = sqlx::query_scalar("SELECT id FROM transcript_segments ORDER BY id LIMIT 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let seg0: i64 =
+            sqlx::query_scalar("SELECT id FROM transcript_segments ORDER BY id LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         TranslationRepository::new(&pool)
             .insert_batch(&[TranslationRow {
                 segment_id: seg0,
