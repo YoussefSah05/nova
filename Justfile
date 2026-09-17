@@ -23,6 +23,13 @@ verify-environment:
 test-environment:
     pnpm test:environment
 
+# Synthetic loopback provider (Ctrl+C stops it); no playable media yet
+fixture-provider:
+    cargo run -p nova-iptv-fixture --locked
+
+test-fixtures:
+    cargo test -p nova-iptv-fixture --locked
+
 # Start the Tauri dev window
 dev:
     pnpm dev

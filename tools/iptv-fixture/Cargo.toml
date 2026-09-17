@@ -1,0 +1,19 @@
+[package]
+name = "nova-iptv-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Deterministic loopback-only provider fixtures for Nova integration tests"
+
+[dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+nova-core = { path = "../../crates/core" }
+nova-m3u = { path = "../../crates/m3u" }
+nova-xtream = { path = "../../crates/xtream" }
+nova-epg = { path = "../../crates/epg" }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tv>
+  <channel id="sports1.test"><display-name>Example Sports 1</display-name></channel>
+  <channel id="sports2.test"><display-name>رياضة 2</display-name></channel>
+  <programme channel="sports1.test" start="20260917120000 +0000" stop="20260917130000 +0000"><title lang="fr">Journal sportif</title></programme>
+  <programme channel="sports2.test" start="20260917130000 +0100" stop="20260917140000 +0100"><title lang="ar">أخبار الرياضة</title></programme>
+</tv>

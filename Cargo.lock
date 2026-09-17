@@ -3176,6 +3176,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-iptv-fixture"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "nova-core",
+ "nova-epg",
+ "nova-m3u",
+ "nova-xtream",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "nova-jobs"
 version = "0.1.0"
 dependencies = [

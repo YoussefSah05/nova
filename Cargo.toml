@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "tools/iptv-fixture",
     "apps/desktop/src-tauri",
     "crates/core",
     "crates/m3u",

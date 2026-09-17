@@ -1,0 +1,4 @@
+[
+  {"stream_id":101,"name":"FR| Example Sports 1 FHD","epg_channel_id":"sports1.test","category_name":"FR SPORTS","provider_unknown":"preserve-in-raw-snapshot"},
+  {"stream_id":102,"name":"AR| رياضة 2 HD","epg_channel_id":"sports2.test","category_name":"AR SPORTS"}
+]

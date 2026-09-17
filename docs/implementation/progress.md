@@ -93,7 +93,38 @@ Next: deterministic sanitized provider fixtures and adapter contract tests, foll
 by protected snapshot persistence with crash/replay tests. Keep existing import
 behavior until the storage and actual-app E2E gates are satisfied.
 
-## Remaining gates
+## Completed local increment: deterministic provider fixture contracts
+
+Goal: exercise actual existing clients against an isolated synthetic HTTP provider.
+Boundary: tools/iptv-fixture plus fixtures/tests, with one isolated M3U correction
+after the fixture reproduced a Unicode slicing panic. See [regression evidence](m3u-utf8-regression.md).
+Research: pinned Axum graceful-shutdown contract; reviewed current M3U/Xtream/EPG
+APIs and import-validation skill. Required tests: normal and partial/fault endpoints,
+raw names, duplicate IDs, episode order, XMLTV offsets, readiness and shutdown.
+E2E: not claimed; this is a prerequisite fixture service, not a Tauri test. Migration
+risk: no profile access or data changes. Rollback removes the dev-only tool/member.
+Acceptance: fixture tests, full workspace regression, Clippy/format/manifest checks;
+prove desktop dependency graph does not include the fixture crate.
+
+Implemented on `feat/iptv-fixture-contracts`: versioned synthetic M3U/Xtream/XMLTV
+corpus, loopback-only provider with ephemeral ports and bounded shutdown, plus nine
+integration tests using the actual parser clients. Fault scenarios distinguish
+HTTP failure, malformed payload and valid empty scope. The fixture reproduced an
+M3U Unicode panic; an isolated regression test failed before the narrow correction.
+
+Validation: all 184 Rust tests pass, including nine fixture tests and the new M3U
+regression. Workspace Clippy with warnings denied, rustfmt, frontend typecheck/lint,
+nine frontend tests, seven environment tests and manifest verification pass.
+The desktop normal dependency graph excludes nova-iptv-fixture. Cargo.lock adds
+only the local tool package; no external packages were upgraded. No Python venv or
+Docker service is introduced. No user profile or provider account was accessed.
+
+This checkpoint does not certify production imports: the real-provider probe and
+running-app check required by import-validation remain outstanding. No remote CI,
+native E2E, playable-media or catalog publication claim is made. Next: protected
+snapshot persistence/replay, followed by lossless adapters and app-level validation.
+
+## Remaining integration gates
 
 - Remote CI/protection/merge unavailable without GitHub authentication.
 - No deterministic native E2E harness yet.

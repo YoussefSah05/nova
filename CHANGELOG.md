@@ -10,6 +10,10 @@
   explicit unknown numbering and diagnostic redaction; no profile migration yet.
 - Add bounded snapshot capture, immutable completion receipts and safe per-endpoint
   partial-refresh selection, plus versioned SHA-256 metadata/locator fingerprints.
+- Add a synthetic loopback IPTV provider and real-client integration tests for M3U,
+  Xtream, lazy episodes and XMLTV.
+- Correct M3U episode suffix offsets for Unicode titles; regression tests pass,
+  with real-provider and running-app validation still outstanding.
 
 ## 0.1.0 — pre-migration historical baseline
 

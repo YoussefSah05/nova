@@ -52,6 +52,8 @@ of the native Rust/React application. No Docker wrapper is needed for macOS E2E.
 Update manifest and relevant native lock/config files together in dedicated PRs.
 Catalog fingerprint format v1 uses the existing locked sha2 0.10.9 dependency;
 the core crate now declares that workspace dependency without upgrading any package.
+The test-only `nova-iptv-fixture` workspace tool uses existing Axum/Tokio packages;
+its parser clients are dev-dependencies, never dependencies of the desktop app.
 CI validates repository consistency; `doctor` additionally compares executable
 versions. The existing macOS CI still uses Homebrew mpv, so its native closure is
 not reproducible yet. Model revision/hash verification, actual linked SQLite patch
