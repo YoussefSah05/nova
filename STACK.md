@@ -59,6 +59,9 @@ tempfile 3.27.0 and libc 0.2.186 packages. The macOS profile-key adapter uses
 security-framework 3.7.0 (OSX_10_15 feature) and core-foundation 0.10.1. Its native
 probe currently fails with MissingEntitlement; signed-app integration is pending.
 The snapshot storage API still requires an explicitly supplied profile key.
+V2 snapshot streaming reuses these packages and Rust's file-lock API; no new
+dependency or Python environment is introduced. See ADR 0006 for quota scope and
+the separate v1/v2 on-disk formats.
 CI validates repository consistency; `doctor` additionally compares executable
 versions. The existing macOS CI still uses Homebrew mpv, so its native closure is
 not reproducible yet. Model revision/hash verification, actual linked SQLite patch

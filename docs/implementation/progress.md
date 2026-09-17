@@ -177,6 +177,35 @@ streaming and aggregate retention. Signed-app validation and durable profile key
 provisioning/recovery remain required before import wiring; rotation/deletion are
 not implemented by this increment.
 
+## Completed local increment: streaming snapshot quotas
+
+Goal: stream encrypted evidence beyond the v1 memory ceiling, enforce conservative
+storage admission, and preserve existing snapshots through failures. Scope is an
+unconsumed v2 storage module; no importer/schema/user-data changes. Research and
+format: [ADR 0006](../adr/0006-streaming-snapshot-quotas.md). V1 remains readable.
+
+Implemented on `feat/streaming-snapshot-quotas`: fixed 64 KiB authenticated frames,
+mandatory final receipt, one-slot worker channels, OS lock coordination and logical
+byte/file quotas that charge interrupted staging. Quota exhaustion rejects writes;
+there is no automatic eviction before catalog references/leases exist. Replay output
+is provisional until final verification and must be staged by consumers.
+
+Nine integration tests and two new subprocess interruption cases pass in storage,
+including a 17.0625 MiB stream, tamper/truncation/order checks, cross-profile/key/ID
+isolation, cancellation, quota races, orphans and commit visibility. Full workspace:
+212 Rust tests pass; Clippy with warnings denied, rustfmt, seven environment tests
+and manifest verification pass. Ordinary discovery excludes the same subprocess
+helper (run by parent tests) and native Keychain test. Frontend is unchanged and
+its preceding checks were not rerun in this Rust-only slice.
+No dependency upgrades or Python environment. Signed-app
+Keychain validation is still blocked by the previously observed MissingEntitlement;
+the native probe was not rerun without a signing change.
+
+Rollback removes the unconsumed v2 module/API additions without migrating/deleting
+v1 evidence. Next: protected record staging and lossless adapters; reference-aware
+retention; signed-app key lifecycle and isolated-profile app E2E. No automatic
+deletion, physical power-loss, production security or RSS benchmark claim is made.
+
 ## Remaining integration gates
 
 - Remote CI/protection/merge unavailable without GitHub authentication.

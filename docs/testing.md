@@ -50,6 +50,12 @@ provisioning with MissingEntitlement in the Cargo executable; see
 [ADR 0005](adr/0005-profile-snapshot-keys.md) for the command and signed-app gate.
 Do not interpret ordinary unit-test success as native Keychain validation.
 
-Next gates: signed-app Keychain/retention integration and adapter evidence completeness;
+V2 storage tests additionally stream 17.0625 MiB through a hashing sink, reject
+corrupt/reordered/truncated frames, enforce byte/file quotas across handles, account
+for staging orphans, and test process exit around commit. The v1 tests remain intact.
+Replay consumers must not publish provisional output before the final receipt.
+RSS, physical power-loss and automatic retention deletion are not certified.
+
+Next gates: signed-app Keychain/reference-aware retention integration and adapter evidence completeness;
 then real macOS app E2E using an isolated test profile. Playable media, segmented
 fault injection, sleep/wake, caption quality and AirPlay still need distinct coverage.

@@ -82,7 +82,13 @@ macOS adapter uses the data-protection Keychain without overwriting existing key
 The native provisioning probe failed with MissingEntitlement, so this remains
 unconnected to imports. See [ADR 0005](adr/0005-profile-snapshot-keys.md).
 
-Next steps: signed-app Keychain validation, durable key lifecycle, streaming/aggregate retention, then
+The v2 `snapshots::stream` prototype handles larger payloads through 64 KiB frames
+and enforces byte/file quotas under an OS lock. V1 storage is unchanged. Replay
+output stays provisional until the final receipt succeeds; callers must stage it.
+Unknown/orphan files consume quota, and full stores reject new work. No automatic
+deletion is implemented. See [ADR 0006](adr/0006-streaming-snapshot-quotas.md).
+
+Next steps: signed-app Keychain validation, durable key lifecycle, reference-aware retention, then
 fixture-backed lossless source adapters and record persistence. Actual import/publication changes
 require regression, migration and real-app E2E evidence before activation. See the
 production blueprint for the proposed full architecture; do not confuse it with

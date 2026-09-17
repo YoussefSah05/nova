@@ -18,6 +18,8 @@
   replay, private files, no-overwrite commits and process-interruption tests.
 - Add profile snapshot-key provision/load contracts and a macOS Keychain adapter;
   native provisioning still requires signing-entitlement validation.
+- Add v2 streaming encrypted snapshots with authenticated final receipts, bounded
+  queues and conservative byte/file quotas; automatic eviction remains pending.
 
 ## 0.1.0 — pre-migration historical baseline
 

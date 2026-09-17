@@ -25,6 +25,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 const MAGIC: &[u8; 8] = b"NOVASNP1";
+pub mod stream;
 const SALT_LEN: usize = 32;
 const METADATA_LIMIT: usize = 4096;
 /// Prototype ceiling: larger provider snapshots need a chunked format first.
@@ -32,6 +33,10 @@ pub const MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotStoreError {
+    #[error("snapshot store is busy")]
+    Busy,
+    #[error("snapshot storage quota exceeded")]
+    Quota,
     #[error("snapshot size limit exceeded")]
     Limit,
     #[error("snapshot integrity check failed")]
@@ -383,9 +388,6 @@ mod crash_tests {
         let parent = PathBuf::from(std::env::var_os("NOVA_SNAPSHOT_TEST_ROOT").unwrap());
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
-            let store = SnapshotStore::open(parent, Uuid::nil(), ProfileKey::new([7; 32]), 1024)
-                .await
-                .unwrap();
             let mut capture = SnapshotCapture::new(
                 SnapshotDescriptor {
                     id: SnapshotId::new("crash").unwrap(),
@@ -399,11 +401,29 @@ mod crash_tests {
                 },
             );
             capture.push_bytes(b"synthetic secret").unwrap();
-            store
-                .persist(
-                    capture.seal(Completeness::Complete).unwrap(),
-                    b"synthetic secret".to_vec(),
+            let receipt = capture.seal(Completeness::Complete).unwrap();
+            if std::env::var("NOVA_SNAPSHOT_TEST_INTERRUPT")
+                .unwrap()
+                .starts_with("stream-")
+            {
+                let store = stream::StreamingSnapshotStore::open(
+                    parent,
+                    Uuid::nil(),
+                    ProfileKey::new([7; 32]),
+                    stream_limits(),
                 )
+                .await
+                .unwrap();
+                let mut writer = store.begin(receipt.descriptor().clone()).await.unwrap();
+                writer.append(b"synthetic secret").await.unwrap();
+                writer.seal(receipt).await.unwrap();
+                return;
+            }
+            let store = SnapshotStore::open(parent, Uuid::nil(), ProfileKey::new([7; 32]), 1024)
+                .await
+                .unwrap();
+            store
+                .persist(receipt, b"synthetic secret".to_vec())
                 .await
                 .unwrap();
         });
@@ -438,6 +458,39 @@ mod crash_tests {
         };
         assert_eq!(status.code(), Some(86));
         tokio::runtime::Runtime::new().unwrap().block_on(async {
+            if phase.starts_with("stream-") {
+                let store = stream::StreamingSnapshotStore::open(
+                    dir.path().to_owned(),
+                    Uuid::nil(),
+                    ProfileKey::new([7; 32]),
+                    stream_limits(),
+                )
+                .await
+                .unwrap();
+                let mut output = Vec::new();
+                let result = store
+                    .replay_into(SnapshotId::new("crash").unwrap(), &mut output)
+                    .await;
+                if published {
+                    assert!(result.is_ok());
+                    assert_eq!(output, b"synthetic secret");
+                } else {
+                    assert!(matches!(result, Err(SnapshotStoreError::NotFound)));
+                }
+                // A committed file or abandoned staging consumes the only slot;
+                // Quota (not Busy) also proves the crashed process released its lock.
+                let descriptor = SnapshotDescriptor {
+                    id: SnapshotId::new("next").unwrap(),
+                    source_id: SourceId::new("source").unwrap(),
+                    scope: EndpointScope::new("vod").unwrap(),
+                    parser_revision: NonZeroU32::new(1).unwrap(),
+                };
+                assert!(matches!(
+                    store.begin(descriptor).await,
+                    Err(SnapshotStoreError::Quota)
+                ));
+                return;
+            }
             let store = SnapshotStore::open(
                 dir.path().to_owned(),
                 Uuid::nil(),
@@ -466,5 +519,20 @@ mod crash_tests {
     #[test]
     fn interruption_after_commit_replays_complete_evidence() {
         assert_boundary("committed", true);
+    }
+    fn stream_limits() -> stream::StreamLimits {
+        stream::StreamLimits {
+            max_payload_bytes: 1024,
+            max_stored_bytes: 8192,
+            max_files: 1,
+        }
+    }
+    #[test]
+    fn stream_interruption_before_commit_charges_orphan_and_releases_lock() {
+        assert_boundary("stream-staged", false);
+    }
+    #[test]
+    fn stream_interruption_after_commit_replays_evidence_and_releases_lock() {
+        assert_boundary("stream-committed", true);
     }
 }
