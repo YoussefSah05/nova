@@ -70,8 +70,15 @@ No external package version changed. Independent Python hashlib vectors validate
 Rust metadata/locator encoding, in addition to the standard SHA-256 payload vector.
 No Python dependency or virtual environment is required by the Rust tests.
 
-Next steps: fixture-backed source adapters and protected snapshot storage staging,
-including record uniqueness, durable completion markers and crash recovery. Actual import/publication changes
+`nova_storage::snapshots` now provides a Unix-only encrypted file-store prototype.
+It retains raw bytes and receipt metadata together, verifies both on replay, and
+commits immutable files without replacement. Process-interruption tests cover the
+staging/commit boundary. See [ADR 0004](adr/0004-protected-snapshot-files.md) for the
+format, trust boundary, 16 MiB ceiling and cancellation semantics. The store is
+not connected to imports and does not persist normalized SourceRecords yet.
+
+Next steps: Keychain-backed key lifecycle, streaming/aggregate retention, then
+fixture-backed lossless source adapters and record persistence. Actual import/publication changes
 require regression, migration and real-app E2E evidence before activation. See the
 production blueprint for the proposed full architecture; do not confuse it with
 the implementation described here.

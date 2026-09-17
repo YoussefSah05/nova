@@ -7,6 +7,8 @@
 pub mod db;
 pub mod error;
 pub mod repositories;
+#[cfg(unix)]
+pub mod snapshots;
 
 pub use db::{init_app_db, init_profile_db};
 pub use error::StorageError;

@@ -37,6 +37,13 @@ supports graceful shutdown. Adopt a bound listener plus shutdown signal and harn
 deadline; avoid fixed port/sleep-based readiness or a public provider dependency.
 No Docker or Python environment is required for this native Rust fixture service.
 
-Next gates: protected snapshot persistence/replay and adapter evidence completeness;
+The encrypted file-store prototype is tested with
+`cargo test -p nova-storage --locked`: fixture-byte replay after reopen, tamper and
+cross-profile rejection, quotas, concurrent commits, private permissions and two
+abrupt subprocess exits at staging/commit boundaries. The ignored subprocess helper
+is explicitly executed by those boundary tests. These are process-restart tests,
+not a physical power-loss or app E2E certification.
+
+Next gates: Keychain/retention integration and adapter evidence completeness;
 then real macOS app E2E using an isolated test profile. Playable media, segmented
 fault injection, sleep/wake, caption quality and AirPlay still need distinct coverage.

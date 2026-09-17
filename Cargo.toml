@@ -63,6 +63,10 @@ ct2rs = "0.9"
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+ring = "0.17"
+zeroize = "1"
+tempfile = "3"
+libc = "0.2"
 
 # Apple native view interop
 objc2 = "0.6"

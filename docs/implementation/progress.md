@@ -124,6 +124,32 @@ running-app check required by import-validation remain outstanding. No remote CI
 native E2E, playable-media or catalog publication claim is made. Next: protected
 snapshot persistence/replay, followed by lossless adapters and app-level validation.
 
+## Completed local increment: protected snapshot files
+
+Goal: retain raw evidence and capture receipt metadata under authenticated
+encryption with bounded replay and immutable commits. Scope is an unconsumed
+Unix storage module; no SQLite migrations, importer edits or user-profile access.
+Research and format choices are in [ADR 0004](../adr/0004-protected-snapshot-files.md).
+Required validation: failed-first contract tests, tamper/ownership/quota checks,
+concurrent commits, restart after abrupt exits at commit boundaries, full Rust
+regression, Clippy/rustfmt and manifest checks. App E2E is an integration gate.
+
+Implemented on `feat/protected-snapshot-store`: caller-supplied profile key,
+AES-256-GCM with fresh per-object HKDF subkey, encrypted metadata/raw bytes,
+private staging and no-clobber commit, authenticated bounded replay. Eight
+integration tests and two abrupt-exit subprocess tests pass in the storage crate.
+Full workspace: 194 Rust tests pass; workspace Clippy with warnings denied,
+rustfmt, seven environment tests and manifest verification pass. Frontend code
+is unchanged; its nine tests/typecheck/lint passed at the preceding checkpoint
+and were not rerun for this Rust-only slice. The subprocess helper is intentionally
+ignored by direct test discovery and invoked by the boundary tests.
+
+No external package upgrades or Python environment. Rollback removes the new
+module and dependency edges without changing databases. Keychain key lifecycle,
+streaming beyond 16 MiB, aggregate quotas, cleanup leases, normalized records and
+app import wiring remain separate required work. No production security or E2E
+certification is claimed for this prototype.
+
 ## Remaining integration gates
 
 - Remote CI/protection/merge unavailable without GitHub authentication.

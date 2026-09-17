@@ -14,6 +14,8 @@
   Xtream, lazy episodes and XMLTV.
 - Correct M3U episode suffix offsets for Unicode titles; regression tests pass,
   with real-provider and running-app validation still outstanding.
+- Add an unconnected encrypted snapshot file-store prototype with authenticated
+  replay, private files, no-overwrite commits and process-interruption tests.
 
 ## 0.1.0 — pre-migration historical baseline
 
