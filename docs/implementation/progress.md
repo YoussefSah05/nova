@@ -45,7 +45,7 @@ module has no runtime consumers; yes before adapters publish its output. Migrati
 risk: none to user data. Rollback: remove the unconsumed module. Acceptance: focused
 tests and neighboring workspace checks pass without changing current imports.
 
-Implemented on `feat/catalog-source-contract`: bounded immutable SourceRecord,
+Implemented in `d93d82e` on `feat/catalog-source-contract`: bounded immutable SourceRecord,
 source/snapshot/entity/edition/variant/binding IDs, protected-locator references,
 explicit kind/numbering unknowns and a separate StreamVariant view. Ten integration
 tests and one compile-fail doctest were added after first confirming the missing

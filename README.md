@@ -7,9 +7,12 @@ Transcribe VOD content on your Mac (whisper.cpp, Apple Neural Engine). Translate
 language via NLLB-200 — all on device, no cloud required. A signature "translation card"
 overlay makes watching content in any language effortless.
 
-**Status**: Phase 2 — M3U/Xtream import complete and validated. Phase 3 browse foundation
-is implemented for imported content; favourites and playback-facing shelves are still pending.
-See `ARCHITECTURE.md` for the full roadmap.
+**Status**: 0.2.0-alpha.0 development, starting the production architecture migration.
+Provider import, browsing, favorites/history, native playback, local captions,
+translation and search exist. New catalog contracts are not yet connected to imports.
+See [implementation progress](docs/implementation/progress.md) for verified checkpoints
+and outstanding E2E/device/release gates; the historical architecture brief contains
+older plans and is not a current feature-status ledger.
 
 ---
 
@@ -17,11 +20,11 @@ See `ARCHITECTURE.md` for the full roadmap.
 
 | Tool | Version | Install |
 |---|---|---|
-| [mise](https://mise.jdx.dev) | latest | `curl https://mise.run \| sh` |
-| Rust | 1.84 | via mise |
-| Node.js | 22 | via mise |
-| pnpm | 9 | via mise |
-| just | latest | via mise |
+| [mise](https://mise.jdx.dev) | bootstrap tool | [Official installation](https://mise.jdx.dev/getting-started.html) |
+| Rust | 1.95.0 | via mise |
+| Node.js | 22.22.3 | via mise |
+| pnpm | 9.15.4 | via mise |
+| just | 1.51.0 | via mise |
 
 > macOS 14+ on Apple Silicon is the primary target. Intel Mac and Windows are planned.
 
@@ -34,19 +37,23 @@ See `ARCHITECTURE.md` for the full roadmap.
 git clone https://github.com/YoussefSah05/nova.git
 cd nova
 
-# 2. Install all toolchain dependencies and fetch packages
-just setup
+# 2. Install selected toolchains and fetch locked packages (mise required)
+bash scripts/bootstrap.sh
 
 # 3. Open the dev window
 just dev
 ```
 
-`just setup` runs once on a fresh clone:
+`bash scripts/bootstrap.sh` (also `just setup`) performs explicit development setup:
 1. Installs pinned Rust, Node, pnpm, and `just` via `mise install`.
-2. Installs all JavaScript packages via `pnpm install`.
-3. Fetches all Rust crate dependencies via `cargo fetch`.
-4. Runs placeholder scripts for FFmpeg, Whisper, and NLLB models
-   (actual downloads deferred to first-run in Phase 6/7).
+2. Installs JavaScript packages via `pnpm install --frozen-lockfile`.
+3. Fetches Rust dependencies via `cargo fetch --locked`.
+4. Runs development-toolchain verification. It does not install media libraries or models.
+
+Native mpv/FFmpeg/Whisper dependencies still require separate setup; a reproducible
+native SDK and clean-machine certification are pending. See [STACK.md](STACK.md)
+before trying playback. `pnpm doctor` reports tool drift and known readiness gaps;
+it never silently installs tools or opens user databases.
 
 `just dev` compiles the Rust backend and opens a Tauri window with the Vite dev server.
 Hot module replacement is active for the React frontend.
@@ -67,6 +74,10 @@ just clean        Remove all build artifacts
 just check        Fast cargo check (no artifacts produced)
 just test-rust    Rust tests only
 just test-ts      TypeScript tests only
+just stack        Show selected versions and manifest consistency
+just doctor       Check actual development tool versions
+just verify-environment  Fail on manifest/toolchain drift
+just test-environment    Run environment-tooling regression tests
 ```
 
 ---
