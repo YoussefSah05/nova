@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod catalog;
 pub mod classify;
 pub mod clean;
 pub mod region;

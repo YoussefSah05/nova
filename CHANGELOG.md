@@ -6,6 +6,8 @@
 - Pin selected Rust/Node/pnpm/just versions; use locked package resolution and explicit bootstrap.
 - Add environment drift regression tests and CI manifest validation.
 - Catalog and player runtime behavior remain on the existing implementation.
+- Add unconsumed catalog source contracts with typed IDs, bounded preserved evidence,
+  explicit unknown numbering and diagnostic redaction; no profile migration yet.
 
 ## 0.1.0 — pre-migration historical baseline
 

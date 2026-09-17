@@ -1,5 +1,11 @@
 # IPTV Streaming Platform — Architecture & Initialization Brief
 
+> Implementation note (2026-09-17): this historical brief contains planned and stale
+> behavior. Current production-migration contracts are documented in `docs/catalog.md`
+> and `STACK.md`; progress and validation are in `docs/implementation/progress.md`.
+> The additive `nova-core::catalog` module is not connected to existing imports yet.
+> The full future design is `docs/nova-production-architecture-blueprint.md`.
+
 > Master document for project scaffolding.
 > Project codename: **Stream** (placeholder — rename as desired).
 > Version 2 — translation pipeline integrated.
