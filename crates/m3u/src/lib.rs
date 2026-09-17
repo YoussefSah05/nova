@@ -459,8 +459,12 @@ fn extract_season_episode(title: &str) -> (String, Option<u8>, Option<u8>) {
 }
 
 fn find_season_episode(title: &str) -> Option<(usize, u8, u8)> {
-    let upper = title.to_uppercase();
-    let chars: Vec<char> = upper.chars().collect();
+    // S/E markers are ASCII. Preserve original byte offsets and avoid Unicode
+    // uppercase expansion (e.g. ß → SS) before slicing the original title.
+    let (offsets, chars): (Vec<usize>, Vec<char>) = title
+        .char_indices()
+        .map(|(offset, ch)| (offset, ch.to_ascii_uppercase()))
+        .unzip();
     let mut i = 0;
     while i < chars.len() {
         if chars[i] == 'S' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
@@ -487,7 +491,7 @@ fn find_season_episode(title: &str) -> Option<(usize, u8, u8)> {
                     i += 1;
                 }
                 if let (Ok(s), Ok(e)) = (s_str.parse::<u8>(), e_str.parse::<u8>()) {
-                    return Some((start, s, e));
+                    return Some((offsets[start], s, e));
                 }
             }
         } else {
@@ -502,6 +506,19 @@ fn find_season_episode(title: &str) -> Option<(usize, u8, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn episode_suffix_uses_original_utf8_byte_offsets() {
+        for title in ["Exemple / مثال", "Série française", "Straße", "🎬 Example"] {
+            let (name, season, episode) = extract_season_episode(&format!("{title} s01 e02"));
+            assert_eq!(name, title);
+            assert_eq!((season, episode), (Some(1), Some(2)));
+        }
+        assert_eq!(
+            extract_season_episode("مثال بلا أرقام"),
+            ("مثال بلا أرقام".into(), None, None)
+        );
+    }
 
     fn make_live() -> (ExtinfAttrs, &'static str) {
         (
