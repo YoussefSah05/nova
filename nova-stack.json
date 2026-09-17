@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "appVersion": "0.2.0-alpha.0",
+  "channel": "alpha",
+  "toolchain": {
+    "rust": "1.95.0",
+    "node": "22.22.3",
+    "pnpm": "9.15.4",
+    "just": "1.51.0"
+  },
+  "rustPackages": {
+    "tauri": "2.11.2",
+    "wry": "0.55.1",
+    "tao": "0.35.2",
+    "sqlx": "0.8.6",
+    "libsqlite3-sys": "0.30.1",
+    "tokio": "1.52.3",
+    "ct2rs": "0.9.19",
+    "fastembed": "4.9.1",
+    "ort": "2.0.0-rc.9"
+  },
+  "jsPackages": {
+    "react": "19.2.6",
+    "@tauri-apps/api": "2.11.0",
+    "@tauri-apps/cli": "2.11.2",
+    "typescript": "5.9.3",
+    "vite": "6.4.2",
+    "vitest": "2.1.9"
+  },
+  "macos": { "minimumSystemVersion": "14.0" },
+  "database": {
+    "registryMigration": "0001_init.sql",
+    "profileMigration": "0019_series_embeddings.sql"
+  },
+  "unverified": [
+    "Native SDK dependency closure, hashes and build configuration",
+    "Actual app-linked SQLite version, source ID and patch status",
+    "Model/tokenizer/CoreML artifact revisions, hashes and licenses",
+    "Clean bootstrap and signed packaged-app validation",
+    "macOS E2E and physical-device output validation"
+  ]
+}

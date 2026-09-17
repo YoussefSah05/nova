@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0-alpha.0 — in development
+
+- Add a development stack manifest and read-only stack/environment verification commands.
+- Pin selected Rust/Node/pnpm/just versions; use locked package resolution and explicit bootstrap.
+- Add environment drift regression tests and CI manifest validation.
+- Catalog and player runtime behavior remain on the existing implementation.
+
 ## 0.1.0 — pre-migration historical baseline
 
 - Preserve the existing Nova application and architecture proposals before production hardening.

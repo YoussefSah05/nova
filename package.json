@@ -1,9 +1,13 @@
 {
   "name": "nova",
-  "version": "0.1.0",
+  "version": "0.2.0-alpha.0",
   "private": true,
   "packageManager": "pnpm@9.15.4",
   "scripts": {
+    "stack": "node scripts/stack.mjs stack",
+    "doctor": "node scripts/stack.mjs doctor",
+    "verify-environment": "node scripts/stack.mjs verify-environment",
+    "test:environment": "node --test scripts/stack.test.mjs",
     "dev": "pnpm -C apps/desktop exec tauri dev",
     "build": "pnpm -C apps/desktop exec tauri build",
     "test": "pnpm -C apps/desktop run test",

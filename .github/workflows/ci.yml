@@ -24,7 +24,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: "1.95.0"
           components: rustfmt, clippy
           targets: aarch64-apple-darwin
 
@@ -47,13 +47,13 @@ jobs:
           brew install mpv
 
       - name: cargo check
-        run: cargo check --workspace
+        run: cargo check --workspace --locked
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: cargo fmt
         run: cargo fmt --all -- --check
@@ -73,7 +73,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.22.3"
           cache: "pnpm"
 
       - name: Install dependencies
@@ -81,6 +81,11 @@ jobs:
 
       - name: TypeScript type-check
         run: pnpm typecheck
+
+      - name: Stack manifest and tooling regression tests
+        run: |
+          pnpm verify-environment --manifest-only
+          pnpm test:environment
 
       - name: ESLint
         run: pnpm lint

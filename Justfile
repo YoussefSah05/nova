@@ -8,13 +8,20 @@ default:
 
 # Install all toolchain dependencies and fetch packages
 setup:
-    mise install
-    pnpm install
-    cargo fetch
-    @chmod +x scripts/*.sh
-    ./scripts/bundle-ffmpeg.sh
-    ./scripts/convert-whisper-models.sh
-    ./scripts/convert-nllb-models.sh
+    bash scripts/bootstrap.sh
+
+# Read-only stack inventory and drift checks (no model downloads)
+stack:
+    pnpm stack
+
+doctor:
+    pnpm doctor
+
+verify-environment:
+    pnpm verify-environment
+
+test-environment:
+    pnpm test:environment
 
 # Start the Tauri dev window
 dev:
@@ -26,12 +33,12 @@ build:
 
 # Run all tests (Rust + TypeScript)
 test:
-    cargo test --workspace
+    cargo test --workspace --locked
     pnpm test
 
 # Lint everything (Rust + TypeScript)
 lint:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --locked -- -D warnings
     pnpm lint
 
 # Auto-format everything (Rust + TypeScript)
@@ -50,11 +57,11 @@ clean:
 
 # Check Rust without producing artifacts (fast)
 check:
-    cargo check --workspace
+    cargo check --workspace --locked
 
 # Run only Rust tests
 test-rust:
-    cargo test --workspace
+    cargo test --workspace --locked
 
 # Run only TypeScript tests
 test-ts:

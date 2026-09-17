@@ -1,5 +1,5 @@
 [tools]
-rust = "stable"
-node = "22"
-pnpm = "9"
-just = "latest"
+rust = "1.95.0"
+node = "22.22.3"
+pnpm = "9.15.4"
+just = "1.51.0"
