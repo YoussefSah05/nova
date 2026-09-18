@@ -13,6 +13,7 @@ use std::{collections::BTreeMap, fmt};
 use serde::{Deserialize, Serialize};
 
 pub mod fingerprint;
+pub mod intelligence;
 pub mod snapshot;
 
 pub const MAX_FIELD_BYTES: usize = 16 * 1024;

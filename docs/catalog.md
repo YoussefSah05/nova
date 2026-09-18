@@ -101,3 +101,13 @@ Actual import/publication changes
 require regression, migration and real-app E2E evidence before activation. See the
 production blueprint for the proposed full architecture; do not confuse it with
 the implementation described here.
+# Catalog intelligence update — 2026-09-18
+
+Intelligent understanding is now a required subsystem in the production plan.
+The unconsumed `nova_core::catalog::intelligence` module validates bounded,
+record/snapshot-scoped proposals against caller-registered evidence, retains
+conflicts and separates inferred hints from observed properties. It performs no
+inference, research, persistence, identity merge or app import changes. See
+[ADR 0008](adr/0008-catalog-intelligence-evidence.md) and the
+[code baseline](implementation/intelligence-baseline.md). Existing catalog
+foundations and their remaining integration gates are documented below.

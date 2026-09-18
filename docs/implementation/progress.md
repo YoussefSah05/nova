@@ -236,7 +236,35 @@ followed by episode/M3U adapters and isolated-profile app validation. Keychain s
 reference-aware cleanup and publication remain gates. Rollback removes the unconsumed
 crate and abort addition without a data migration.
 
-## Remaining integration gates
+## Completed local increment: catalog intelligence evidence boundary
+
+Revised requirement: catalog understanding is a required subsystem, with model
+selection benchmark-driven. The updated blueprint replaces its previous optional
+LLM positioning. [Baseline](intelligence-baseline.md) and
+[ADR 0008](../adr/0008-catalog-intelligence-evidence.md) record scope and decisions.
+
+Implemented on `feat/catalog-intelligence-evidence`: unconsumed strict proposal
+validation in nova-core, typed taxonomy/quality/entity fields, caller-owned code
+registries and evidence, per-fact expiry, deterministic authority/conflict decisions,
+provisional inference, record/snapshot binding and bounded responses. Unknown or
+fabricated citations, suppressed conflicting assertions and model-supplied authority
+are rejected. No new title-cleaning rules or model/runtime dependencies were added.
+
+Validation: all 230 Rust tests pass, including nine new intelligence tests. Workspace
+Clippy with warnings denied, rustfmt, seven tooling tests, manifest verification and
+diff whitespace checks pass. Two ordinary-discovery exclusions remain: the crash
+helper invoked by parent tests and the native Keychain probe previously failing
+MissingEntitlement. No frontend changes or fresh frontend checks; no app E2E,
+model-quality benchmark, real-provider validation or production readiness claim.
+
+Next: reviewed multilingual evaluation corpus, replaceable reasoner/matcher and
+safe contextual input, cache-first orchestration and persistent knowledge/research
+cache. Raw framing, remaining adapters, signed key lifecycle, canonical identity
+and atomic publication remain prerequisites to app rollout. No active catalog LLM
+has been chosen or installed; the serving import pipeline still uses legacy logic.
+Rollback removes the unconsumed module without migrations or user-data changes.
+
+## Remaining integration gates (unchanged)
 
 - Remote CI/protection/merge unavailable without GitHub authentication.
 - No deterministic native E2E harness yet.

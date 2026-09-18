@@ -18,7 +18,7 @@ Providers remain replaceable adapters. Local models supply evidence through stab
 
 Use short-lived snapshot/generation staging in each profile database, atomically publish a validated generation, then update generation-aware projections. Keep the previous catalog visible during failures. Preserve existing playback while introducing typed state, cancellation, bounded recovery, output capabilities and diagnostics.
 
-The first release objective is a reproducible, validated macOS Apple Silicon alpha. Timeshift, DVR, multiview, additional platforms and a general-purpose catalog LLM are extensions, not prerequisites. Packaging feasibility and licensing start immediately, not after the last feature phase.
+The first release objective is a reproducible, validated macOS Apple Silicon alpha. Catalog intelligence is a required subsystem; its model/runtime selection remains benchmark-driven. Timeshift, DVR, multiview and additional platforms are extensions. Packaging feasibility and licensing start immediately, not after the last feature phase.
 
 ## 2. Architecture principles
 
@@ -462,6 +462,38 @@ Use request caching, retry-after handling, bounded queues, negative-cache expiry
 
 ## 18. Catalog intelligence
 
+Updated requirement (2026-09-18): intelligent catalog understanding is first-class,
+not optional title-cleaning enrichment. Build `CatalogIntelligenceAgent` between
+structural source validation and canonicalization. It interprets contextual,
+multilingual evidence, proposes names and controlled classifications, identifies
+missing information and schedules bounded research. Deterministic code supplies
+validation, budgets, evidence priorities and publication guarantees; it must not
+become an expanding substitute for semantic understanding.
+
+Resolution order is verified source binding → cached knowledge/aliases → local
+reasoning and semantic candidates → XMLTV/metadata evidence → bounded research →
+evidence aggregation → canonicalization. A cache entry preserves fact-level expiry,
+protected provenance, resolver/query/naming versions and source scope. Alias reuse
+requires identity context; title similarity alone cannot link entities or remakes.
+Quality hints belong to variants; playback observations are separate and stronger
+for measured stream properties. Channel languages and observed audio languages
+remain separate. Models select country/language codes from Nova-owned registries.
+
+Publish safe provisional entities before research finishes. Background jobs apply
+validated enrichment in batches without destabilizing browse order. Entity states
+are Resolved, ProvisionallyResolved, NeedsResearch, Unknown and Invalid. Field
+support is not itself proof of entity identity. Retain contradictory fact candidates
+and abstain on equally authoritative conflicts. Do not convert a model self-score
+into evidence authority or a calibrated identity probability.
+
+Research is cache-first, at most three targeted queries per unresolved item per
+attempt, with explicit timeout/retry/concurrency and import-wide spending budgets.
+Prefer official broadcaster sources, then trusted industry, then metadata sources.
+The orchestrator owns network access and source verification; the model receives
+bounded context without credentials and cannot approve its own sources. Logos use
+validated, downloaded Nova-managed assets with hash, dimensions and provenance.
+These cache, worker, asset and scheduling components are still implementation gates.
+
 Define interfaces around evidence and budgets, not model brands:
 
 ```rust
@@ -480,9 +512,9 @@ trait AmbiguityResolver: Send + Sync {
 }
 ```
 
-Run synchronous inference on bounded workers; contracts include maximum batch/text lengths, deadline/cancellation checkpoints and model/tokenizer fingerprints. An optional LLM may return only schema-validated proposals referencing supplied candidates and evidence. It cannot issue database writes, invent external IDs, fetch URLs or override cannot-link constraints. Provider metadata is untrusted model input, not instructions.
+Run synchronous inference on bounded workers; contracts include maximum batch/text lengths, deadline/cancellation checkpoints and model/tokenizer fingerprints. A replaceable CatalogReasoner may use an LLM and returns only schema-validated proposals referencing supplied candidates and evidence. It cannot issue database writes, invent external IDs, fetch URLs directly or override cannot-link constraints. Provider metadata is untrusted model input, not instructions.
 
-E5 is the current baseline, not the permanent production choice. Benchmark deterministic-only, deterministic+existing E5, and a licensed multilingual alternative/reranker with exact artifact revisions. A local LLM is evaluated only if residual ambiguity remains valuable enough to justify memory, latency and licensing cost. Hold provider/title families out of training/tuning evaluation. Failed inference becomes abstention and does not prevent publication.
+E5 is the current baseline, not the permanent production choice. Benchmark existing rules/E5 against multilingual reasoners and rerankers with exact artifact revisions. Include messy French/Arabic/English context, missing metadata, conflicting facts, prompt injection, false merges, abstention, memory, latency and licensing. Select the production backend from measured results and track active artifacts in the stack manifest. Hold provider/title families out of tuning. Failed inference becomes abstention and does not prevent publication.
 
 ## 19. Search architecture
 
@@ -1257,11 +1289,11 @@ Use additive schemas, adapters and feature flags, with one authoritative owner p
 - **Acceptance criteria:** complete scope snapshots replay offline; generation publish is atomic; IDs/user state survive refresh; secrets absent from exported fixtures/logs.
 - **Risks:** lossy legacy titles, unavailable original raw input, duplicate IDs and disk growth. Mark lost evidence unknown rather than reconstructing invented originals.
 
-### Phase 2 — Catalog Compiler
+### Phase 2 — Intelligent Catalog Understanding and Compiler
 
-- **Objective:** produce correct deterministic canonical catalogs at provider scale.
+- **Objective:** interpret messy metadata intelligently and publish reproducible canonical catalogs at provider scale.
 - **Architecture changes:** explicit extraction/classification/identity/naming/taxonomy/EPG stages, lineage and incremental dependency graph.
-- **Implementation work:** conservative rules, confidence/cannot-link records, source completeness handling, generation validator, compiler versioning and reviewed corpus; optional enrichment jobs outside publish transaction.
+- **Implementation work:** required intelligence pipeline with replaceable reasoner/matcher, contextual proposals, evidence/conflict validation, persistent research cache and local knowledge; confidence/cannot-link records, source completeness handling, generation validator, compiler versioning and reviewed corpus. Background enrichment runs outside the publish transaction.
 - **Research required:** C4 deterministic vs model-assisted comparison; C3 full/incremental schema benchmark; model/metadata licensing and artifact verification.
 - **Tests:** multilingual regression corpus, input-order/idempotence properties, source removal, partial refresh, merge/split user state, stale-base CAS and negative identity cases.
 - **Benchmarks:** 40k/200k full import plus 1% changes; peak RSS, publish latency, reader p95, ID churn and forbidden merge count.

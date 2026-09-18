@@ -2,6 +2,8 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- Establish required catalog intelligence in the plan and add an unconnected,
+  strict proposal/evidence evaluator with conflict, expiry and authority checks.
 - Add a development stack manifest and read-only stack/environment verification commands.
 - Pin selected Rust/Node/pnpm/just versions; use locked package resolution and explicit bootstrap.
 - Add environment drift regression tests and CI manifest validation.
