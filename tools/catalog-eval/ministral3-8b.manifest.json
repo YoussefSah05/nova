@@ -1,0 +1,28 @@
+{
+  "status": "development_candidate_not_production_selected",
+  "model": {
+    "upstream": "mistralai/Ministral-3-8B-Instruct-2512",
+    "quantizationRepository": "unsloth/Ministral-3-8B-Instruct-2512-GGUF",
+    "revision": "3731507ec3e867db16d620f73e14d689125758f4",
+    "quantization": "Q4_K_M",
+    "path": "models/catalog-eval/ministral3-8b/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf",
+    "sha256": "5dbc3647eb563b9f8d3c70ec3d906cce84b86bb35c5e0b8a36e7df3937ab7174",
+    "bytes": 5198386720
+  },
+  "runtimeArchive": {
+    "upstream": "ggml-org/llama.cpp",
+    "version": "v0.4.1",
+    "build": "b10964",
+    "path": "models/catalog-eval/runtime/llama-b10964-bin-macos-arm64.tar.gz",
+    "sha256": "033c845c1df9bf945ff37bb193238b40910b2244be3e1e637b2ceb5878f1a6f5"
+  },
+  "configuration": {
+    "alias": "nova-catalog-eval",
+    "contextTokens": 4096,
+    "parallel": 1,
+    "maxOutputTokens": 512,
+    "thinking": false,
+    "seed": 42,
+    "temperature": 0
+  }
+}

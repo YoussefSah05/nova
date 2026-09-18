@@ -46,6 +46,19 @@ const corpus = JSON.parse(
 );
 const known = corpus.cases[0];
 
+test("frozen transfer cases use different title families from development smoke", async () => {
+  const transfer = JSON.parse(
+    await readFile(
+      new URL("../../fixtures/catalog-intelligence/v1/transfer.json", import.meta.url),
+    ),
+  );
+  validateCorpus(transfer);
+  const developmentFamilies = new Set(corpus.cases.map((item) => item.family));
+  assert.ok(transfer.cases.every((item) => !developmentFamilies.has(item.family)));
+  assert.equal(transfer.cases.length, 12);
+  assert.equal(transfer.cases.filter((item) => item.expected.candidate_id === null).length, 6);
+});
+
 test("synthetic corpus covers ambiguity, languages and negative identity cases", () => {
   validateCorpus(corpus);
   assert.ok(corpus.cases.some((c) => c.input.title.includes("العربية")));
