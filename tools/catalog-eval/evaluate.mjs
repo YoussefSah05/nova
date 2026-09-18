@@ -17,6 +17,24 @@ For an identified candidate use its canonical_name and entity_type. quality_hint
 is only an explicit provider hint: SD, HD, FHD/1080p, UHD/4K; otherwise unknown.
 These are proposals, not verified facts. Do not infer measured stream quality.`;
 
+// Development refinement after the preserved v1 comparison; not held-out tuning.
+export const PROMPTS = {
+  v1: PROMPT,
+  v2: `${PROMPT}
+Decide identity and quality independently. Examine the raw title and group for
+explicit quality markers, even when identity is unknown: FHD or 1080p -> fhd;
+UHD or 4K -> uhd; HD -> hd; SD -> sd. Use unknown only when none is present.
+Do not require a separate quality field in the input. FHD is not merely HD.
+For identity, compare every supplied candidate. A matching bare title cannot
+choose between remakes with different years or editions with different regions.
+Missing discriminating information requires abstention. Conflicting title and
+EPG identity also requires abstention. Never use popularity or list order to break
+an unsupported tie. Abstention means candidate_id=null, canonical_name=null,
+entity_type=unknown; keep any explicit quality_hint independently.
+Your output must have exactly canonical_name, entity_type, candidate_id,
+quality_hint. Return the JSON object only.`,
+};
+
 export const SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -95,7 +113,8 @@ export function validateCorpus(corpus) {
   }
 }
 
-export function requestBody(input) {
+export function requestBody(input, promptVersion = "v1") {
+  if (!Object.hasOwn(PROMPTS, promptVersion)) throw new Error("unknown prompt version");
   return {
     model: "nova-catalog-eval",
     temperature: 0,
@@ -108,20 +127,22 @@ export function requestBody(input) {
       json_schema: { name: "catalog", strict: true, schema: SCHEMA },
     },
     messages: [
-      { role: "system", content: PROMPT },
+      { role: "system", content: PROMPTS[promptVersion] },
       { role: "user", content: JSON.stringify(input) },
     ],
   };
 }
 
 export class LocalReasoner {
-  constructor(port, timeoutMs = 45000) {
+  constructor(port, timeoutMs = 45000, promptVersion = "v1") {
     if (!Number.isInteger(port) || port < 1024 || port > 65535)
       throw new Error("invalid local port");
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000)
       throw new Error("invalid timeout");
     this.url = `http://127.0.0.1:${port}/v1/chat/completions`;
     this.timeoutMs = timeoutMs;
+    if (!Object.hasOwn(PROMPTS, promptVersion)) throw new Error("unknown prompt version");
+    this.promptVersion = promptVersion;
   }
   async resolve(input) {
     if (Buffer.byteLength(JSON.stringify(input)) > 32768) throw new Error("input limit");
@@ -130,7 +151,7 @@ export class LocalReasoner {
       redirect: "error",
       signal: AbortSignal.timeout(this.timeoutMs),
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(requestBody(input)),
+      body: JSON.stringify(requestBody(input, this.promptVersion)),
     });
     if (!response.ok || !response.body) {
       await response.body?.cancel();
@@ -217,6 +238,7 @@ async function main() {
       manifest: { type: "string" },
       output: { type: "string" },
       port: { type: "string", default: "18491" },
+      "prompt-version": { type: "string", default: "v1" },
     },
   });
   if (!values.manifest || !values.output) throw new Error("--manifest and --output are required");
@@ -227,13 +249,18 @@ async function main() {
   const manifest = JSON.parse(manifestBytes);
   await verifyArtifact(manifest.model);
   await verifyArtifact(manifest.runtimeArchive);
-  const result = await evaluate(corpus, new LocalReasoner(Number(values.port)));
+  const promptVersion = values["prompt-version"];
+  const result = await evaluate(
+    corpus,
+    new LocalReasoner(Number(values.port), 45000, promptVersion),
+  );
   const report = {
     version: 1,
     kind: "development_smoke_not_release_evaluation",
     recordedAt: new Date().toISOString(),
     corpusSha256: sha(corpusBytes),
-    promptSha256: sha(PROMPT),
+    promptVersion,
+    promptSha256: sha(PROMPTS[promptVersion]),
     schemaSha256: sha(JSON.stringify(SCHEMA)),
     manifestSha256: sha(manifestBytes),
     artifacts: manifest,

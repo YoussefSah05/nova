@@ -1,0 +1,256 @@
+{
+  "version": 1,
+  "kind": "development_smoke_not_release_evaluation",
+  "recordedAt": "2026-09-18T15:11:52.707Z",
+  "corpusSha256": "36890ce496418347e7cdfc01f8e5094c409d30c84b915876c27ba316d286176c",
+  "promptSha256": "6e6b122547dc691e0cb3217d9afc64baabc3245408e82ceebac049d7e211702c",
+  "schemaSha256": "206e9bf6f4a433adc57834e71da7b41180f58e3041a831be573b3c5ad17c369c",
+  "manifestSha256": "55d4a11eb64e985a14e207f1560d89c3cd577d841e2d8cec67c8ba5d020cab53",
+  "artifacts": {
+    "status": "development_candidate_not_production_selected",
+    "model": {
+      "upstream": "Qwen/Qwen3.5-9B",
+      "quantizationRepository": "unsloth/Qwen3.5-9B-GGUF",
+      "revision": "3885219b6810b007914f3a7950a8d1b469d598a5",
+      "quantization": "Q4_K_M",
+      "path": "models/catalog-eval/qwen35-9b/Qwen3.5-9B-Q4_K_M.gguf",
+      "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+      "bytes": 5680522464
+    },
+    "runtimeArchive": {
+      "upstream": "ggml-org/llama.cpp",
+      "version": "v0.4.1",
+      "build": "b10964",
+      "path": "models/catalog-eval/runtime/llama-b10964-bin-macos-arm64.tar.gz",
+      "sha256": "033c845c1df9bf945ff37bb193238b40910b2244be3e1e637b2ceb5878f1a6f5"
+    },
+    "configuration": {
+      "alias": "nova-catalog-eval",
+      "contextTokens": 4096,
+      "parallel": 1,
+      "maxOutputTokens": 512,
+      "thinking": false,
+      "seed": 42,
+      "temperature": 0
+    }
+  },
+  "artifactsVerifiedOnDisk": true,
+  "runtimeProcessAttested": false,
+  "playbackInterferenceMeasured": false,
+  "memoryMeasured": false,
+  "results": [
+    {
+      "id": "tf1-fhd",
+      "family": "tf1",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 2976,
+      "error": null,
+      "output": {
+        "canonical_name": "TF1",
+        "entity_type": "live_channel",
+        "candidate_id": "tf1-fr",
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "tf1-backup",
+      "family": "tf1",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 2213,
+      "error": null,
+      "output": {
+        "canonical_name": "TF1",
+        "entity_type": "live_channel",
+        "candidate_id": "tf1-fr",
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "mbc-numbered",
+      "family": "mbc",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 2348,
+      "error": null,
+      "output": {
+        "canonical_name": "MBC 2",
+        "entity_type": "live_channel",
+        "candidate_id": "mbc-2",
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "arabic-name",
+      "family": "arabic-news",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 2216,
+      "error": null,
+      "output": {
+        "canonical_name": "العربية",
+        "entity_type": "live_channel",
+        "candidate_id": "alarabiya",
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "sky-sports-specific",
+      "family": "sky",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 2357,
+      "error": null,
+      "output": {
+        "canonical_name": "Sky Sports Premier League",
+        "entity_type": "live_channel",
+        "candidate_id": "sky-pl",
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "dune-remake",
+      "family": "dune",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 2439,
+      "error": null,
+      "output": {
+        "canonical_name": "Dune",
+        "entity_type": "movie",
+        "candidate_id": "dune-1984",
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "dune-sequel",
+      "family": "dune",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 2665,
+      "error": null,
+      "output": {
+        "canonical_name": "Dune: Part Two",
+        "entity_type": "movie",
+        "candidate_id": "dune-2024",
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "dune-missing-year",
+      "family": "dune",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": true,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 2407,
+      "error": null,
+      "output": {
+        "canonical_name": "Dune",
+        "entity_type": "movie",
+        "candidate_id": "dune-2021",
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "regional-editions",
+      "family": "regional",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": true,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 2644,
+      "error": null,
+      "output": {
+        "canonical_name": "France 3 Paris Île-de-France",
+        "entity_type": "live_channel",
+        "candidate_id": "fr3-paris",
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "unknown-cryptic",
+      "family": "unknown",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": true,
+      "missedIdentity": false,
+      "elapsedMs": 1840,
+      "error": null,
+      "output": {
+        "canonical_name": null,
+        "entity_type": "unknown",
+        "candidate_id": null,
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "instruction-in-title",
+      "family": "injection",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": true,
+      "missedIdentity": false,
+      "elapsedMs": 1848,
+      "error": null,
+      "output": {
+        "canonical_name": null,
+        "entity_type": "unknown",
+        "candidate_id": null,
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "conflicting-context",
+      "family": "conflict",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": true,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 2438,
+      "error": null,
+      "output": {
+        "canonical_name": "MBC 2",
+        "entity_type": "live_channel",
+        "candidate_id": "mbc-2",
+        "quality_hint": "unknown"
+      }
+    }
+  ],
+  "summary": {
+    "cases": 12,
+    "correct": 2,
+    "schemaFailures": 0,
+    "falseLinks": 3,
+    "missedIdentities": 0,
+    "p50Ms": 2357,
+    "p95Ms": 2976
+  }
+}

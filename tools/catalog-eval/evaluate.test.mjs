@@ -13,7 +13,17 @@ import {
   validateCorpus,
   validOutput,
   verifyArtifact,
+  PROMPT,
+  PROMPTS,
 } from "./evaluate.mjs";
+
+test("versioned diagnostic prompts preserve the original comparison", () => {
+  assert.equal(requestBody({}).messages[0].content, PROMPT);
+  assert.notEqual(requestBody({}, "v2").messages[0].content, PROMPT);
+  assert.equal(requestBody({}, "v2").messages[0].content, PROMPTS.v2);
+  assert.throws(() => requestBody({}, "unknown"));
+  assert.throws(() => new LocalReasoner(18491, 1000, "unknown"));
+});
 
 test("artifact verification rejects missing or tampered model files", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nova-catalog-eval-"));

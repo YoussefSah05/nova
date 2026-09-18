@@ -62,7 +62,7 @@ identity/cannot-link policy, raw-source integration or app E2E gates.
 
 ## Reproduction
 
-From the repository root, `pnpm test:catalog-eval` runs seven tests with a synthetic
+From the repository root, `pnpm test:catalog-eval` runs eight tests with a synthetic
 loopback HTTP server and needs no model, token or network access beyond localhost.
 CI runs it beside tooling tests. `pnpm eval:catalog` uses a separately started local
 runtime. It never launches/downloads a model or accesses user profiles itself.
@@ -110,3 +110,11 @@ First actual inference result: Qwen3.5-4B Q4_K_M produced 4/12 fully correct
 responses and three unsafe links. It is not selected. See the
 [smoke report](../evaluations/catalog-smoke-v1.md). Qwen3.5-9B Q4_K_M is pinned in
 `tools/catalog-eval/qwen35-9b.manifest.json` for the unchanged-prompt comparison.
+
+Completed comparison and diagnosis: 9B/v1 scored 2/12 with three unsafe links.
+The separately versioned diagnostic prompt v2 scored 11/12 with one unsafe link
+on 9B, and 10/12 with zero unsafe links but two missed identities on 4B. Pass
+`--prompt-version v2` to reproduce the diagnostic; v1 remains the default. All
+four raw reports are retained. No production default is selected. Next: Ministral,
+held-out multilingual review, resource/coexistence testing, then the Rust adapter
+and provisional-evidence bridge. Prompt tuning here is not held-out validation.

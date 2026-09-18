@@ -290,6 +290,22 @@ typecheck, lint, manifest and formatting/whitespace checks pass. Rust code is
 unchanged; the preceding 230-test Rust baseline was not rerun. App E2E,
 concurrent playback/captions, memory/energy and held-out quality remain untested.
 
+## Completed local comparison: Qwen 4B/9B and prompt diagnosis
+
+After the harness checkpoint, ran the unchanged v1 prompt on the verified 9B
+quantization: 2/12 correct with three unsafe links. Inspected the runtime-rendered
+synthetic prompt, then introduced explicit prompt versioning without replacing v1.
+The diagnostic v2 prompt scored 11/12 with one unsafe link on 9B, and 10/12 with
+zero unsafe links but two missed identities on 4B. Four raw reports, exact hashes
+and the development-tuning caveat are retained in the
+[comparison report](../evaluations/catalog-smoke-v1.md).
+
+Eight harness tests pass after adding version-preservation coverage; formatting
+and whitespace checks pass. The prior tooling/frontend checks still apply; no
+Rust/frontend implementation changed in this comparison. Both native runtimes
+were stopped. No model is production-selected; Ministral, held-out corpus review,
+resource/playback coexistence and the Rust inference bridge remain next.
+
 ## Remaining integration gates (unchanged)
 
 - Remote CI/protection/merge unavailable without GitHub authentication.

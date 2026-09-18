@@ -4,7 +4,7 @@ This is a small synthetic development smoke test, not a model ranking, held-out
 benchmark or release qualification. See the [implementation plan](../implementation/catalog-model-evaluation.md).
 
 Runtime: llama.cpp 0.4.1-dev, build 10964, commit b29c606e2, native Darwin arm64.
-Host: Mac15,7, 18 GiB unified memory. One model/slot, 4096 context tokens, Metal
+Host: Mac15,7, macOS 26.6.2, 18 GiB unified memory. One model/slot, 4096 context tokens, Metal
 offload requested (`-ngl 99`), 512 output-token limit, temperature 0, seed 42,
 thinking disabled in request template options. Twelve sequential requests; prompt
 caching is enabled by the runtime, so these timings include warmed shared prefixes.
@@ -36,3 +36,46 @@ families, rather than repeatedly tuning and claiming generalization on these cas
 No peak-memory, energy, concurrent playback/ASR, model unload, packaged-app or E2E
 measurement is established by the report. The local 4B server was stopped after
 the run to release resources before the next candidate.
+
+## Same-prompt 9B comparison and versioned diagnosis
+
+Qwen3.5-9B Q4_K_M was downloaded at the pinned revision in its manifest; its
+SHA-256 matched before launch. The unchanged v1 prompt scored worse overall:
+2/12 fully correct, again three unsafe identity proposals and zero schema failures.
+It omitted all explicit quality hints. The runtime's `/apply-template` output was
+inspected using the synthetic TF1 input: the system instructions and data were
+present, and the non-thinking assistant prefix was rendered. This ruled out missing
+instructions in that rendered request, not every possible runtime/model issue.
+
+Prompt v2 explicitly separates quality extraction from identity, identifies title
+and group as hint sources, defines missing-discriminator abstention and rejects
+title/EPG conflict. It adds no fixture names or expected candidate IDs. Nevertheless,
+it was developed after inspecting failures on this corpus, so it is **development
+tuning**, not held-out evaluation. v1 remains the runner default and is unchanged.
+
+| Model / prompt | Fully correct | Unsafe links | Missed identities | Schema failures | p50 ms | p95 ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4B / v1 | 4/12 | 3 | 0 | 0 | 1222 | 1618 |
+| 9B / v1 | 2/12 | 3 | 0 | 0 | 2357 | 2976 |
+| 9B / v2 | 11/12 | 1 | 0 | 0 | 2426 | 3849 |
+| 4B / v2 | 10/12 | 0 | 2 | 0 | 829 | 1737 |
+
+Reports: [9B v1](catalog-qwen35-9b-smoke-v1.json),
+[9B v2](catalog-qwen35-9b-smoke-v2.json),
+[4B v2](catalog-qwen35-4b-smoke-v2.json). Each row is one pass of 12 cases, not
+a stable performance estimate. Shorter abstention outputs partly affect latency;
+do not interpret this as a controlled tokens-per-second comparison. Prompt and
+schema/corpus hashes in the reports make the variants explicit. The later launches
+also restricted CORS to localhost and disabled the web UI; inference settings
+remained the same. All benchmark runtime processes were stopped after evaluation.
+
+Remaining v2 errors: 9B chose MBC 2 despite the conflicting MBC 1 EPG ID; 4B
+abstained on the identifiable MBC 2 and Arabic-language-name cases. Neither passes
+all smoke cases. Larger size did not eliminate unsafe inference. Preserve the
+evidence/conflict gate even if subsequent model quality improves.
+
+Decision: **no production selection**. Next compare Ministral with the same
+versioned prompts, expand/review the corpus with held-out families, then measure
+memory, cancellation and playback/caption coexistence. Any new interpretation
+remains Inference evidence until independently corroborated. Neither this report
+nor the model writes canonical identities into Nova.
