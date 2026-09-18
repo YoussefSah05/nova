@@ -10,6 +10,7 @@
     "test:environment": "node --test scripts/stack.test.mjs",
     "test:catalog-eval": "node --test tools/catalog-eval/evaluate.test.mjs",
     "eval:catalog": "node tools/catalog-eval/evaluate.mjs",
+    "eval:catalog:reference": "node tools/catalog-eval/evaluate.mjs --manifest tools/catalog-eval/qwen35-4b.manifest.json --prompt-version v2",
     "dev": "pnpm -C apps/desktop exec tauri dev",
     "build": "pnpm -C apps/desktop exec tauri build",
     "test": "pnpm -C apps/desktop run test",

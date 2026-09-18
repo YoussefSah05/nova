@@ -79,3 +79,24 @@ versioned prompts, expand/review the corpus with held-out families, then measure
 memory, cancellation and playback/caption coexistence. Any new interpretation
 remains Inference evidence until independently corroborated. Neither this report
 nor the model writes canonical identities into Nova.
+
+## Ministral comparison
+
+The pinned Ministral 3 8B Instruct 2512 Q4_K_M artifact loaded successfully in
+llama.cpp build 10964 without changing the prompt, schema or request limits.
+
+| Prompt | Fully correct | Unsafe links | Missed identities | Output-contract failures | p50 ms | p95 ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| v1 | 2/12 | 1 | 1 | 1 | 2141 | 2758 |
+| v2 | 8/12 | 1 | 2 | 1 | 1945 | 2812 |
+
+Reports: [v1](catalog-ministral3-8b-smoke-v1.json),
+[v2](catalog-ministral3-8b-smoke-v2.json). The historical `schemaFailures` metric
+includes candidate-name/type consistency, not just JSON validity. Here the name
+`Dune (1984)` differs from the supplied canonical name `Dune`; it is valid JSON
+but violates the output contract. On v2 the unsafe link is the remake without a
+year, while the Arabic-name and numbered-channel cases are unnecessary abstentions.
+
+The [transfer results](catalog-transfer-protocol.md) include all three candidates
+and select Qwen 4B/v2 as a development reference only. Production qualification,
+independent review and playback/resource measurements remain outstanding.

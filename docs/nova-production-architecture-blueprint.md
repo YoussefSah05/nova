@@ -468,6 +468,11 @@ these are candidates, not selected production artifacts. The user permits larger
 open models when measured app constraints allow them. Start with a bounded native
 local smoke run, then evaluate quality and playback coexistence before integration.
 
+Initial local comparisons now select Qwen3.5-4B Q4_K_M / prompt v2 as the
+development reference for the Rust adapter: zero unsafe links on 24 synthetic
+development/transfer cases, with three unnecessary abstentions. This is not a
+production qualification; see the [recorded transfer results](evaluations/catalog-transfer-protocol.md).
+
 Updated requirement (2026-09-18): intelligent catalog understanding is first-class,
 not optional title-cleaning enrichment. Build `CatalogIntelligenceAgent` between
 structural source validation and canonicalization. It interprets contextual,

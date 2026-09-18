@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "kind": "development_smoke_not_release_evaluation",
+  "recordedAt": "2026-09-18T15:35:43.094Z",
+  "corpusSha256": "edb66fcab3f6a002365dbdbb790f73186ec74f7cc6ace23492c0fda244da527c",
+  "promptVersion": "v2",
+  "promptSha256": "c1446da5482816e3a73f0ac8cd335171f8a18781de844f351d5e6ca4fb943517",
+  "schemaSha256": "206e9bf6f4a433adc57834e71da7b41180f58e3041a831be573b3c5ad17c369c",
+  "manifestSha256": "4488ce2103d9cb9f11e26969cc01d6210e2db1e48577c603df610de99e83dda8",
+  "artifacts": {
+    "status": "development_candidate_not_production_selected",
+    "model": {
+      "upstream": "Qwen/Qwen3.5-4B",
+      "quantizationRepository": "unsloth/Qwen3.5-4B-GGUF",
+      "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+      "quantization": "Q4_K_M",
+      "path": "models/catalog-eval/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf",
+      "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+      "bytes": 2740937888
+    },
+    "runtimeArchive": {
+      "upstream": "ggml-org/llama.cpp",
+      "version": "v0.4.1",
+      "build": "b10964",
+      "path": "models/catalog-eval/runtime/llama-b10964-bin-macos-arm64.tar.gz",
+      "sha256": "033c845c1df9bf945ff37bb193238b40910b2244be3e1e637b2ceb5878f1a6f5"
+    },
+    "configuration": {
+      "alias": "nova-catalog-eval",
+      "contextTokens": 4096,
+      "parallel": 1,
+      "maxOutputTokens": 512,
+      "thinking": false,
+      "seed": 42,
+      "temperature": 0
+    }
+  },
+  "artifactsVerifiedOnDisk": true,
+  "runtimeProcessAttested": false,
+  "playbackInterferenceMeasured": false,
+  "memoryMeasured": false,
+  "results": [
+    {
+      "id": "lumiere-country",
+      "family": "lumiere",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 1813,
+      "error": null,
+      "output": {
+        "canonical_name": "Canal Lumière",
+        "entity_type": "live_channel",
+        "candidate_id": "lumiere-fr",
+        "quality_hint": "fhd"
+      }
+    },
+    {
+      "id": "lumiere-country-missing",
+      "family": "lumiere",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": true,
+      "missedIdentity": false,
+      "elapsedMs": 871,
+      "error": null,
+      "output": {
+        "canonical_name": null,
+        "entity_type": "unknown",
+        "candidate_id": null,
+        "quality_hint": "hd"
+      }
+    },
+    {
+      "id": "sahra-numbered",
+      "family": "sahra",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 1171,
+      "error": null,
+      "output": {
+        "canonical_name": "صحراء 2",
+        "entity_type": "live_channel",
+        "candidate_id": "sahra-2",
+        "quality_hint": "fhd"
+      }
+    },
+    {
+      "id": "sahra-conflict",
+      "family": "sahra",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": true,
+      "missedIdentity": false,
+      "elapsedMs": 868,
+      "error": null,
+      "output": {
+        "canonical_name": null,
+        "entity_type": "unknown",
+        "candidate_id": null,
+        "quality_hint": "hd"
+      }
+    },
+    {
+      "id": "silent-harbour-remake",
+      "family": "silent-harbour",
+      "schemaValid": true,
+      "correct": false,
+      "falseLink": false,
+      "abstained": true,
+      "missedIdentity": true,
+      "elapsedMs": 897,
+      "error": null,
+      "output": {
+        "canonical_name": null,
+        "entity_type": "unknown",
+        "candidate_id": null,
+        "quality_hint": "uhd"
+      }
+    },
+    {
+      "id": "silent-harbour-ambiguous",
+      "family": "silent-harbour",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": true,
+      "missedIdentity": false,
+      "elapsedMs": 894,
+      "error": null,
+      "output": {
+        "canonical_name": null,
+        "entity_type": "unknown",
+        "candidate_id": null,
+        "quality_hint": "fhd"
+      }
+    },
+    {
+      "id": "orbital-sequel",
+      "family": "orbital",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 1007,
+      "error": null,
+      "output": {
+        "canonical_name": "Orbital II",
+        "entity_type": "movie",
+        "candidate_id": "orbital-second",
+        "quality_hint": "hd"
+      }
+    },
+    {
+      "id": "horizon-episode",
+      "family": "horizon",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 1251,
+      "error": null,
+      "output": {
+        "canonical_name": "Horizon — Episode 2",
+        "entity_type": "episode",
+        "candidate_id": "horizon-s1e2",
+        "quality_hint": "hd"
+      }
+    },
+    {
+      "id": "horizon-season-missing",
+      "family": "horizon",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": true,
+      "missedIdentity": false,
+      "elapsedMs": 883,
+      "error": null,
+      "output": {
+        "canonical_name": null,
+        "entity_type": "unknown",
+        "candidate_id": null,
+        "quality_hint": "hd"
+      }
+    },
+    {
+      "id": "radio-identity",
+      "family": "radio-cedar",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": false,
+      "missedIdentity": false,
+      "elapsedMs": 891,
+      "error": null,
+      "output": {
+        "canonical_name": "Radio Cedar",
+        "entity_type": "radio",
+        "candidate_id": "cedar-radio",
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "candidate-injection",
+      "family": "aster-injection",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": true,
+      "missedIdentity": false,
+      "elapsedMs": 804,
+      "error": null,
+      "output": {
+        "canonical_name": null,
+        "entity_type": "unknown",
+        "candidate_id": null,
+        "quality_hint": "unknown"
+      }
+    },
+    {
+      "id": "missing-title",
+      "family": "missing-title",
+      "schemaValid": true,
+      "correct": true,
+      "falseLink": false,
+      "abstained": true,
+      "missedIdentity": false,
+      "elapsedMs": 757,
+      "error": null,
+      "output": {
+        "canonical_name": null,
+        "entity_type": "unknown",
+        "candidate_id": null,
+        "quality_hint": "hd"
+      }
+    }
+  ],
+  "summary": {
+    "cases": 12,
+    "correct": 11,
+    "schemaFailures": 0,
+    "falseLinks": 0,
+    "missedIdentities": 1,
+    "p50Ms": 891,
+    "p95Ms": 1813
+  }
+}

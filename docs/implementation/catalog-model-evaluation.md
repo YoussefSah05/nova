@@ -62,7 +62,7 @@ identity/cannot-link policy, raw-source integration or app E2E gates.
 
 ## Reproduction
 
-From the repository root, `pnpm test:catalog-eval` runs eight tests with a synthetic
+From the repository root, `pnpm test:catalog-eval` runs nine tests with a synthetic
 loopback HTTP server and needs no model, token or network access beyond localhost.
 CI runs it beside tooling tests. `pnpm eval:catalog` uses a separately started local
 runtime. It never launches/downloads a model or accesses user profiles itself.
@@ -118,3 +118,35 @@ on 9B, and 10/12 with zero unsafe links but two missed identities on 4B. Pass
 four raw reports are retained. No production default is selected. Next: Ministral,
 held-out multilingual review, resource/coexistence testing, then the Rust adapter
 and provisional-evidence bridge. Prompt tuning here is not held-out validation.
+
+The Ministral artifact is pinned in `tools/catalog-eval/ministral3-8b.manifest.json`
+at revision `3731507ec3e867db16d620f73e14d689125758f4`. Its 5.20 GB Q4_K_M
+file was verified against the Hub LFS SHA-256 and loaded in the same native runtime.
+The [transfer protocol](../evaluations/catalog-transfer-protocol.md) adds 12
+disjoint-family synthetic cases frozen in Git before inference. These cases still
+require independent review; they do not substitute for a real-provider holdout.
+
+Metric clarification: the historical `schemaFailures` counter covers the entire
+output contract, including exact agreement with the selected candidate's name/type.
+A nonzero value does not necessarily mean malformed JSON or invalid JSON Schema.
+Inspect per-case output when interpreting it; reports preserve this original field.
+
+## Development reference selected after three-model comparison
+
+Use **Qwen3.5-4B Q4_K_M / prompt v2** for the next Rust adapter increment.
+Across the 24 development-plus-transfer cases it had zero unsafe links and three
+unnecessary abstentions, versus two unsafe links for Qwen 9B and four for Ministral.
+Full results and limits are in the [transfer report](../evaluations/catalog-transfer-protocol.md).
+This choice favors cautious provisional interpretation, not autonomous merging.
+
+`pnpm eval:catalog:reference --output /tmp/nova-reference.json` selects the pinned
+4B manifest and v2 prompt after its local server is started. Add
+`--corpus fixtures/catalog-intelligence/v1/transfer.json` for the transfer set.
+The existing generic runner still supports all candidates and both prompt versions.
+No model is enabled in the serving app, and nova-stack.json is not changed to imply
+a production dependency.
+
+Next implementation: bounded Rust CatalogReasoner interface and inference-to-
+provisional-evidence bridge, independent corpus review and larger realistic inputs,
+then cancellation/memory/playback coexistence. Cache-first orchestration and source
+integration follow; no model response can directly establish catalog identity.

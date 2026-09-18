@@ -306,6 +306,34 @@ Rust/frontend implementation changed in this comparison. Both native runtimes
 were stopped. No model is production-selected; Ministral, held-out corpus review,
 resource/playback coexistence and the Rust inference bridge remain next.
 
+## Completed local increment: Ministral and frozen transfer comparison
+
+On `feat/catalog-ministral-comparison`, pinned and verified Ministral 3 8B
+Q4_K_M, ran both preserved prompts and a second synthetic corpus. The 12-case
+transfer corpus was committed at `2ed003c` before inference; its title families
+are disjoint from the development smoke set, but independent review is still
+pending. Both Qwen models also ran the frozen transfer set with unchanged v2.
+
+Combined v2 results across 24 cases: Qwen 4B 21 correct/zero unsafe links/three
+missed identities; Qwen 9B 22 correct/two unsafe links; Ministral 17 correct/four
+unsafe links/two missed identities/one candidate-name contract failure. These are
+development observations, not statistically representative accuracy estimates.
+Raw reports preserve all outputs and hashes. Ministral's transfer failures include
+following an instruction embedded in provider metadata.
+
+Selected Qwen3.5-4B Q4_K_M / prompt v2 as the **development reference** for the
+next Rust reasoner and provisional-evidence bridge. Added `eval:catalog:reference`
+as an explicit development command. No serving-app model, production default,
+identity merge or profile data change. All started runtimes were stopped; model
+artifacts remain ignored on disk. No Python environment or dependency upgrades.
+
+Validation: nine harness tests, seven tooling tests, formatting, manifest checks,
+diff whitespace and corpus/prompt/schema hash consistency across all nine reports
+pass. Rust/frontend implementation is unchanged and those suites were not rerun;
+the prior 230 Rust/nine frontend baselines remain historical evidence. Next:
+bounded Rust adapter, independent corpus review, realistic input volume, cancellation,
+memory and playback/caption coexistence, then cache/source integration.
+
 ## Remaining integration gates (unchanged)
 
 - Remote CI/protection/merge unavailable without GitHub authentication.

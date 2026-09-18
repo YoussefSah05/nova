@@ -2,6 +2,8 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- Compare pinned Qwen and Ministral models on development and frozen synthetic
+  transfer cases; choose Qwen 4B/v2 as a development reference, not a serving-app model.
 - Add a development catalog-model comparison plan, synthetic multilingual smoke
   corpus and bounded local inference evaluation harness with CI regression tests.
 - Establish required catalog intelligence in the plan and add an unconnected,
