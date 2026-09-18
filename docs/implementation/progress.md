@@ -334,6 +334,28 @@ the prior 230 Rust/nine frontend baselines remain historical evidence. Next:
 bounded Rust adapter, independent corpus review, realistic input volume, cancellation,
 memory and playback/caption coexistence, then cache/source integration.
 
+## Completed local increment: Rust reasoner and provisional bridge
+
+On `feat/catalog-rust-reasoner`, added the unused `nova-catalog-reasoner` crate:
+replaceable async interface, bounded loopback transport with no proxy/redirects,
+one client request per instance, strict output parsing, caller-owned cannot-link
+and explicit metadata-conflict checks. The bridge produces only scoped, expiring
+inference evidence. It retains input/protocol fingerprints and declared artifact
+digests; neither process attestation nor protected provenance persistence is claimed.
+See [ADR 0009](../adr/0009-local-catalog-reasoner.md) for boundaries and follow-up work.
+
+Validation: final workspace run passed 239 Rust tests with two existing discovery
+exclusions, including nine reasoner tests with a chunked-response regression. Workspace Clippy
+passed; ten Node harness tests pass, including Rust/evaluation protocol parity.
+The real Qwen 4B probe selected the expected synthetic candidate and yielded three
+provisional facts. Artifact hashes were rechecked, and the owned runtime stopped.
+No dependency upgrades, user database writes or new Python environment.
+
+No app E2E, real-provider import, memory/throughput or playback coexistence test is
+claimed. Frontend code is unchanged; its historical nine-test baseline was not rerun.
+Next: vetted context and protected derivation/cache coordination, runtime ownership
+and global budgets, then compiler/import integration and shadow validation.
+
 ## Remaining integration gates (unchanged)
 
 - Remote CI/protection/merge unavailable without GitHub authentication.

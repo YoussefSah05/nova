@@ -111,3 +111,10 @@ inference, research, persistence, identity merge or app import changes. See
 [ADR 0008](adr/0008-catalog-intelligence-evidence.md) and the
 [code baseline](implementation/intelligence-baseline.md). Existing catalog
 foundations and their remaining integration gates are documented below.
+
+The additive `nova-catalog-reasoner` crate now runs the evaluated v2 protocol against
+a bounded local inference endpoint. It rejects forbidden links and explicit metadata
+contradictions, then bridges accepted suggestions into expiring inference evidence.
+It has passed a synthetic real-Qwen transport probe. It remains unconnected to the
+desktop importer; context vetting, protected derivation/cache storage and runtime
+ownership are still required. See [ADR 0009](adr/0009-local-catalog-reasoner.md).

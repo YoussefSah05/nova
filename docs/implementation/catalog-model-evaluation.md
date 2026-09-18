@@ -146,7 +146,12 @@ The existing generic runner still supports all candidates and both prompt versio
 No model is enabled in the serving app, and nova-stack.json is not changed to imply
 a production dependency.
 
-Next implementation: bounded Rust CatalogReasoner interface and inference-to-
-provisional-evidence bridge, independent corpus review and larger realistic inputs,
-then cancellation/memory/playback coexistence. Cache-first orchestration and source
-integration follow; no model response can directly establish catalog identity.
+The bounded Rust CatalogReasoner interface and inference-to-provisional-evidence
+bridge are implemented as an unused crate and validated with a real Qwen transport
+probe; see [ADR 0009](../adr/0009-local-catalog-reasoner.md). Client cancellation is
+tested, but stopping runtime generation still requires process ownership.
+
+Next implementation: vetted context, protected provenance/cache coordination and
+runtime ownership/global budgets. Independent corpus review, larger realistic inputs,
+memory/playback coexistence and source integration remain required; no model response
+can directly establish catalog identity.

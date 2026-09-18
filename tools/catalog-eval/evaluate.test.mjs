@@ -15,7 +15,17 @@ import {
   verifyArtifact,
   PROMPT,
   PROMPTS,
+  SCHEMA,
 } from "./evaluate.mjs";
+
+test("Rust reasoner uses the evaluated v2 prompt and schema", async () => {
+  const protocol = JSON.parse(
+    await readFile(new URL("../../crates/catalog-reasoner/protocol.json", import.meta.url)),
+  );
+  assert.equal(protocol.promptVersion, "v2");
+  assert.equal(protocol.prompt, PROMPTS.v2);
+  assert.deepEqual(protocol.schema, SCHEMA);
+});
 
 test("versioned diagnostic prompts preserve the original comparison", () => {
   assert.equal(requestBody({}).messages[0].content, PROMPT);

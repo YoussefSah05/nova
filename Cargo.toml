@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/catalog-reasoner",
     "crates/catalog-ingest",
     "tools/iptv-fixture",
     "apps/desktop/src-tauri",
