@@ -86,6 +86,7 @@ jobs:
         run: |
           pnpm verify-environment --manifest-only
           pnpm test:environment
+          pnpm test:catalog-eval
 
       - name: ESLint
         run: pnpm lint

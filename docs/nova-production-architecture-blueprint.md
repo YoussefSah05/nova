@@ -462,6 +462,12 @@ Use request caching, retry-after handling, bounded queues, negative-cache expiry
 
 ## 18. Catalog intelligence
 
+Execution plan: [catalog model evaluation](implementation/catalog-model-evaluation.md).
+The initial reasoner comparison is Qwen3.5-4B, Qwen3.5-9B and Ministral 3 8B;
+these are candidates, not selected production artifacts. The user permits larger
+open models when measured app constraints allow them. Start with a bounded native
+local smoke run, then evaluate quality and playback coexistence before integration.
+
 Updated requirement (2026-09-18): intelligent catalog understanding is first-class,
 not optional title-cleaning enrichment. Build `CatalogIntelligenceAgent` between
 structural source validation and canonicalization. It interprets contextual,

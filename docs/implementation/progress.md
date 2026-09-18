@@ -264,6 +264,32 @@ and atomic publication remain prerequisites to app rollout. No active catalog LL
 has been chosen or installed; the serving import pipeline still uses legacy logic.
 Rollback removes the unconsumed module without migrations or user-data changes.
 
+## Completed local increment: model evaluation harness and first real inference
+
+The user permits any suitable open model size subject to app constraints. The
+[model plan](catalog-model-evaluation.md) compares Qwen3.5 4B/9B and Ministral 3
+8B, with separate embedding/reranking comparisons. This increment introduces a
+development-only local runtime adapter and 12 synthetic multilingual cases; it
+does not connect model proposals to production imports or trust them as evidence.
+
+On `feat/catalog-model-evaluation`, added bounded loopback inference, artifact
+hash verification, strict output-shape/candidate checks, failure/abstention/latency
+metrics, request/fixture hashes, exclusive reports and seven regression tests.
+CI runs these without model downloads. Native llama.cpp and the 4B quantization
+were downloaded under ignored models/, verified and actually executed. No Python
+environment or production dependency changes.
+
+First real Qwen3.5-4B Q4_K_M run: 4/12 fully correct, zero schema failures, three
+unsafe identity proposals, p50 1222 ms/p95 1618 ms. Its exact configuration fails
+the smoke gate. [Report](../evaluations/catalog-smoke-v1.md) preserves the failure.
+The 4B runtime was stopped before preparing the pinned 9B comparison. No production
+default selected, no inference results written to user data.
+
+Checks: seven new harness tests, seven tooling tests, nine frontend tests,
+typecheck, lint, manifest and formatting/whitespace checks pass. Rust code is
+unchanged; the preceding 230-test Rust baseline was not rerun. App E2E,
+concurrent playback/captions, memory/energy and held-out quality remain untested.
+
 ## Remaining integration gates (unchanged)
 
 - Remote CI/protection/merge unavailable without GitHub authentication.

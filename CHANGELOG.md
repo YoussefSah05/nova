@@ -2,6 +2,8 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- Add a development catalog-model comparison plan, synthetic multilingual smoke
+  corpus and bounded local inference evaluation harness with CI regression tests.
 - Establish required catalog intelligence in the plan and add an unconnected,
   strict proposal/evidence evaluator with conflict, expiry and authority checks.
 - Add a development stack manifest and read-only stack/environment verification commands.

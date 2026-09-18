@@ -1,0 +1,28 @@
+{
+  "status": "development_candidate_not_production_selected",
+  "model": {
+    "upstream": "Qwen/Qwen3.5-9B",
+    "quantizationRepository": "unsloth/Qwen3.5-9B-GGUF",
+    "revision": "3885219b6810b007914f3a7950a8d1b469d598a5",
+    "quantization": "Q4_K_M",
+    "path": "models/catalog-eval/qwen35-9b/Qwen3.5-9B-Q4_K_M.gguf",
+    "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+    "bytes": 5680522464
+  },
+  "runtimeArchive": {
+    "upstream": "ggml-org/llama.cpp",
+    "version": "v0.4.1",
+    "build": "b10964",
+    "path": "models/catalog-eval/runtime/llama-b10964-bin-macos-arm64.tar.gz",
+    "sha256": "033c845c1df9bf945ff37bb193238b40910b2244be3e1e637b2ceb5878f1a6f5"
+  },
+  "configuration": {
+    "alias": "nova-catalog-eval",
+    "contextTokens": 4096,
+    "parallel": 1,
+    "maxOutputTokens": 512,
+    "thinking": false,
+    "seed": 42,
+    "temperature": 0
+  }
+}
