@@ -118,3 +118,10 @@ contradictions, then bridges accepted suggestions into expiring inference eviden
 It has passed a synthetic real-Qwen transport probe. It remains unconnected to the
 desktop importer; context vetting, protected derivation/cache storage and runtime
 ownership are still required. See [ADR 0009](adr/0009-local-catalog-reasoner.md).
+
+The reasoner's Unix-only `protected` module now persists derivations in the existing
+encrypted, quota-limited store and supports cache-first reuse by a caller-supplied
+artifact reference. It retains exact context/protocol/output and original expiry,
+and returns new results only after a protected commit. Context vetting, a durable
+artifact index, retention, runtime ownership and desktop integration remain pending.
+See [ADR 0010](adr/0010-protected-catalog-derivations.md).

@@ -3103,12 +3103,16 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "nova-core",
+ "nova-storage",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

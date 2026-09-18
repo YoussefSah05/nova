@@ -15,6 +15,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
+#[cfg(unix)]
+pub mod protected;
+
 pub const MAX_INPUT_BYTES: usize = 16 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 pub const PROTOCOL: &str = include_str!("../protocol.json");
@@ -261,54 +264,65 @@ impl LocalReasoner {
         if choice.finish_reason != "stop" {
             return Err(ReasonerError::Response);
         }
-        let output: Output =
-            serde_json::from_str(&choice.message.content).map_err(|_| ReasonerError::Response)?;
-        let mut facts = Vec::new();
-        match (
-            &output.candidate_id,
-            &output.canonical_name,
-            output.entity_type,
-        ) {
-            (None, None, None) => {}
-            (Some(id), Some(name), Some(kind)) => {
-                let c = input
-                    .draft
-                    .candidates
-                    .iter()
-                    .find(|c| &c.id == id)
-                    .ok_or(ReasonerError::Response)?;
-                if &c.canonical_name != name || c.entity_type != kind {
-                    return Err(ReasonerError::Response);
-                }
-                if input.cannot_link.contains(id)
-                    || contradicts(&input.draft.epg_id, &c.epg_id)
-                    || contradicts(&input.draft.country, &c.country)
-                    || contradicts(&input.draft.year, &c.year)
-                    || contradicts(&input.draft.season, &c.season)
-                    || contradicts(&input.draft.episode, &c.episode)
-                    || input.draft.content_kind.is_some_and(|k| k != kind)
-                {
-                    return Err(ReasonerError::Conflict);
-                }
-                facts.push(FactValue::CanonicalName(name.clone()));
-                facts.push(FactValue::EntityType(kind));
-            }
-            _ => return Err(ReasonerError::Response),
-        }
-        if let Some(quality) = output.quality_hint {
-            facts.push(FactValue::QualityHint(quality));
-        }
-        Ok(ReasonedRecord {
-            record_id: input.record_id.clone(),
-            snapshot_id: input.snapshot_id.clone(),
-            input_fingerprint: input.fingerprint,
-            protocol_fingerprint: Sha256::digest(PROTOCOL.as_bytes()).into(),
-            model: self.artifacts.model.clone(),
-            runtime: self.artifacts.runtime.clone(),
-            proposed_entity: output.candidate_id,
-            facts,
-        })
+        accept_output(input, &choice.message.content, &self.artifacts)
     }
+}
+
+fn accept_output(
+    input: &ResolutionInput,
+    raw_output: &str,
+    artifacts: &DeclaredArtifacts,
+) -> Result<ReasonedRecord, ReasonerError> {
+    if raw_output.len() > MAX_RESPONSE_BYTES {
+        return Err(ReasonerError::Limit);
+    }
+    let output: Output = serde_json::from_str(raw_output).map_err(|_| ReasonerError::Response)?;
+    let mut facts = Vec::new();
+    match (
+        &output.candidate_id,
+        &output.canonical_name,
+        output.entity_type,
+    ) {
+        (None, None, None) => {}
+        (Some(id), Some(name), Some(kind)) => {
+            let c = input
+                .draft
+                .candidates
+                .iter()
+                .find(|c| &c.id == id)
+                .ok_or(ReasonerError::Response)?;
+            if &c.canonical_name != name || c.entity_type != kind {
+                return Err(ReasonerError::Response);
+            }
+            if input.cannot_link.contains(id)
+                || contradicts(&input.draft.epg_id, &c.epg_id)
+                || contradicts(&input.draft.country, &c.country)
+                || contradicts(&input.draft.year, &c.year)
+                || contradicts(&input.draft.season, &c.season)
+                || contradicts(&input.draft.episode, &c.episode)
+                || input.draft.content_kind.is_some_and(|k| k != kind)
+            {
+                return Err(ReasonerError::Conflict);
+            }
+            facts.push(FactValue::CanonicalName(name.clone()));
+            facts.push(FactValue::EntityType(kind));
+        }
+        _ => return Err(ReasonerError::Response),
+    }
+    if let Some(quality) = output.quality_hint {
+        facts.push(FactValue::QualityHint(quality));
+    }
+    Ok(ReasonedRecord {
+        record_id: input.record_id.clone(),
+        snapshot_id: input.snapshot_id.clone(),
+        input_fingerprint: input.fingerprint,
+        protocol_fingerprint: Sha256::digest(PROTOCOL.as_bytes()).into(),
+        model: artifacts.model.clone(),
+        runtime: artifacts.runtime.clone(),
+        proposed_entity: output.candidate_id,
+        facts,
+        raw_output: raw_output.to_owned(),
+    })
 }
 
 fn transport_error(error: reqwest::Error) -> ReasonerError {
@@ -387,6 +401,7 @@ pub struct ReasonedRecord {
     runtime: String,
     proposed_entity: Option<EntityId>,
     facts: Vec<FactValue>,
+    raw_output: String,
 }
 
 impl ReasonedRecord {

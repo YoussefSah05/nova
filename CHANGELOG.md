@@ -2,6 +2,8 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- Add encrypted catalog derivation storage and cache-first reuse with exact context,
+  artifact-version and expiry checks; serving-app integration remains pending.
 - Add an unconnected Rust catalog reasoner with bounded local inference, forbidden-link
   and metadata-conflict checks, and an expiring provisional-evidence bridge.
 - Compare pinned Qwen and Ministral models on development and frozen synthetic

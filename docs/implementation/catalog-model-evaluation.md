@@ -151,7 +151,9 @@ bridge are implemented as an unused crate and validated with a real Qwen transpo
 probe; see [ADR 0009](../adr/0009-local-catalog-reasoner.md). Client cancellation is
 tested, but stopping runtime generation still requires process ownership.
 
-Next implementation: vetted context, protected provenance/cache coordination and
-runtime ownership/global budgets. Independent corpus review, larger realistic inputs,
+Protected derivation persistence and exact-request cache coordination are now implemented
+in the unused Rust reasoner; see [ADR 0010](../adr/0010-protected-catalog-derivations.md).
+Next implementation: vetted context, durable cache indexing/retention and runtime
+ownership/global budgets. Independent corpus review, larger realistic inputs,
 memory/playback coexistence and source integration remain required; no model response
 can directly establish catalog identity.

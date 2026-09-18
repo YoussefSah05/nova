@@ -356,6 +356,27 @@ claimed. Frontend code is unchanged; its historical nine-test baseline was not r
 Next: vetted context and protected derivation/cache coordination, runtime ownership
 and global budgets, then compiler/import integration and shadow validation.
 
+## Completed local increment: protected catalog derivations
+
+On `feat/catalog-protected-derivations`, added Unix-only protected derivation storage
+and exact-request cache coordination to the unused reasoner crate. Existing encrypted
+stream storage supplies profile isolation, no-overwrite commits and quotas. Derivations
+retain context, protocol, output, declared artifacts and original timestamps. Replay
+waits for full authentication, validates scope and format, and reapplies the same
+candidate constraints as live inference. Cache reuse cannot refresh expiry.
+
+The cache-first call uses a caller-supplied artifact index reference; a miss runs
+inference and persists before returning. Durable indexing and eviction are not yet
+implemented. See [ADR 0010](../adr/0010-protected-catalog-derivations.md).
+
+Validation: 248 Rust workspace tests pass (two existing discovery exclusions),
+including nine new protected-cache tests. Workspace Clippy, rustfmt and whitespace
+checks pass. Synthetic HTTP exercises miss/inference/
+commit; cache hits work without a runtime. No new real-model benchmark, app E2E,
+provider import, native Keychain or playback coexistence run. No new external package
+versions or frontend changes. Next: vetted context, durable index/retention and runtime
+ownership before source/compiler integration.
+
 ## Remaining integration gates (unchanged)
 
 - Remote CI/protection/merge unavailable without GitHub authentication.
