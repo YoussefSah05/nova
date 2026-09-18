@@ -56,6 +56,13 @@ for staging orphans, and test process exit around commit. The v1 tests remain in
 Replay consumers must not publish provisional output before the final receipt.
 RSS, physical power-loss and automatic retention deletion are not certified.
 
-Next gates: signed-app Keychain/reference-aware retention integration and adapter evidence completeness;
+`cargo test -p nova-catalog-ingest --locked` covers the pure Xtream object adapter
+and encrypted record archives. The synthetic VOD fixture retains both occurrences
+of upstream ID 201 and reopens with identical record fields/fingerprints/raw bytes.
+Additional tests cover malformed/ambiguous objects, ownership, duplicate occurrence
+IDs, byte/record limits, wrong raw receipts, empty archives and archive framing.
+This does not test HTTP array streaming or app import/publication.
+
+Next gates: bounded array framing/provenance and signed-app Keychain/reference-aware retention integration;
 then real macOS app E2E using an isolated test profile. Playable media, segmented
 fault injection, sleep/wake, caption quality and AirPlay still need distinct coverage.

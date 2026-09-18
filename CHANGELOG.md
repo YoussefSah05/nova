@@ -20,6 +20,8 @@
   native provisioning still requires signing-entitlement validation.
 - Add v2 streaming encrypted snapshots with authenticated final receipts, bounded
   queues and conservative byte/file quotas; automatic eviction remains pending.
+- Add an unconnected Xtream object adapter and encrypted record archives that
+  preserve raw evidence, duplicate upstream occurrences and bounded source fields.
 
 ## 0.1.0 — pre-migration historical baseline
 

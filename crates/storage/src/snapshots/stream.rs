@@ -57,6 +57,7 @@ impl StreamReceipt {
 }
 
 enum Command {
+    Abort(oneshot::Sender<Result<()>>),
     Append(Zeroizing<Vec<u8>>, oneshot::Sender<Result<()>>),
     Seal(SourceSnapshot, oneshot::Sender<Result<()>>),
 }
@@ -66,6 +67,15 @@ pub struct StreamWriter {
     tx: mpsc::Sender<Command>,
 }
 impl StreamWriter {
+    /// Wait for removal of this writer's unpublished staging and lock release.
+    pub async fn abort(self) -> Result<()> {
+        let (done, result) = oneshot::channel();
+        self.tx
+            .send(Command::Abort(done))
+            .await
+            .map_err(|_| SnapshotStoreError::Worker)?;
+        result.await.map_err(|_| SnapshotStoreError::Worker)?
+    }
     pub async fn append(&mut self, bytes: &[u8]) -> Result<()> {
         for chunk in bytes.chunks(CHUNK_BYTES) {
             let (done, result) = oneshot::channel();
@@ -144,6 +154,11 @@ impl StreamingSnapshotStore {
             }
             while let Some(command) = rx.blocking_recv() {
                 match command {
+                    Command::Abort(done) => {
+                        let result = writer.abort();
+                        let _ = done.send(result);
+                        return;
+                    }
                     Command::Append(bytes, done) => match writer.append(&bytes) {
                         Ok(()) => {
                             if done.send(Ok(())).is_err() {
@@ -295,6 +310,9 @@ struct WriterState {
     _lease: File,
 }
 impl WriterState {
+    fn abort(self) -> Result<()> {
+        self.staged.close().map_err(|_| SnapshotStoreError::Io)
+    }
     fn new(inner: Arc<StreamInner>, descriptor: SnapshotDescriptor) -> Result<Self> {
         let lease = lease(&inner, true)?;
         let target = inner.root.join(format!("{}.nvs2", descriptor.id.as_str()));

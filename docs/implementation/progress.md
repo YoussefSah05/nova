@@ -206,6 +206,36 @@ v1 evidence. Next: protected record staging and lossless adapters; reference-awa
 retention; signed-app key lifecycle and isolated-profile app E2E. No automatic
 deletion, physical power-loss, production security or RSS benchmark claim is made.
 
+## Completed local increment: protected record staging
+
+Goal: preserve raw object evidence with bounded normalized records and persist an
+immutable derived archive. Scope: new unconnected nova-catalog-ingest crate plus an
+explicit v2 writer-abort acknowledgement. Existing provider imports stay unchanged.
+Research/design: [ADR 0007](../adr/0007-protected-record-staging.md).
+
+Implemented on `feat/protected-record-staging`: explicit Xtream live/VOD/series
+object scopes, exact raw JSON retention, bounded/ambiguous-input checks, opaque
+caller-owned record/locator IDs, encrypted archives bound to raw snapshot receipts,
+duplicate occurrence rejection and validated replay framing. Duplicate upstream IDs
+remain separate evidence. Archive completeness is distinct from provider completeness;
+callbacks remain provisional until final replay succeeds.
+
+Seven integration tests plus two framing tests pass after the contract tests first
+failed against the missing API. Full workspace: 221 Rust tests pass; workspace
+Clippy with warnings denied, rustfmt, seven environment tests and manifest
+verification pass. The desktop normal dependency graph excludes nova-catalog-ingest.
+The same two discovery exclusions remain: the subprocess helper (run by parent
+tests) and the native Keychain probe (previously failed signing validation).
+Frontend is unchanged; prior frontend checks were not rerun for this Rust-only slice.
+Cargo.lock adds only the local crate; no
+external package upgrade or production importer/profile/schema change. No Python
+environment, real provider or credentials used. No app E2E is claimed.
+
+Next: bounded array framing with offsets and raw/staged evidence coordination,
+followed by episode/M3U adapters and isolated-profile app validation. Keychain signing,
+reference-aware cleanup and publication remain gates. Rollback removes the unconsumed
+crate and abort addition without a data migration.
+
 ## Remaining integration gates
 
 - Remote CI/protection/merge unavailable without GitHub authentication.

@@ -62,6 +62,8 @@ The snapshot storage API still requires an explicitly supplied profile key.
 V2 snapshot streaming reuses these packages and Rust's file-lock API; no new
 dependency or Python environment is introduced. See ADR 0006 for quota scope and
 the separate v1/v2 on-disk formats.
+The unconnected nova-catalog-ingest crate reuses domain/storage and existing Serde
+packages; RawValue support is enabled only by its fixture-test dev dependency.
 CI validates repository consistency; `doctor` additionally compares executable
 versions. The existing macOS CI still uses Homebrew mpv, so its native closure is
 not reproducible yet. Model revision/hash verification, actual linked SQLite patch

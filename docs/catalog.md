@@ -88,8 +88,16 @@ output stays provisional until the final receipt succeeds; callers must stage it
 Unknown/orphan files consume quota, and full stores reject new work. No automatic
 deletion is implemented. See [ADR 0006](adr/0006-streaming-snapshot-quotas.md).
 
-Next steps: signed-app Keychain validation, durable key lifecycle, reference-aware retention, then
-fixture-backed lossless source adapters and record persistence. Actual import/publication changes
+`nova-catalog-ingest` now pairs bounded SourceRecords with byte-exact Xtream object
+evidence and stages them in encrypted archives. It preserves duplicate upstream
+occurrences, rejects duplicate occurrence IDs and binds replay to the expected raw
+snapshot receipt. This is a pure per-object adapter, not a replacement network
+importer. See [ADR 0007](adr/0007-protected-record-staging.md) for the derived-artifact
+count semantics, provisional callbacks, quotas and provenance limits.
+
+Next steps: bounded array framing and offsets, raw/staged evidence coordination,
+episode/M3U adapters, signed-app key lifecycle and reference-aware retention.
+Actual import/publication changes
 require regression, migration and real-app E2E evidence before activation. See the
 production blueprint for the proposed full architecture; do not confuse it with
 the implementation described here.
