@@ -265,7 +265,7 @@ fn fold(s: &str) -> String {
 fn is_junk_token(tok: &str) -> bool {
     let norm: String = tok
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(|c| c.is_alphanumeric())
         .flat_map(|c| c.to_uppercase())
         .collect();
     if norm.is_empty() {
@@ -381,6 +381,14 @@ mod tests {
     fn search_title_keeps_real_titles() {
         assert_eq!(search_title("Spider-Man"), "Spider-Man");
         assert_eq!(search_title("Rocky 2"), "Rocky 2");
+    }
+
+    #[test]
+    fn polishing_preserves_non_ascii_words_beside_numbers() {
+        assert_eq!(polish_title("رحلة 133 FHD"), "رحلة 133");
+        assert_eq!(polish_title("العربية 2 UHD"), "العربية 2");
+        assert_eq!(polish_title("旅程 3 HD"), "旅程 3");
+        assert_eq!(polish_title("Été 4 HEVC"), "Été 4");
     }
 
     #[test]

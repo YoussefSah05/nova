@@ -106,7 +106,29 @@ describe("AddSourceModal", () => {
       });
     });
 
-    await waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByText("Ready to browse")).toBeInTheDocument());
+    expect(onDone).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Browse library" }));
+    expect(onDone).toHaveBeenCalledOnce();
     expect(mocks.unlisten).toHaveBeenCalledOnce();
+  });
+  it("does not claim completion at 50k or 100k when total size is unknown", async () => {
+    mocks.invoke.mockResolvedValue(42);
+    render(<AddSourceModal profileId="profile-1" onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("M3U URL"), "http://example.com/list.m3u");
+    await userEvent.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledOnce());
+    for (const parsed of [50000, 100000, 250000]) {
+      act(() =>
+        progressHandler?.({ payload: progress({ parsed, inserted: parsed, stage: "receiving" }) })
+      );
+      expect(screen.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+      expect(screen.queryByText("Ready to browse")).not.toBeInTheDocument();
+      expect(
+        screen.getByText(
+          `${parsed.toLocaleString()} entries read · ${parsed.toLocaleString()} saved`
+        )
+      ).toBeInTheDocument();
+    }
   });
 });

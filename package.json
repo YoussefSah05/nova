@@ -17,6 +17,8 @@
     "lint": "pnpm -C apps/desktop run lint",
     "format": "pnpm -C apps/desktop run format",
     "typecheck": "pnpm -C apps/desktop run typecheck",
-    "clean": "pnpm -C apps/desktop run clean"
+    "clean": "pnpm -C apps/desktop run clean",
+    "fixture:scale": "node tools/catalog-scale/provider.mjs",
+    "test:scale": "node --test tools/catalog-scale/provider.test.mjs"
   }
 }

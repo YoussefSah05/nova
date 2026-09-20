@@ -1,5 +1,5 @@
 //! Search / filter / see-all surface: a responsive poster grid backed by an
-//! infinite query and windowed by row. Column count is derived from the live
+//! bounded page query and windowed by row. Column count is derived from the live
 //! container width; items are chunked into rows and only on-screen rows mount,
 //! so the grid stays smooth across tens of thousands of results.
 
@@ -12,10 +12,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualRows } from "./VirtualRows";
 import { PosterCard, type PosterCardHandlers } from "./PosterCard";
 import {
+  GRID_PAGE_SIZE,
   useBrowseCount,
   useBrowseGrid,
   type BrowseFilters,
-  type BrowseItem,
   type BrowseTab,
 } from "./queries";
 
@@ -67,11 +67,22 @@ export function BrowseGrid({
   scrollRef,
   ...handlers
 }: BrowseGridProps) {
-  const { data, isLoading, isError, refetch, hasNextPage, isFetchingNextPage, fetchNextPage } =
-    useBrowseGrid(tab, profileId, sourceId, filters);
+  const identity = JSON.stringify([tab, profileId, sourceId, filters]);
+  const [page, setPage] = useState({ identity, offset: 0 });
+  const offset = page.identity === identity ? page.offset : 0;
+  const { data, isLoading, isError, refetch } = useBrowseGrid(
+    tab,
+    profileId,
+    sourceId,
+    filters,
+    offset
+  );
   const { data: total } = useBrowseCount(tab, profileId, sourceId, filters);
-
-  const items = useMemo<BrowseItem[]>(() => data?.pages.flat() ?? [], [data]);
+  const items = useMemo(() => data?.items ?? [], [data]);
+  function navigate(next: number) {
+    setPage({ identity, offset: next });
+    scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
+  }
   const live = tab === "live";
   const width = useElementWidth(scrollRef);
   const cardMin = live ? 200 : 168;
@@ -103,7 +114,7 @@ export function BrowseGrid({
     );
   }
 
-  if (items.length === 0) {
+  if (items.length === 0 && offset === 0) {
     return (
       <Card className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
         <SearchXIcon className="h-8 w-8 text-muted-foreground" aria-hidden />
@@ -117,11 +128,33 @@ export function BrowseGrid({
 
   return (
     <div className="flex flex-col gap-3">
-      {total !== undefined && (
-        <p className="text-xs text-muted-foreground">
-          Showing {items.length.toLocaleString()} of {total.toLocaleString()} {tab}
+      <div className="flex flex-wrap items-center justify-between gap-3" aria-label="Library pages">
+        <p className="text-xs text-muted-foreground" role="status">
+          Page {Math.floor(offset / GRID_PAGE_SIZE) + 1} · {items.length.toLocaleString()} titles on
+          this page
+          {total !== undefined && ` · ${total.toLocaleString()} source entries`}
         </p>
-      )}
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={offset === 0}
+            onClick={() => navigate(Math.max(0, offset - GRID_PAGE_SIZE))}
+          >
+            Previous page
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={data?.nextOffset == null}
+            onClick={() => {
+              if (data?.nextOffset != null) navigate(data.nextOffset);
+            }}
+          >
+            Next page
+          </Button>
+        </div>
+      </div>
       <VirtualRows
         items={rows}
         scrollRef={scrollRef}
@@ -129,9 +162,6 @@ export function BrowseGrid({
         overscan={6}
         className="rounded-none border-0 bg-transparent"
         keyFor={(_, index) => index}
-        onEndReached={() => {
-          if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
-        }}
         renderRow={(row) => (
           <div
             className="grid gap-3 pb-3"

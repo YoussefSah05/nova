@@ -20,9 +20,11 @@ pub fn run() {
     tracing_subscriber::fmt::init();
 
     let (pool, proxy_handle) = tauri::async_runtime::block_on(async {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("nova");
+        let data_dir = validation_data_dir().unwrap_or_else(|| {
+            dirs::data_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("nova")
+        });
         std::fs::create_dir_all(&data_dir).expect("failed to create Nova data dir");
         let db_path = data_dir.join("app.db");
         let pool = init_app_db(db_path.to_str().expect("non-utf8 path"))
@@ -217,5 +219,20 @@ impl EventEmitter for AppEventEmitter {
                 }
             }
         });
+    }
+}
+
+/// Debug-only isolated profile/database root for repeatable native validation.
+/// Release builds always use the normal application directories.
+pub(crate) fn validation_data_dir() -> Option<std::path::PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var_os("NOVA_VALIDATION_DIR")
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_absolute())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
     }
 }

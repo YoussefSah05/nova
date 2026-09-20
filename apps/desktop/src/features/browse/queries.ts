@@ -3,12 +3,7 @@
 //! background-revalidate. Switching tabs becomes a cache read (instant) instead
 //! of an IPC round-trip, and rails/grids share one normalized `BrowseItem`.
 
-import {
-  keepPreviousData,
-  useInfiniteQuery,
-  useQuery,
-  type QueryClient,
-} from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Channel,
@@ -170,8 +165,13 @@ async function fetchItems(
   sourceId: number,
   filters: BrowseFilters,
   limit: number,
-  offset: number
+  offset: number,
+  recordCount?: (count: number) => void
 ): Promise<BrowseItem[]> {
+  const counted = <T>(rows: T[]): T[] => {
+    recordCount?.(rows.length);
+    return rows;
+  };
   const args = { profileId, sourceId, limit, offset, filters: filterPayload(tab, filters) };
   if (tab === "live") {
     // A plain free-text search runs hybrid (semantic + keyword) retrieval over
@@ -195,7 +195,9 @@ async function fetchItems(
       return hits.map(channelGroupToItem);
     }
     // Live is grouped into brand-family bundles server-side (one card per brand).
-    return (await invoke<ChannelGroup[]>("list_channel_groups", args)).map(channelGroupToItem);
+    return counted(await invoke<ChannelGroup[]>("list_channel_groups", args)).map(
+      channelGroupToItem
+    );
   }
   if (tab === "movies") {
     // A free-text search with no other restrictive filter goes through hybrid
@@ -223,7 +225,7 @@ async function fetchItems(
     // Gather the same film's language/source copies under one card (title-based,
     // from the raw name); fall back to the embeddings group when no real title.
     return collapseByKey(
-      (await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem),
+      counted(await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem),
       (item) => movieVersionKey(item) ?? item.dedupGroup ?? null
     );
   }
@@ -242,7 +244,7 @@ async function fetchItems(
   }
   // Series have no backend dedup group; collapse exact-duplicate titles instead.
   return collapseByKey(
-    (await invoke<SeriesSummary[]>(LIST_COMMAND.series, args)).map(seriesToItem),
+    counted(await invoke<SeriesSummary[]>(LIST_COMMAND.series, args)).map(seriesToItem),
     seriesGroupKey
   );
 }
@@ -527,22 +529,47 @@ export function useRail(
   });
 }
 
-/// Search / filter / see-all view: paginated, windowed grid.
+export interface BrowsePage {
+  items: BrowseItem[];
+  nextOffset: number | null;
+}
+
+// Advance by database rows, never by the number of cards left after grouping.
+export async function fetchBrowsePage(
+  tab: BrowseTab,
+  profileId: string,
+  sourceId: number,
+  filters: BrowseFilters,
+  offset: number
+): Promise<BrowsePage> {
+  let rows = 0;
+  const items = await fetchItems(
+    tab,
+    profileId,
+    sourceId,
+    filters,
+    GRID_PAGE_SIZE,
+    offset,
+    (count) => {
+      rows = count;
+    }
+  );
+  return { items, nextOffset: rows === GRID_PAGE_SIZE ? offset + GRID_PAGE_SIZE : null };
+}
+
+/// One bounded page. Inactive pages are released instead of retaining the whole catalog.
 export function useBrowseGrid(
   tab: BrowseTab,
   profileId: string,
   sourceId: number | null,
-  filters: BrowseFilters
+  filters: BrowseFilters,
+  offset: number
 ) {
-  return useInfiniteQuery({
-    queryKey: browseKeys.grid(profileId, sourceId ?? -1, tab, filters),
-    queryFn: ({ pageParam }) =>
-      fetchItems(tab, profileId, sourceId!, filters, GRID_PAGE_SIZE, pageParam),
-    initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages) =>
-      lastPage.length < GRID_PAGE_SIZE ? undefined : allPages.length * GRID_PAGE_SIZE,
+  return useQuery({
+    queryKey: [...browseKeys.grid(profileId, sourceId ?? -1, tab, filters), offset],
+    queryFn: () => fetchBrowsePage(tab, profileId, sourceId!, filters, offset),
     enabled: sourceId !== null,
-    placeholderData: keepPreviousData,
+    gcTime: 0,
   });
 }
 
@@ -618,9 +645,9 @@ export function patchItemEverywhere(
     { queryKey: browseKeys.source(profileId, sourceId), predicate: railPredicate },
     (data) => (data ? data.map(mapItem) : data)
   );
-  qc.setQueriesData<{ pages: BrowseItem[][]; pageParams: unknown[] }>(
+  qc.setQueriesData<BrowsePage>(
     { queryKey: browseKeys.source(profileId, sourceId), predicate: gridPredicate },
-    (data) => (data ? { ...data, pages: data.pages.map((page) => page.map(mapItem)) } : data)
+    (data) => (data ? { ...data, items: data.items.map(mapItem) } : data)
   );
 
   return () => {

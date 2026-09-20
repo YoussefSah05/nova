@@ -92,3 +92,4 @@ nova_dev.db-shm
 coverage/
 playwright-report/
 test-results/
+.nova-validation/

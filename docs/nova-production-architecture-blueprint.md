@@ -1,5 +1,7 @@
 # Nova Production Architecture & Implementation Blueprint
 
+> Scale and intelligence extension (2026-09-19): [Nova 100K+ Scale & Media Intelligence Architecture](nova-100k-media-intelligence-architecture.md) adds workload classes, phases A–I and native review gates. Implementation evidence remains separate in `implementation/progress.md`.
+
 **Status:** proposed engineering blueprint, not an implementation-complete claim. **Baseline:** commit `c2841bc`; repository and external research inspected 17 September 2026. This document expands and supersedes the proposed Player 2.0 plan for future planning; existing accepted architecture remains in force until the corresponding ADRs and migrations are adopted.
 
 **Reading guide:** §§6–23 define the canonical catalog; §§24–51 define playback and experience; §§52–75 define operational engineering and evidence; §76 defines migration gates. Code and SQL below are contract sketches, not migrations to run against user databases. Numerical budgets are proposed acceptance targets, not measured Nova results.

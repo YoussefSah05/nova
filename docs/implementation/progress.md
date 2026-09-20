@@ -1,5 +1,28 @@
 # Production migration progress
 
+## Active scale and native-review programme — 2026-09-19
+
+Accepted [100K+ Scale & Media Intelligence Architecture](../nova-100k-media-intelligence-architecture.md)
+and preserved the full [requirements](media-intelligence-requirements.md). Phases A–I
+cover ingestion, canonical/incremental compilation, intelligence, frontend, resource
+runtime, playback, discovery and content features. Each phase has workload, tests,
+E2E, failure, migration, rollback and acceptance gates.
+
+This increment implements the deterministic 1k/10k/100k/250k/500k provider with
+98/1/1 refresh data; replaces accumulated grid pages with bounded 200-row pages;
+fixes page advancement after variant grouping; replaces assumed 50k import progress
+with real stages and a ready-to-browse screen; and fixes stale movie-detail favorite/
+watchlist state discovered in native testing. The debug-only NOVA_VALIDATION_DIR
+provides isolated app/profile databases for review. Existing importer/canonical
+architecture is not relabelled as migrated. Native evidence and open issues are in
+[scale review](../evaluations/scale-native-review-2026-09-19.md).
+
+Next implementation: controlled protected source/compiler integration and actual
+incremental reuse; current refresh still rebuilds the source. Do not equate the
+fixture's 98% unchanged rows with an implemented incremental compiler. Remaining
+intelligence phases are planned, not complete.
+
+
 ## Baseline
 
 - Source: c2841bc, preserved in local baseline commit 679c251 and immutable v0.1.0 tag.

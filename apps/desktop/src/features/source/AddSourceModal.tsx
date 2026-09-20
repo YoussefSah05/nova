@@ -12,9 +12,8 @@ interface AddSourceModalProps {
   onCancel: () => void;
 }
 
-type Phase = "form" | "importing";
+type Phase = "form" | "importing" | "ready";
 
-const ESTIMATED_TOTAL = 50_000;
 const IMPORT_STALL_MS = 75_000;
 
 function errorMessage(err: unknown): string {
@@ -106,8 +105,10 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
     clearWatchdog();
     unlistenRef.current?.();
     unlistenRef.current = null;
+    const sourceExists = activeSourceIdRef.current !== null;
     activeSourceIdRef.current = null;
-    onCancel();
+    if (sourceExists) onDone();
+    else onCancel();
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -163,7 +164,7 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
                 // Silent — EPG is decorative; the import itself succeeded.
               });
             }
-            onDone();
+            setPhase("ready");
           }
         }
       });
@@ -187,15 +188,25 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
   }
 
   const parsed = progress?.parsed ?? 0;
-  const fillPct = parsed === 0 ? 0 : Math.min(100, (parsed / ESTIMATED_TOTAL) * 100);
-  const title =
-    progress?.stage === "persisting"
-      ? "Saving…"
-      : progress?.stage === "failed"
-        ? "Import failed"
-        : parsed > 0
-          ? "Importing…"
-          : "Connecting…";
+  const title = phase === "ready" ? "Ready to browse" : "Adding library";
+  const stage = progress?.stage ?? "connecting";
+  const stages = [
+    {
+      title: "Connect to provider",
+      complete: stage !== "connecting",
+      active: stage === "connecting",
+    },
+    {
+      title: "Read library entries",
+      complete: stage === "persisting" || phase === "ready",
+      active: stage === "receiving",
+    },
+    {
+      title: "Save and publish library",
+      complete: phase === "ready",
+      active: stage === "persisting",
+    },
+  ];
 
   // Connecting sub-message: explain the wait after 10s so users know the
   // server is generating the playlist, not that the app is broken.
@@ -225,10 +236,14 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
             <h2 className="font-display text-lg font-semibold text-white">Add Playlist</h2>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-white/50 uppercase tracking-wider">
+              <label
+                htmlFor="source-name"
+                className="text-xs font-medium text-white/50 uppercase tracking-wider"
+              >
                 Name (optional)
               </label>
               <input
+                id="source-name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -238,10 +253,14 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-white/50 uppercase tracking-wider">
+              <label
+                htmlFor="source-url"
+                className="text-xs font-medium text-white/50 uppercase tracking-wider"
+              >
                 M3U URL
               </label>
               <input
+                id="source-url"
                 autoFocus
                 type="url"
                 value={url}
@@ -272,52 +291,81 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
           <div className="flex flex-col gap-5">
             <h2 className="font-display text-lg font-semibold text-white">{title}</h2>
 
-            {/* Progress bar */}
-            <div className="flex flex-col gap-2">
-              <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
-                {parsed === 0 ? (
-                  <div className="h-full w-full bg-primary/60 rounded-full animate-pulse" />
-                ) : (
-                  <div
-                    className="h-full bg-primary rounded-full transition-all duration-300 ease-out"
-                    style={{ width: `${fillPct}%` }}
-                  />
-                )}
-              </div>
-              <div className="flex justify-between text-xs text-white/40">
-                {parsed === 0 ? (
-                  <span>{connectingDetail}</span>
-                ) : (
-                  <>
-                    <span>{parsed.toLocaleString()} parsed</span>
-                    <span>{(progress?.inserted ?? 0).toLocaleString()} saved</span>
-                  </>
-                )}
-              </div>
+            <ol className="flex flex-col gap-3" aria-label="Import stages">
+              {stages.map((step) => (
+                <li
+                  key={step.title}
+                  className="flex items-center gap-3 text-sm"
+                  aria-current={step.active && phase !== "ready" ? "step" : undefined}
+                >
+                  <span
+                    className={cn(
+                      "flex h-6 w-6 items-center justify-center rounded-full border text-xs",
+                      step.complete
+                        ? "border-primary bg-primary/10 text-primary"
+                        : step.active
+                          ? "border-primary text-primary"
+                          : "border-border text-muted-foreground"
+                    )}
+                    aria-hidden
+                  >
+                    {step.complete ? "✓" : step.active ? "•" : "–"}
+                  </span>
+                  <span
+                    className={
+                      step.active || step.complete ? "text-foreground" : "text-muted-foreground"
+                    }
+                  >
+                    {step.title}
+                  </span>
+                  <span className="sr-only">
+                    {step.complete ? "Complete" : step.active ? "In progress" : "Waiting"}
+                  </span>
+                </li>
+              ))}
+            </ol>
+            <div className="flex flex-col gap-2" role="status" aria-live="polite">
+              {phase !== "ready" && (
+                <div
+                  role="progressbar"
+                  aria-valuetext="Total entry count unknown"
+                  aria-label="Import in progress; total size unknown"
+                  className="h-1 w-full animate-pulse rounded-full bg-primary/40 motion-reduce:animate-none"
+                />
+              )}
+              <p className="text-xs text-muted-foreground">
+                {parsed === 0
+                  ? connectingDetail
+                  : `${parsed.toLocaleString()} entries read · ${(progress?.inserted ?? 0).toLocaleString()} saved`}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {phase === "ready"
+                  ? "Your library is available now. Optional metadata improvements do not block browsing."
+                  : "Library size is provided by the source. Browsing becomes available after publication."}
+              </p>
             </div>
 
             {/* Per-type metrics — visible once entries start arriving */}
             {parsed > 0 && (
               <div className="grid grid-cols-3 divide-x divide-white/10 rounded-xl bg-white/[0.04] py-3">
-                <MetricPill label="Live" value={progress?.liveCount ?? 0} color="text-sky-400" />
-                <MetricPill
-                  label="Movies"
-                  value={progress?.movieCount ?? 0}
-                  color="text-violet-400"
-                />
+                <MetricPill label="Live" value={progress?.liveCount ?? 0} color="text-primary" />
+                <MetricPill label="Movies" value={progress?.movieCount ?? 0} color="text-primary" />
                 <MetricPill
                   label="Series"
                   value={progress?.seriesCount ?? 0}
-                  color="text-emerald-400"
+                  color="text-primary"
                 />
               </div>
             )}
 
             {progress?.warning && <p className="text-xs text-amber-300">{progress.warning}</p>}
 
-            {/* Cancel button — always visible while a slow server is being handled */}
-            <Button type="button" variant="secondary" onClick={handleCancel}>
-              Cancel
+            <Button
+              type="button"
+              variant={phase === "ready" ? "default" : "secondary"}
+              onClick={phase === "ready" ? onDone : handleCancel}
+            >
+              {phase === "ready" ? "Browse library" : "Continue in background"}
             </Button>
           </div>
         )}

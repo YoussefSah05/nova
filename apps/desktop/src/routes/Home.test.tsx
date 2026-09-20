@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Channel, ChannelGroup, Profile, Source } from "@/types";
+import type { Channel, ChannelGroup, Profile, Source, VodItem } from "@/types";
 import { Home } from "./Home";
 
 // The browse grid is windowed (@tanstack/react-virtual), rails lazy-mount via
@@ -130,7 +130,7 @@ function groupFrom(c: Channel): ChannelGroup {
   };
 }
 
-function setupInvoke(channelsFor: (args: InvokeArgs) => Channel[]) {
+function setupInvoke(channelsFor: (args: InvokeArgs) => Channel[], movies: VodItem[] = []) {
   mocks.invoke.mockImplementation((command: string, args?: InvokeArgs): Promise<unknown> => {
     switch (command) {
       case "list_sources":
@@ -162,8 +162,12 @@ function setupInvoke(channelsFor: (args: InvokeArgs) => Channel[]) {
       case "semantic_search_catalog":
       case "semantic_search_series":
         return Promise.resolve([]);
-      case "list_channels":
       case "list_vod":
+        return Promise.resolve(movies);
+      case "set_vod_favorite":
+      case "set_vod_in_watchlist":
+        return Promise.resolve();
+      case "list_channels":
       case "list_series":
         return Promise.resolve([]);
       default:
@@ -221,5 +225,44 @@ describe("Home", () => {
         expect.objectContaining({ query: "news" })
       )
     );
+  });
+  it("updates favorite and watchlist controls in an open movie detail", async () => {
+    setupInvoke(
+      () => [],
+      [
+        {
+          id: 7,
+          sourceId: 1,
+          name: "Review Movie",
+          cleanTitle: null,
+          year: 2024,
+          logoUrl: null,
+          streamUrl: "http://127.0.0.1:9/fixture",
+          category: "Movies",
+          isFavorite: false,
+          isInWatchlist: false,
+          addedAt: null,
+          dedupGroup: null,
+          canonicalTitle: null,
+          posterUrl: null,
+          backdropUrl: null,
+          overview: null,
+        },
+      ]
+    );
+    renderHome();
+    await userEvent.click(await screen.findByRole("button", { name: "Movies" }));
+    const cards = await screen.findAllByRole("button", { name: "Review Movie" });
+    await userEvent.click(cards[0]);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Review Movie to favourites" })
+    );
+    expect(
+      await screen.findByRole("button", { name: "Remove Review Movie from favourites" })
+    ).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Add Review Movie to watchlist" }));
+    expect(
+      await screen.findByRole("button", { name: "Remove Review Movie from watchlist" })
+    ).toHaveAttribute("aria-pressed", "true");
   });
 });

@@ -333,6 +333,9 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       const rollback = patchItemEverywhere(qc, profile.id, activeSourceId, item.key, {
         isFavorite: next,
       });
+      setSelectedContent((current) =>
+        current?.key === item.key ? { ...current, isFavorite: next } : current
+      );
       if (item.kind === "series") setSelectedSeries(patchSelected(item, { isFavorite: next }));
       try {
         await invokeFavorite(item, profile.id, next);
@@ -340,6 +343,9 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
         void qc.invalidateQueries({ queryKey: browseKeys.continueWatching(profile.id) });
       } catch (error: unknown) {
         rollback();
+        setSelectedContent((current) =>
+          current?.key === item.key ? { ...current, isFavorite: !next } : current
+        );
         if (item.kind === "series") setSelectedSeries(patchSelected(item, { isFavorite: !next }));
         setSourceError(errorMessage(error));
       }
@@ -353,12 +359,18 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       const rollback = patchItemEverywhere(qc, profile.id, activeSourceId, item.key, {
         isInWatchlist: next,
       });
+      setSelectedContent((current) =>
+        current?.key === item.key ? { ...current, isInWatchlist: next } : current
+      );
       if (item.kind === "series") setSelectedSeries(patchSelected(item, { isInWatchlist: next }));
       try {
         await invokeWatchlist(item, profile.id, next);
         invalidateMembershipRails(qc, profile.id, activeSourceId, tabForKind(item.kind));
       } catch (error: unknown) {
         rollback();
+        setSelectedContent((current) =>
+          current?.key === item.key ? { ...current, isInWatchlist: !next } : current
+        );
         if (item.kind === "series")
           setSelectedSeries(patchSelected(item, { isInWatchlist: !next }));
         setSourceError(errorMessage(error));

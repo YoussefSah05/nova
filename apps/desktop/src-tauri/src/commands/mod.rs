@@ -1368,12 +1368,14 @@ async fn open_profile_db(
     app: &AppHandle,
 ) -> Result<(), ApiError> {
     use tauri::Manager;
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .join("profiles")
-        .join(profile_id);
+    let root = match crate::validation_data_dir() {
+        Some(root) => root,
+        None => app
+            .path()
+            .app_data_dir()
+            .map_err(|e| ApiError::Internal(e.to_string()))?,
+    };
+    let data_dir = root.join("profiles").join(profile_id);
     std::fs::create_dir_all(&data_dir).map_err(|e| ApiError::Internal(e.to_string()))?;
     let db_path = data_dir.join("profile.db");
     let pool = init_profile_db(
