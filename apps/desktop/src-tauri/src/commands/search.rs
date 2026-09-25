@@ -6,10 +6,8 @@
 //! nothing has been transcribed yet — the panel shows a friendly empty state.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use nova_core::{ChannelGroup, ContentSort, SeriesSummary, VodItem};
-use nova_enrich::Embedder;
 use nova_storage::{
     ChannelRepository, EmbeddingRepository, PlaybackRepository, SearchHit, SearchRepository,
     SeriesRepository, TranscriptRepository, VodRepository,
@@ -19,8 +17,10 @@ use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
 
 use crate::caption_session::content_key;
-use crate::commands::enrich::{embeddings_dir, marker, MODEL_ID};
+use crate::commands::enrich::MODEL_ID;
+use crate::commands::transcription::app_data_dir;
 use crate::ipc::ApiError;
+use crate::model_runtime::{ModelLease, RuntimeCancellation};
 use crate::state::AppState;
 
 use super::require_profile_pool;
@@ -70,23 +70,27 @@ async fn resolve_transcript_id(
 
 /// The shared embedder when the enrich model is installed; `None` otherwise so
 /// every search degrades gracefully to lexical-only (no download, no spin).
-async fn semantic_embedder(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-) -> Option<Arc<dyn Embedder>> {
-    let dir = embeddings_dir(app).ok()?;
-    if !marker(&dir).exists() {
-        return None;
-    }
-    state.semantic_embedder(&dir).await.ok()
+async fn semantic_embedder(app: &AppHandle, state: &State<'_, AppState>) -> Option<ModelLease> {
+    let root = app_data_dir(app).ok()?;
+    state
+        .model_runtime
+        .acquire(&root, MODEL_ID, &RuntimeCancellation::default())
+        .await
+        .ok()
 }
 
 /// Embed a query string off the async runtime (ONNX inference is blocking).
-async fn embed_query_vec(embedder: Arc<dyn Embedder>, query: String) -> Result<Vec<f32>, ApiError> {
-    tokio::task::spawn_blocking(move || embedder.embed_query(&query))
+async fn embed_query_vec(lease: ModelLease, query: String) -> Result<Vec<f32>, ApiError> {
+    lease
+        .run_blocking(&RuntimeCancellation::default(), move |lease| {
+            lease
+                .embedder()
+                .ok_or_else(|| ApiError::Internal("wrong model backend".into()))?
+                .embed_query(&query)
+                .map_err(|e| ApiError::Internal(e.to_string()))
+        })
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
-        .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 /// Dedupe keys preserving first-seen order — turns hit lists (which may repeat a
@@ -106,7 +110,7 @@ fn dedup_preserve_order<T: Clone + Eq + std::hash::Hash>(
 async fn ensure_segments_embedded(
     pool: &SqlitePool,
     transcript_id: i64,
-    embedder: &Arc<dyn Embedder>,
+    embedder: &ModelLease,
 ) -> Result<(), ApiError> {
     let repo = EmbeddingRepository::new(pool);
     let missing = repo
@@ -118,11 +122,10 @@ async fn ensure_segments_embedded(
     }
     let texts: Vec<String> = missing.iter().map(|(_, t)| t.clone()).collect();
     let ids: Vec<i64> = missing.iter().map(|(id, _)| *id).collect();
-    let emb = embedder.clone();
-    let vectors = tokio::task::spawn_blocking(move || emb.embed(&texts))
+    let vectors = embedder
+        .embed_documents(&texts, &RuntimeCancellation::default(), |_| {})
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(super::models::runtime_api_error)?;
     let rows: Vec<(i64, Vec<f32>)> = ids.into_iter().zip(vectors).collect();
     repo.upsert_many("segment", MODEL_ID, &rows)
         .await

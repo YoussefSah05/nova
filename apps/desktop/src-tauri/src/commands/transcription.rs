@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use nova_transcribe::{default_model, ensure_model, is_installed, ModelDownloadProgress};
+use nova_transcribe::{default_model, ensure_model, ModelDownloadProgress};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -43,33 +43,51 @@ pub async fn get_model_status(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ModelStatus, ApiError> {
-    let models_dir = whisper_models_dir(&app)?;
     let model = default_model();
     let observed = super::models::observe_internal_model(&app, &state.pool, model.id).await?;
+    let available = state
+        .model_runtime
+        .is_available(&app_data_dir(&app)?, model.id)
+        .await
+        .map_err(super::models::runtime_api_error)?;
     Ok(ModelStatus {
-        installed: is_installed(&models_dir, &model),
+        installed: available,
         model_id: observed.descriptor.id.as_str().to_string(),
-        availability: observed.availability.as_str().to_string(),
+        availability: if available {
+            "available"
+        } else {
+            observed.availability.as_str()
+        }
+        .to_string(),
     })
 }
 
 #[tauri::command]
-pub async fn download_whisper_model(app: AppHandle) -> Result<(), ApiError> {
+pub async fn download_whisper_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
     let models_dir = whisper_models_dir(&app)?;
     let model = default_model();
     let app_for_progress = app.clone();
-    ensure_model(&models_dir, &model, move |p: ModelDownloadProgress| {
-        let _ = app_for_progress.emit(
-            "model:download:progress",
-            ModelDownloadEvent {
-                artifact: p.artifact.to_string(),
-                downloaded_bytes: p.downloaded_bytes,
-                total_bytes: p.total_bytes,
-            },
-        );
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    state
+        .model_runtime
+        .mutate(model.id, async move {
+            ensure_model(&models_dir, &model, move |p: ModelDownloadProgress| {
+                let _ = app_for_progress.emit(
+                    "model:download:progress",
+                    ModelDownloadEvent {
+                        artifact: p.artifact.to_string(),
+                        downloaded_bytes: p.downloaded_bytes,
+                        total_bytes: p.total_bytes,
+                    },
+                );
+            })
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))
+        })
+        .await
+        .map_err(super::models::runtime_api_error)??;
     Ok(())
 }
 
@@ -101,6 +119,8 @@ pub async fn start_caption_session(
         audio_track: audio_track_index,
         track_lang,
         models_dir: whisper_models_dir(&app)?,
+        model_root: app_data_dir(&app)?,
+        runtime: state.model_runtime.clone(),
         transcripts_dir: transcripts_dir(&app)?,
     };
     state.caption_sessions.start(ctx).await;

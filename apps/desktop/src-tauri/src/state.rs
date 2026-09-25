@@ -1,13 +1,12 @@
-use nova_enrich::{Embedder, FastEmbedder};
 use nova_hls_proxy::SessionRegistry;
 use nova_mpv_player::MpvEngine;
 use sqlx::SqlitePool;
-use std::path::Path;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use crate::airplay::AirPlayEngine;
 use crate::caption_session::CaptionSessionManager;
+use crate::model_runtime::ModelRuntimeManager;
 use crate::translation_session::TranslationSessionManager;
 
 pub struct AppState {
@@ -32,15 +31,15 @@ pub struct AppState {
     /// Drives streaming translation of the source captions (one active session
     /// at a time), parallel to `caption_sessions`.
     pub translation_sessions: Arc<TranslationSessionManager>,
-    /// On-device embedder for semantic search query/segment embedding, loaded
-    /// once on first use (cold ONNX init is slow). `None` until then.
-    semantic_embedder: Mutex<Option<Arc<dyn Embedder>>>,
+    /// Owns lazily loaded AI backends and prevents unload during active use.
+    pub model_runtime: Arc<ModelRuntimeManager>,
 }
 
 impl AppState {
     pub fn new(pool: SqlitePool, hls_proxy_port: u16, hls_sessions: SessionRegistry) -> Self {
+        let pool = Arc::new(pool);
         Self {
-            pool: Arc::new(pool),
+            pool: pool.clone(),
             active_profile_id: Arc::new(RwLock::new(None)),
             profile_pools: Arc::new(RwLock::new(HashMap::new())),
             hls_proxy_port,
@@ -49,7 +48,7 @@ impl AppState {
             airplay: AirPlayEngine::new(),
             caption_sessions: Arc::new(CaptionSessionManager::new()),
             translation_sessions: Arc::new(TranslationSessionManager::new()),
-            semantic_embedder: Mutex::new(None),
+            model_runtime: Arc::new(ModelRuntimeManager::new(pool)),
         }
     }
 
@@ -63,24 +62,6 @@ impl AppState {
             .write()
             .await
             .insert(profile_id, Arc::new(pool));
-    }
-
-    /// The shared embedder, loading it (downloading nothing — the model must
-    /// already be installed) on first use. The cold ONNX init runs on a blocking
-    /// thread; the async lock serializes concurrent first-loads so we load once.
-    pub async fn semantic_embedder(&self, model_dir: &Path) -> Result<Arc<dyn Embedder>, String> {
-        let mut guard = self.semantic_embedder.lock().await;
-        if let Some(e) = guard.as_ref() {
-            return Ok(e.clone());
-        }
-        let dir = model_dir.to_path_buf();
-        let embedder = tokio::task::spawn_blocking(move || FastEmbedder::load(&dir, false))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?;
-        let arc: Arc<dyn Embedder> = Arc::new(embedder);
-        *guard = Some(arc.clone());
-        Ok(arc)
     }
 
     /// Load from the caller's profile on every search. Row counts are not a

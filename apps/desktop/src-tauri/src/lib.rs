@@ -5,6 +5,7 @@ pub mod ipc;
 #[cfg(target_os = "macos")]
 pub mod mac_model_library;
 pub mod model_registry;
+pub mod model_runtime;
 #[cfg(target_os = "macos")]
 pub mod mpv_layer;
 #[cfg(target_os = "macos")]
@@ -152,6 +153,8 @@ pub fn run() {
             // Phase 6 — Transcription (VOD), streaming caption sessions
             commands::transcription::get_model_status,
             commands::models::list_internal_models,
+            commands::models::unload_model,
+            commands::models::model_runtime_status,
             commands::models::add_external_model_library,
             commands::models::list_external_model_libraries,
             commands::transcription::download_whisper_model,

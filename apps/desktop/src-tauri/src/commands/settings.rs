@@ -64,12 +64,31 @@ pub async fn set_source_auto_refresh(
 // ── Transcription model + cache ────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn remove_whisper_model(app: AppHandle) -> Result<(), ApiError> {
+pub async fn remove_whisper_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
     let dir = whisper_models_dir(&app)?;
     let paths = model_paths(&dir, &default_model());
-    let _ = std::fs::remove_file(&paths.ggml);
-    let _ = std::fs::remove_dir_all(&paths.coreml_dir);
-    Ok(())
+    state
+        .model_runtime
+        .mutate(default_model().id, async move {
+            for result in [
+                tokio::fs::remove_file(&paths.ggml).await,
+                tokio::fs::remove_dir_all(&paths.coreml_dir).await,
+            ] {
+                if let Err(error) = result {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        return Err(ApiError::Internal(
+                            "could not remove model artifacts".into(),
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(super::models::runtime_api_error)?
 }
 
 #[derive(Debug, Clone, Serialize)]

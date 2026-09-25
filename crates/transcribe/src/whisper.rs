@@ -19,11 +19,12 @@
 
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 
 use nova_core::{RawTranscript, TranscriptSegment, TranscriptWord};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 #[derive(Debug, Error)]
 pub enum WhisperError {
@@ -35,6 +36,10 @@ pub enum WhisperError {
     Json(#[from] serde_json::Error),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("transcription cancelled")]
+    Cancelled,
+    #[error("transcription exceeded its time limit")]
+    TimedOut,
 }
 
 /// Candidate binary names for whisper.cpp's CLI, newest naming first. The
@@ -94,7 +99,28 @@ pub async fn transcribe_wav(
     ggml_model: &Path,
     out_base: &Path,
     opts: &TranscribeOptions,
+    on_progress: impl FnMut(u8),
+) -> Result<RawTranscript, WhisperError> {
+    transcribe_wav_cancellable(
+        wav,
+        ggml_model,
+        out_base,
+        opts,
+        on_progress,
+        std::future::pending(),
+    )
+    .await
+}
+
+/// Cancellation kills and reaps whisper-cli before returning to the lease
+/// owner. The five-minute bound applies to one existing ~30-second ASR window.
+pub async fn transcribe_wav_cancellable(
+    wav: &Path,
+    ggml_model: &Path,
+    out_base: &Path,
+    opts: &TranscribeOptions,
     mut on_progress: impl FnMut(u8),
+    cancelled: impl std::future::Future<Output = ()>,
 ) -> Result<RawTranscript, WhisperError> {
     let mut cmd = Command::new(whisper_bin());
     cmd.kill_on_drop(true)
@@ -147,22 +173,13 @@ pub async fn transcribe_wav(
 
     let mut child = cmd.spawn().map_err(WhisperError::Spawn)?;
 
-    // Drain stderr line-by-line: parse "progress = NN%", keep the tail for
-    // error reporting if whisper-cli exits non-zero.
-    let stderr = child.stderr.take().expect("stderr piped");
-    let mut lines = BufReader::new(stderr).lines();
-    let mut tail: Vec<String> = Vec::new();
-    while let Some(line) = lines.next_line().await? {
-        if let Some(pct) = parse_progress(&line) {
-            on_progress(pct);
-        }
-        tail.push(line);
-        if tail.len() > 20 {
-            tail.remove(0);
-        }
-    }
-
-    let status = child.wait().await?;
+    let (status, tail) = wait_for_child(
+        &mut child,
+        &mut on_progress,
+        cancelled,
+        Duration::from_secs(300),
+    )
+    .await?;
     if !status.success() {
         return Err(WhisperError::Failed(status.code(), tail.join("\n")));
     }
@@ -185,6 +202,40 @@ pub async fn transcribe_wav(
         }
     };
     parse_whisper_json(&json, &opts.model_id, normalized.as_deref())
+}
+
+async fn wait_for_child(
+    child: &mut Child,
+    on_progress: &mut impl FnMut(u8),
+    cancelled: impl std::future::Future<Output = ()>,
+    deadline: Duration,
+) -> Result<(std::process::ExitStatus, Vec<String>), WhisperError> {
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| std::io::Error::other("whisper stderr is not piped"))?;
+    let result = tokio::select! {
+        biased;
+        _ = cancelled => Err(WhisperError::Cancelled),
+        _ = tokio::time::sleep(deadline) => Err(WhisperError::TimedOut),
+        result = async {
+            let mut lines = BufReader::new(stderr).lines();
+            let mut tail = Vec::new();
+            while let Some(line) = lines.next_line().await? {
+                if let Some(pct) = parse_progress(&line) { on_progress(pct); }
+                tail.push(line);
+                if tail.len() > 20 { tail.remove(0); }
+            }
+            Ok::<_, WhisperError>((child.wait().await?, tail))
+        } => result,
+    };
+    if result.is_err() {
+        // start_kill is harmless if the child has already exited. Always wait
+        // so the caller may release model files/grants only after child exit.
+        let _ = child.start_kill();
+        child.wait().await?;
+    }
+    result
 }
 
 /// Normalize a language hint into a code whisper.cpp accepts (ISO-639-1, two
@@ -394,6 +445,58 @@ fn tokens_to_words(tokens: &[RawToken]) -> Vec<TranscriptWord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_reaps_child_before_returning_to_model_lease_owner() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exec sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_child(
+                &mut child,
+                &mut |_| {},
+                std::future::ready(()),
+                Duration::from_secs(60),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(WhisperError::Cancelled)));
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stalled_child_is_killed_and_reaped_at_deadline() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exec sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_child(
+                &mut child,
+                &mut |_| {},
+                std::future::pending(),
+                Duration::ZERO,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(WhisperError::TimedOut)));
+        assert!(child.try_wait().unwrap().is_some());
+    }
 
     const FIXTURE: &str = include_str!("../tests/fixtures/whisper_output.json");
 

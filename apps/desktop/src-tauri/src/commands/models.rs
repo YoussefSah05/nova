@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::ipc::ApiError;
 use crate::model_registry::{refresh_external, refresh_internal, register_external};
+use crate::model_runtime::RuntimeError;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -41,6 +42,50 @@ pub struct ExternalLibraryStatus {
     pub availability: String,
     pub observed_at: i64,
     pub models: Vec<ExternalModelStatus>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRuntimeStatus {
+    pub loaded_models: usize,
+    pub active_leases: usize,
+    pub estimated_resident_bytes: u64,
+    pub unknown_resident_models: usize,
+    pub busy_models: usize,
+    pub transitioning_models: usize,
+}
+
+/// Request explicit unload. Active inference leases always win over eviction.
+#[tauri::command]
+pub async fn unload_model(model_id: String, state: State<'_, AppState>) -> Result<bool, ApiError> {
+    state
+        .model_runtime
+        .unload(&model_id)
+        .await
+        .map_err(runtime_api_error)
+}
+
+pub(crate) fn runtime_api_error(error: RuntimeError) -> ApiError {
+    match error {
+        RuntimeError::Busy => ApiError::Conflict(error.to_string()),
+        RuntimeError::InvalidModel => ApiError::NotFound(error.to_string()),
+        _ => ApiError::Internal(error.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn model_runtime_status(
+    state: State<'_, AppState>,
+) -> Result<ModelRuntimeStatus, ApiError> {
+    let snapshot = state.model_runtime.snapshot().await;
+    Ok(ModelRuntimeStatus {
+        loaded_models: snapshot.loaded_models,
+        active_leases: snapshot.active_leases,
+        estimated_resident_bytes: snapshot.estimated_resident_bytes,
+        unknown_resident_models: snapshot.unknown_resident_models,
+        busy_models: snapshot.busy_models,
+        transitioning_models: snapshot.transitioning_models,
+    })
 }
 
 #[tauri::command]

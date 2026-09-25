@@ -32,11 +32,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::model_runtime::{ModelRuntimeManager, RuntimeCancellation, RuntimeError};
 use nova_core::TranscriptSegment;
 use nova_media::extract_audio_window;
 use nova_storage::{PlaybackRepository, TranscriptRepository};
 use nova_transcribe::{
-    default_model, ensure_model, segments_to_vtt, shift_transcript, transcribe_wav,
+    default_model, ensure_model, segments_to_vtt, shift_transcript, transcribe_wav_cancellable,
     ModelDownloadProgress, TranscribeOptions,
 };
 use serde::Serialize;
@@ -79,6 +80,7 @@ pub struct CaptionSessionManager {
 
 struct SessionHandle {
     cancel: Arc<AtomicBool>,
+    model_cancel: RuntimeCancellation,
     /// Live playhead in centiseconds (so it fits an atomic).
     playhead_cs: Arc<AtomicU64>,
 }
@@ -99,6 +101,8 @@ pub struct StartCtx {
     /// used as the transcription hint. `None` lets whisper auto-detect.
     pub track_lang: Option<String>,
     pub models_dir: PathBuf,
+    pub model_root: PathBuf,
+    pub runtime: Arc<ModelRuntimeManager>,
     pub transcripts_dir: PathBuf,
 }
 
@@ -110,9 +114,11 @@ impl CaptionSessionManager {
     /// Start a session, cancelling any previous one.
     pub async fn start(&self, ctx: StartCtx) {
         let cancel = Arc::new(AtomicBool::new(false));
+        let model_cancel = RuntimeCancellation::default();
         let playhead_cs = Arc::new(AtomicU64::new((ctx.from_sec.max(0.0) * 100.0) as u64));
         let handle = Arc::new(SessionHandle {
             cancel: Arc::clone(&cancel),
+            model_cancel: model_cancel.clone(),
             playhead_cs: Arc::clone(&playhead_cs),
         });
 
@@ -120,11 +126,12 @@ impl CaptionSessionManager {
             let mut guard = self.active.lock().await;
             if let Some(prev) = guard.take() {
                 prev.cancel.store(true, Ordering::SeqCst);
+                prev.model_cancel.cancel();
             }
             *guard = Some(Arc::clone(&handle));
         }
 
-        tokio::spawn(run_session(ctx, cancel, playhead_cs));
+        tokio::spawn(run_session(ctx, cancel, model_cancel, playhead_cs));
     }
 
     /// Update the live playhead so the session prioritises/throttles correctly.
@@ -139,6 +146,7 @@ impl CaptionSessionManager {
     pub async fn stop(&self) {
         if let Some(h) = self.active.lock().await.take() {
             h.cancel.store(true, Ordering::SeqCst);
+            h.model_cancel.cancel();
         }
     }
 }
@@ -184,8 +192,13 @@ struct ModelDownloadEvent {
 
 // ── The session loop ──────────────────────────────────────────────────────────
 
-async fn run_session(ctx: StartCtx, cancel: Arc<AtomicBool>, playhead_cs: Arc<AtomicU64>) {
-    if let Err(e) = run_session_inner(&ctx, &cancel, &playhead_cs).await {
+async fn run_session(
+    ctx: StartCtx,
+    cancel: Arc<AtomicBool>,
+    model_cancel: RuntimeCancellation,
+    playhead_cs: Arc<AtomicU64>,
+) {
+    if let Err(e) = run_session_inner(&ctx, &cancel, &model_cancel, &playhead_cs).await {
         if !cancel.load(Ordering::SeqCst) {
             emit_status(&ctx, "failed", None, Some(e));
         }
@@ -195,26 +208,48 @@ async fn run_session(ctx: StartCtx, cancel: Arc<AtomicBool>, playhead_cs: Arc<At
 async fn run_session_inner(
     ctx: &StartCtx,
     cancel: &AtomicBool,
+    model_cancel: &RuntimeCancellation,
     playhead_cs: &AtomicU64,
 ) -> Result<(), String> {
     emit_status(ctx, "preparing", None, None);
 
-    // Ensure the model is present (the UI normally downloads it first; this is
-    // a defensive no-op when already installed).
+    // Prefer a registered available location; retain the previous internal
+    // download behavior when no local copy exists.
     let model = default_model();
-    let app_for_model = ctx.app.clone();
-    let paths = ensure_model(&ctx.models_dir, &model, move |p: ModelDownloadProgress| {
-        let _ = app_for_model.emit(
-            "model:download:progress",
-            ModelDownloadEvent {
-                artifact: p.artifact.to_string(),
-                downloaded_bytes: p.downloaded_bytes,
-                total_bytes: p.total_bytes,
-            },
-        );
-    })
-    .await
-    .map_err(|e| format!("model: {e}"))?;
+    match ctx
+        .runtime
+        .acquire(&ctx.model_root, model.id, model_cancel)
+        .await
+    {
+        Ok(_lease) => {}
+        Err(RuntimeError::Unavailable) => {
+            let app_for_model = ctx.app.clone();
+            let models_dir = ctx.models_dir.clone();
+            let download_model = model.clone();
+            ctx.runtime
+                .mutate(model.id, async move {
+                    ensure_model(
+                        &models_dir,
+                        &download_model,
+                        move |p: ModelDownloadProgress| {
+                            let _ = app_for_model.emit(
+                                "model:download:progress",
+                                ModelDownloadEvent {
+                                    artifact: p.artifact.to_string(),
+                                    downloaded_bytes: p.downloaded_bytes,
+                                    total_bytes: p.total_bytes,
+                                },
+                            );
+                        },
+                    )
+                    .await
+                    .map_err(|e| format!("model: {e}"))
+                })
+                .await
+                .map_err(|e| e.to_string())??;
+        }
+        Err(e) => return Err(e.to_string()),
+    }
     if cancel.load(Ordering::SeqCst) {
         return Ok(());
     }
@@ -337,7 +372,30 @@ async fn run_session_inner(
             initial_prompt: prompt_tail.clone(),
             max_len: MAX_LEN_CHARS,
         };
-        let mut raw = match transcribe_wav(&wav, &paths.ggml, &out_base, &opts, |_pct| {}).await {
+        let lease = ctx
+            .runtime
+            .acquire(&ctx.model_root, model.id, model_cancel)
+            .await
+            .map_err(|e| e.to_string())?;
+        let child_cancel = model_cancel.clone();
+        let result = lease
+            .run_async(model_cancel, move |lease| async move {
+                let _work = work;
+                let model_path = lease.whisper_path().ok_or("wrong model backend")?;
+                transcribe_wav_cancellable(
+                    &wav,
+                    model_path,
+                    &out_base,
+                    &opts,
+                    |_pct| {},
+                    child_cancel.cancelled(),
+                )
+                .await
+                .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut raw = match result {
             Ok(t) => t,
             Err(e) => {
                 if covered.is_empty() {

@@ -110,6 +110,9 @@ fn nllb_availability(dir: &Path) -> ModelAvailability {
 }
 
 fn embedding_availability(dir: &Path) -> ModelAvailability {
+    if nova_enrich::FastEmbedder::local_files_present(dir) {
+        return ModelAvailability::Available;
+    }
     let marker = dir.join(".installed");
     if has_evidence(&marker) || has_evidence(dir) {
         // FastEmbed's cache layout is opaque here. The old marker establishes
@@ -199,7 +202,7 @@ fn unavailable_models(library: &ModelLibrary) -> Result<Vec<RegisteredModel>, Mo
 
 /// A disconnected root is distinct from an online library lacking artifacts.
 /// No selected external path is persisted or sent to the webview.
-fn observe_external_at(
+pub(crate) fn observe_external_at(
     library: &ModelLibrary,
     selected_root: Option<&Path>,
 ) -> Result<(bool, Vec<RegisteredModel>), ModelContractError> {

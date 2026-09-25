@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use nova_enrich::{
-    best_scored, cluster, parse_genres, parse_search, DedupItem, Embedder, EnrichError,
-    FastEmbedder, GenreClassifier, TmdbClient, TmdbMatch, MIN_CONFIDENCE, WEAK_CONFIDENCE,
+    best_scored, cluster, parse_genres, parse_search, DedupItem, EnrichError, FastEmbedder,
+    GenreClassifier, TmdbClient, TmdbMatch, MIN_CONFIDENCE, WEAK_CONFIDENCE,
 };
 use nova_storage::{
     ChannelRepository, EmbeddingRepository, EnrichUpdate, ProfileSettingsRepository,
@@ -22,14 +22,13 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::transcription::app_data_dir;
 use crate::ipc::ApiError;
+use crate::model_runtime::{ModelRuntimeManager, RuntimeCancellation};
 use crate::state::AppState;
 
 use super::require_profile_pool;
 
 pub(crate) use nova_enrich::MODEL_ID;
 
-/// Rows embedded per batch; small enough that progress advances visibly.
-const EMBED_CHUNK: usize = 256;
 /// TMDB results flushed to the DB this often, so a long pass persists progress
 /// incrementally (and re-runs resume) instead of losing everything on a hiccup.
 const TMDB_WRITE_BATCH: usize = 200;
@@ -73,26 +72,50 @@ pub async fn get_enrich_model_status(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<EnrichModelStatus, ApiError> {
-    let dir = embeddings_dir(&app)?;
     let observed = super::models::observe_internal_model(&app, &state.pool, MODEL_ID).await?;
+    let available = state
+        .model_runtime
+        .is_available(&app_data_dir(&app)?, MODEL_ID)
+        .await
+        .map_err(super::models::runtime_api_error)?;
     Ok(EnrichModelStatus {
-        installed: marker(&dir).exists(),
+        installed: available,
         model_id: observed.descriptor.id.as_str().to_string(),
-        availability: observed.availability.as_str().to_string(),
+        availability: if available {
+            "available"
+        } else {
+            observed.availability.as_str()
+        }
+        .to_string(),
     })
 }
 
 #[tauri::command]
-pub async fn download_enrich_models(app: AppHandle) -> Result<(), ApiError> {
+pub async fn download_enrich_models(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
     let dir = embeddings_dir(&app)?;
-    std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.to_string()))?;
-    let load_dir = dir.clone();
-    tauri::async_runtime::spawn_blocking(move || FastEmbedder::load(&load_dir, true).map(|_| ()))
+    state
+        .model_runtime
+        .mutate(MODEL_ID, async move {
+            tokio::fs::create_dir_all(&dir)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            let load_dir = dir.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                FastEmbedder::load(&load_dir, true).map(|_| ())
+            })
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+            tokio::fs::write(marker(&dir), b"1")
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            Ok(())
+        })
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    std::fs::write(marker(&dir), b"1").map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(())
+        .map_err(super::models::runtime_api_error)?
 }
 
 #[tauri::command]
@@ -102,8 +125,13 @@ pub async fn start_enrichment(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), ApiError> {
-    let dir = embeddings_dir(&app)?;
-    if !marker(&dir).exists() {
+    let root = app_data_dir(&app)?;
+    if !state
+        .model_runtime
+        .is_available(&root, MODEL_ID)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
         // No model installed. Auto-trigger after import is harmless, but emit a
         // terminal event so a *manual* run from Settings doesn't spin forever —
         // the panel turns this into a "download the model first" prompt.
@@ -121,9 +149,10 @@ pub async fn start_enrichment(
         return Ok(());
     }
     let pool = require_profile_pool(&profile_id, &state).await?;
+    let runtime = state.model_runtime.clone();
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = run_enrichment(pool, source_id, dir, &app2).await {
+        if let Err(e) = run_enrichment(pool, source_id, runtime, &app2).await {
             let _ = app2.emit(
                 "catalog:enrich:progress",
                 EnrichProgress {
@@ -143,7 +172,7 @@ pub async fn start_enrichment(
 async fn run_enrichment(
     pool: Arc<sqlx::SqlitePool>,
     source_id: i64,
-    cache_dir: PathBuf,
+    runtime: Arc<ModelRuntimeManager>,
     app: &AppHandle,
 ) -> Result<(), ApiError> {
     let ch_rows = ChannelRepository::new(&pool)
@@ -151,9 +180,7 @@ async fn run_enrichment(
         .await?;
     let vod_rows = VodRepository::new(&pool).list_unenriched(source_id).await?;
     let total = ch_rows.len() + vod_rows.len();
-    // The catalog `spawn_blocking` below moves `cache_dir`; keep a copy for the
-    // independent series-embedding stage (series aren't in the catalog sweep).
-    let cache_dir_series = cache_dir.clone();
+    let model_root = app_data_dir(app)?;
 
     let emit = |stage: &str, processed: usize, done: bool| {
         let _ = app.emit(
@@ -176,51 +203,40 @@ async fn run_enrichment(
     if total > 0 {
         // The first model load is slow (cold ONNX init); tell the UI before we block.
         emit("loading-model", 0, false);
+        let lease = runtime
+            .acquire(&model_root, MODEL_ID, &RuntimeCancellation::default())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-        // Embedding + clustering is CPU-heavy and synchronous — do it off the
-        // async runtime. Embed in chunks and emit progress per chunk so the bar
-        // actually moves (the whole-catalog single call looked stuck at 0).
-        let app_bg = app.clone();
+        let genres: Vec<String> = nova_core::classify::genres()
+            .iter()
+            .map(|g| g.to_string())
+            .collect();
+        let label_vectors = lease
+            .embed_documents(&genres, &RuntimeCancellation::default(), |_| {})
+            .await
+            .map_err(super::models::runtime_api_error)?;
+        let classifier = GenreClassifier::new(genres.into_iter().zip(label_vectors).collect());
+        let texts: Vec<String> = ch_rows
+            .iter()
+            .chain(&vod_rows)
+            .map(|row| row.text.clone())
+            .collect();
+        let vectors = lease
+            .embed_documents(&texts, &RuntimeCancellation::default(), |processed| {
+                emit("embedding", processed, false)
+            })
+            .await
+            .map_err(super::models::runtime_api_error)?;
+        drop(lease);
+
+        // Clustering is CPU work, but does not own the model admission permit.
         type EmbedRows = Vec<(i64, Vec<f32>)>;
-        #[allow(clippy::type_complexity)]
-        let (ch_updates, vod_updates, ch_embed, vod_embed) = tauri::async_runtime::spawn_blocking(
-            move || -> Result<(Vec<EnrichUpdate>, Vec<EnrichUpdate>, EmbedRows, EmbedRows), String> {
-                let embedder = FastEmbedder::load(&cache_dir, false).map_err(|e| e.to_string())?;
-                let genres = nova_core::classify::genres();
-                let genre_strings: Vec<String> = genres.iter().map(|g| g.to_string()).collect();
-                let label_vecs = embedder.embed(&genre_strings).map_err(|e| e.to_string())?;
-                let labels: Vec<(String, Vec<f32>)> =
-                    genre_strings.into_iter().zip(label_vecs).collect();
-                let classifier = GenreClassifier::new(labels);
-
-                // Embed channels + movies in one 0..total sweep, then split the
-                // vectors back out for per-type clustering.
-                let ch_n = ch_rows.len();
-                let mut texts: Vec<String> = Vec::with_capacity(total);
-                texts.extend(ch_rows.iter().map(|r| r.text.clone()));
-                texts.extend(vod_rows.iter().map(|r| r.text.clone()));
-
-                let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(total);
-                for batch in texts.chunks(EMBED_CHUNK) {
-                    vectors.extend(embedder.embed(batch).map_err(|e| e.to_string())?);
-                    let _ = app_bg.emit(
-                        "catalog:enrich:progress",
-                        EnrichProgress {
-                            source_id,
-                            stage: "embedding".into(),
-                            processed: vectors.len(),
-                            total,
-                            done: false,
-                            error: None,
-                        },
-                    );
-                }
-                let (ch_vecs, vod_vecs) = vectors.split_at(ch_n);
+        let (ch_updates, vod_updates, ch_embed, vod_embed) =
+            tauri::async_runtime::spawn_blocking(move || {
+                let (ch_vecs, vod_vecs) = vectors.split_at(ch_rows.len());
                 let ch = cluster_and_genre(&ch_rows, ch_vecs, &classifier);
                 let vod = cluster_and_genre(&vod_rows, vod_vecs, &classifier);
-
-                // Keep the vectors for semantic search instead of dropping them —
-                // pair each row id with its embedding (zero extra inference).
                 let ch_embed: EmbedRows = ch_rows
                     .iter()
                     .zip(ch_vecs)
@@ -231,12 +247,10 @@ async fn run_enrichment(
                     .zip(vod_vecs)
                     .map(|(r, v)| (r.id, v.clone()))
                     .collect();
-                Ok((ch, vod, ch_embed, vod_embed))
-            },
-        )
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .map_err(ApiError::Internal)?;
+                (ch, vod, ch_embed, vod_embed)
+            })
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
 
         ChannelRepository::new(&pool)
             .apply_enrichment(&ch_updates)
@@ -270,15 +284,14 @@ async fn run_enrichment(
             })
             .collect();
         let titles: Vec<String> = series_work.iter().map(|(t, _)| t.clone()).collect();
-        let cdir = cache_dir_series;
-        let vectors =
-            tauri::async_runtime::spawn_blocking(move || -> Result<Vec<Vec<f32>>, String> {
-                let embedder = FastEmbedder::load(&cdir, false).map_err(|e| e.to_string())?;
-                embedder.embed(&texts).map_err(|e| e.to_string())
-            })
+        let lease = runtime
+            .acquire(&model_root, MODEL_ID, &RuntimeCancellation::default())
             .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?
-            .map_err(ApiError::Internal)?;
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        let vectors = lease
+            .embed_documents(&texts, &RuntimeCancellation::default(), |_| {})
+            .await
+            .map_err(super::models::runtime_api_error)?;
         let rows: Vec<(String, Vec<f32>)> = titles.into_iter().zip(vectors).collect();
         series_repo
             .apply_embeddings(source_id, MODEL_ID, &rows)

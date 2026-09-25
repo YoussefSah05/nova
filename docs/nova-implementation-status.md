@@ -667,3 +667,106 @@ Validation commands/results for M2.3:
 M2.3 is complete at the registry/authorization boundary. The next model
 milestone is M2.5 runtime resolution and ownership; this work does not select
 external files for inference or add scheduling policy.
+
+## M2.5 — shared model runtime and lease ownership
+
+Updated: 2026-09-26. Complete on branch `m2-model-runtime-manager`, based on
+`33cf05b`. The starting point already contained M2.3 persistence, external
+authorization and availability tests. Source inspection confirmed that search
+cached its own embedder, enrichment loaded separate embedders, translation
+loaded per session, and Whisper removal had no shared in-use exclusion. This
+slice consolidates those existing backends without changing catalog identity,
+playback ownership or the milestone order in `master-plan.md`.
+
+### Implemented contract and reuse
+
+- `AppState` owns one `ModelRuntimeManager` backed by the app database, separate
+  from profile databases. It resolves the existing logical IDs through the
+  persisted registry, prefers an available internal location, and otherwise
+  uses an available authorized external library. Availability is refreshed
+  before acquisition; missing/offline locations cannot silently reuse a cached
+  backend. Reconnection preserves logical identity. An offline external
+  library does not trigger an automatic replacement download.
+- Existing FastEmbed/ONNX, NLLB/CTranslate2 and Whisper implementations are
+  backend adapters. Concurrent first use loads one shared instance; a failed
+  load is retryable. Runtime acquisition is local-only. E5 now reads the
+  existing Hugging Face cache layout without constructing a network client;
+  missing/partial caches fail without creating files, and cache symlinks must
+  stay inside the registered library. Existing explicit install commands remain
+  the download boundary. Runtime resolution uses registered locations rather
+  than an ambient `HF_HOME` override.
+- Strong leases retain both the backend and its macOS folder authorization.
+  Unload, location replacement, installation and internal model removal are
+  excluded while a lease is active. A cancelled or aborted load owner cannot
+  release the lifecycle lock while native loading continues. Native load and
+  destruction run outside the async executor. The owned bookmark guard reuses
+  the M2.3 authorization path and remains alive until backend destruction.
+- Search, transcript embedding, catalog/series enrichment, caption windows and
+  translation batches acquire the shared runtime. Cached translation replay
+  does not eagerly initialize a model. Embedding work yields per-model
+  admission between batches; query/document prefixes and vector identity stay
+  unchanged. Existing lexical fallback remains available when acquisition
+  fails. Playback does not acquire a model lease.
+- Cancellation while waiting for load/admission returns promptly. Native
+  ONNX/CTranslate2 work retains its lease and admission permit until the
+  current call completes, even if the requester is cancelled, aborted or
+  panics. Whisper cancellation and its 300-second process deadline kill and
+  reap the child before the owning worker releases its lease.
+- Resource hooks expose loaded, leased, busy and transitioning counts plus
+  known/unknown resident estimates. One operation per model is admitted at a
+  time. `unload_model` and `model_runtime_status` are registered Tauri commands;
+  the IPC contract documents their safe count-only responses and busy errors.
+  Whisper's prepared adapter is distinct from resident subprocess weights.
+
+No schema migration, model-file relocation, configuration rewrite or new
+replacement registry was necessary. App migrations 0002/0003 and existing
+logical IDs remain authoritative. Existing status DTO shapes are preserved;
+their installed flag now includes usable external locations. The new runtime
+commands have no React consumer in this milestone.
+
+### Regression coverage and validation
+
+Added 18 focused tests: 13 runtime/lifetime tests, three offline embedding-cache
+tests, and two subprocess cancellation/deadline tests. They cover concurrent
+first load, cloned leases blocking unload, cancellation and task abortion
+during load/work/mutation, retry after failed load, panic cleanup, admission
+exclusion, batching cancellation, location replacement with stable identity,
+missing-location refresh, and macOS bookmark disconnect/reconnect. Fixtures
+use synthetic model artifacts and fake native adapters; subprocess tests use
+a local synthetic child. No provider credentials or production models are
+needed.
+
+Validation commands/results:
+
+- `SQLX_OFFLINE=true cargo test -p nova-desktop --lib model_runtime::tests --locked`:
+  pass during focused iteration; all 13 final cases also pass in the full run.
+- `SQLX_OFFLINE=true cargo test -p nova-desktop -p nova-enrich -p nova-transcribe --locked`:
+  pass during integration, including offline cache and child-lifetime tests.
+- `just test`: pass for the full Rust workspace, migration/integration tests and
+  all 28 frontend tests. Existing synthetic HTTP fixtures used loopback
+  permission; the two pre-existing ignored tests remain ignored.
+- `just check` and `just lint`: pass (whole workspace including Tauri;
+  Clippy all targets with `-D warnings`, plus ESLint).
+- `just typecheck`, `pnpm -C apps/desktop build`, and
+  `pnpm verify-environment --manifest-only`: pass. The production frontend
+  retains the existing large-chunk warning.
+- `cargo fmt --all -- --check` and `git diff --check`: pass.
+- `pnpm exec prettier --check docs/nova-implementation-status.md`: reports
+  pre-existing table formatting and older paragraph indentation; the appended
+  M2.5 section matches Prettier output. Historical sections were not reformatted.
+
+### Qualification limits and next milestone
+
+The concurrency tests establish ownership and cancellation with deterministic
+adapters; this run does not certify real ONNX/CTranslate2 inference quality,
+peak native memory, playback-under-inference stress, a physical removable
+drive, native picker interaction, or signed App Sandbox entitlements. Bookmark
+tests exercise the current macOS bundle's native bookmark behavior using
+temporary directories. Structural availability is not digest verification.
+
+Native ONNX/CTranslate2 calls finish their current batch after cancellation;
+they are not forcibly preempted. Backend resident sizes remain explicitly
+unknown. Per-model admission is implemented, but global memory budgets,
+cross-model priority, playback-aware admission, queue limits and automatic
+eviction belong to **M2.6 resource policy**, the next bounded milestone. M2.5
+is complete; M2.6 and later catalog architecture work have not been started.

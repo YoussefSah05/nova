@@ -52,32 +52,50 @@ pub async fn get_nllb_model_status(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ModelStatus, ApiError> {
-    let models_dir = nllb_models_dir(&app)?;
     let observed =
         super::models::observe_internal_model(&app, &state.pool, nllb_model::MODEL_ID).await?;
+    let available = state
+        .model_runtime
+        .is_available(&app_data_dir(&app)?, nllb_model::MODEL_ID)
+        .await
+        .map_err(super::models::runtime_api_error)?;
     Ok(ModelStatus {
-        installed: nllb_model::is_installed(&models_dir),
+        installed: available,
         model_id: observed.descriptor.id.as_str().to_string(),
-        availability: observed.availability.as_str().to_string(),
+        availability: if available {
+            "available"
+        } else {
+            observed.availability.as_str()
+        }
+        .to_string(),
     })
 }
 
 #[tauri::command]
-pub async fn download_nllb_model(app: AppHandle) -> Result<(), ApiError> {
+pub async fn download_nllb_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
     let models_dir = nllb_models_dir(&app)?;
     let app_for_progress = app.clone();
-    nllb_model::ensure_model(&models_dir, move |p| {
-        let _ = app_for_progress.emit(
-            "nllb:download:progress",
-            ModelDownloadEvent {
-                artifact: p.artifact.to_string(),
-                downloaded_bytes: p.downloaded_bytes,
-                total_bytes: p.total_bytes,
-            },
-        );
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    state
+        .model_runtime
+        .mutate(nllb_model::MODEL_ID, async move {
+            nllb_model::ensure_model(&models_dir, move |p| {
+                let _ = app_for_progress.emit(
+                    "nllb:download:progress",
+                    ModelDownloadEvent {
+                        artifact: p.artifact.to_string(),
+                        downloaded_bytes: p.downloaded_bytes,
+                        total_bytes: p.total_bytes,
+                    },
+                );
+            })
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))
+        })
+        .await
+        .map_err(super::models::runtime_api_error)??;
     Ok(())
 }
 
@@ -120,6 +138,8 @@ pub async fn start_translation_session(
         audio_track: audio_track_index,
         target_lang,
         models_dir: nllb_models_dir(&app)?,
+        model_root: super::transcription::app_data_dir(&app)?,
+        runtime: state.model_runtime.clone(),
     };
     state.translation_sessions.start(ctx).await;
     Ok(())

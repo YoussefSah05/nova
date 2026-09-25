@@ -20,13 +20,14 @@ use std::time::Duration;
 use nova_storage::{
     PlaybackRepository, SourceSegment, TranscriptRepository, TranslationRepository, TranslationRow,
 };
-use nova_translate::{model as nllb_model, to_nllb, NllbTranslator, Translator};
+use nova_translate::{model as nllb_model, to_nllb};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
 use crate::caption_session::content_key;
+use crate::model_runtime::{ModelRuntimeManager, RuntimeCancellation, RuntimeError};
 
 /// Stop translating once this far ahead of the playhead; resume as it catches up.
 const PREFETCH_AHEAD_SEC: f64 = 90.0;
@@ -43,6 +44,7 @@ pub struct TranslationSessionManager {
 
 struct Handle {
     cancel: Arc<AtomicBool>,
+    model_cancel: RuntimeCancellation,
     playhead_cs: Arc<AtomicU64>,
 }
 
@@ -60,6 +62,8 @@ pub struct StartCtx {
     pub target_lang: String,
     /// NLLB model directory.
     pub models_dir: PathBuf,
+    pub model_root: PathBuf,
+    pub runtime: Arc<ModelRuntimeManager>,
 }
 
 impl TranslationSessionManager {
@@ -69,19 +73,22 @@ impl TranslationSessionManager {
 
     pub async fn start(&self, ctx: StartCtx) {
         let cancel = Arc::new(AtomicBool::new(false));
+        let model_cancel = RuntimeCancellation::default();
         let playhead_cs = Arc::new(AtomicU64::new((ctx.from_sec.max(0.0) * 100.0) as u64));
         let handle = Arc::new(Handle {
             cancel: Arc::clone(&cancel),
+            model_cancel: model_cancel.clone(),
             playhead_cs: Arc::clone(&playhead_cs),
         });
         {
             let mut guard = self.active.lock().await;
             if let Some(prev) = guard.take() {
                 prev.cancel.store(true, Ordering::SeqCst);
+                prev.model_cancel.cancel();
             }
             *guard = Some(Arc::clone(&handle));
         }
-        tokio::spawn(run_session(ctx, cancel, playhead_cs));
+        tokio::spawn(run_session(ctx, cancel, model_cancel, playhead_cs));
     }
 
     pub async fn set_playhead(&self, sec: f64) {
@@ -94,6 +101,7 @@ impl TranslationSessionManager {
     pub async fn stop(&self) {
         if let Some(h) = self.active.lock().await.take() {
             h.cancel.store(true, Ordering::SeqCst);
+            h.model_cancel.cancel();
         }
     }
 }
@@ -139,8 +147,13 @@ struct ModelDownloadEvent {
 
 // ── Session loop ────────────────────────────────────────────────────────────────
 
-async fn run_session(ctx: StartCtx, cancel: Arc<AtomicBool>, playhead_cs: Arc<AtomicU64>) {
-    if let Err(e) = run_session_inner(&ctx, &cancel, &playhead_cs).await {
+async fn run_session(
+    ctx: StartCtx,
+    cancel: Arc<AtomicBool>,
+    model_cancel: RuntimeCancellation,
+    playhead_cs: Arc<AtomicU64>,
+) {
+    if let Err(e) = run_session_inner(&ctx, &cancel, &model_cancel, &playhead_cs).await {
         if !cancel.load(Ordering::SeqCst) {
             emit_status(&ctx, "failed", Some(e));
         }
@@ -150,6 +163,7 @@ async fn run_session(ctx: StartCtx, cancel: Arc<AtomicBool>, playhead_cs: Arc<At
 async fn run_session_inner(
     ctx: &StartCtx,
     cancel: &AtomicBool,
+    model_cancel: &RuntimeCancellation,
     playhead_cs: &AtomicU64,
 ) -> Result<(), String> {
     emit_status(ctx, "preparing", None);
@@ -158,32 +172,9 @@ async fn run_session_inner(
     let tgt_nllb = to_nllb(&ctx.target_lang)
         .ok_or_else(|| format!("unsupported target language: {}", ctx.target_lang))?;
 
-    // Ensure the NLLB model is present (UI normally downloads first; defensive).
-    let app_for_model = ctx.app.clone();
-    nllb_model::ensure_model(&ctx.models_dir, move |p| {
-        let _ = app_for_model.emit(
-            "nllb:download:progress",
-            ModelDownloadEvent {
-                artifact: p.artifact.to_string(),
-                downloaded_bytes: p.downloaded_bytes,
-                total_bytes: p.total_bytes,
-            },
-        );
-    })
-    .await
-    .map_err(|e| format!("model: {e}"))?;
-    if cancel.load(Ordering::SeqCst) {
-        return Ok(());
-    }
-
-    // Load the translator once (blocking CTranslate2 model load).
-    let models_dir = ctx.models_dir.clone();
-    let translator = tokio::task::spawn_blocking(move || NllbTranslator::load(&models_dir))
-        .await
-        .map_err(|e| format!("translator load task: {e}"))?
-        .map_err(|e| format!("translator: {e}"))?;
-    let translator = Arc::new(translator);
-    let backend = translator.backend_id().to_string();
+    // The existing NLLB adapter's persisted backend ID. Replay cached captions
+    // without loading a model; obtain a runtime lease only for pending inference.
+    let backend = nllb_model::MODEL_ID.to_string();
 
     // Resolve the source transcript identity (same content_key + track the
     // caption session uses).
@@ -261,15 +252,52 @@ async fn run_session_inner(
             continue;
         }
 
+        let tr = match ctx
+            .runtime
+            .acquire(&ctx.model_root, nllb_model::MODEL_ID, model_cancel)
+            .await
+        {
+            Ok(lease) => lease,
+            Err(RuntimeError::Unavailable) => {
+                let app = ctx.app.clone();
+                let models_dir = ctx.models_dir.clone();
+                ctx.runtime
+                    .mutate(nllb_model::MODEL_ID, async move {
+                        nllb_model::ensure_model(&models_dir, move |p| {
+                            let _ = app.emit(
+                                "nllb:download:progress",
+                                ModelDownloadEvent {
+                                    artifact: p.artifact.to_string(),
+                                    downloaded_bytes: p.downloaded_bytes,
+                                    total_bytes: p.total_bytes,
+                                },
+                            );
+                        })
+                        .await
+                        .map_err(|e| format!("model: {e}"))
+                    })
+                    .await
+                    .map_err(|e| e.to_string())??;
+                ctx.runtime
+                    .acquire(&ctx.model_root, nllb_model::MODEL_ID, model_cancel)
+                    .await
+                    .map_err(|e| e.to_string())?
+            }
+            Err(e) => return Err(e.to_string()),
+        };
         let texts: Vec<String> = pending.iter().map(|s| s.text.clone()).collect();
-        let tr = Arc::clone(&translator);
         let src_code = src_nllb.to_string();
         let tgt_code = tgt_nllb.to_string();
-        let translated =
-            tokio::task::spawn_blocking(move || tr.translate_batch(&texts, &src_code, &tgt_code))
-                .await
-                .map_err(|e| format!("translate task: {e}"))?
-                .map_err(|e| format!("translate: {e}"))?;
+        let translated = tr
+            .run_blocking(model_cancel, move |tr| {
+                tr.translator()
+                    .ok_or("wrong model backend".to_string())?
+                    .translate_batch(&texts, &src_code, &tgt_code)
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| format!("translate task: {e}"))?
+            .map_err(|e| format!("translate: {e}"))?;
         if cancel.load(Ordering::SeqCst) {
             return Ok(());
         }

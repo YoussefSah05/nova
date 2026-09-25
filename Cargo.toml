@@ -57,6 +57,8 @@ insta = { version = "1", features = ["json", "yaml"] }
 
 # On-device embeddings (catalog enrichment)
 fastembed = "4"
+# Read the existing FastEmbed cache without constructing a network client.
+hf-hub = { version = "0.4", default-features = false }
 
 # Local translation (NLLB-200 via CTranslate2 + Metal, bundled tokenizers)
 ct2rs = "0.9"

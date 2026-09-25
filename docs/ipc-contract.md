@@ -60,6 +60,8 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `list_internal_models` | `{}` | `{ modelId, capability, backend, availability: 'missing'\|'unverified'\|'available', artifactRevision, observedAt }[]`; never includes an absolute path | M2 |
 | `add_external_model_library` | `{}` | `libraryId \| null` (`null` if the native folder picker is cancelled); accepts no path from the webview | M2.3 |
 | `list_external_model_libraries` | `{}` | `{ libraryId, displayName, availability: 'available'\|'unavailable', observedAt, models: { modelId, capability, availability: 'missing'\|'unverified'\|'available'\|'unavailable' }[] }[]`; no paths or bookmark data | M2.3 |
+| `unload_model` | `{ modelId: string }` | `boolean`: whether a loaded backend was released; `Conflict` while loading, mutating or leased; does not delete artifacts | M2.5 |
+| `model_runtime_status` | `{}` | `{ loadedModels, activeLeases, busyModels, transitioningModels, estimatedResidentBytes, unknownResidentModels }`; counts only, no paths or grants | M2.5 |
 | `get_nllb_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | 7 / M2 |
 | `get_enrich_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | enrichment / M2 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
@@ -82,6 +84,29 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `get_transcript` | `{ transcript_id: number }` | `Transcript` | 6 |
 | `search` | `{ query: string, lang_filter?: string }` | `SearchResult[]` | 8 |
 | `update_settings` | `{ key: string, value: unknown }` | `void` | 1 |
+
+### Model runtime (M2.5)
+
+The existing model status commands report `installed: true` when a structurally
+usable registered location exists, including an authorized external library.
+Availability checks do not load models or download artifacts. Per-library list
+commands continue to report each library independently. `available` does not
+certify model integrity or successful inference.
+
+`unload_model` releases only the loaded runtime backend. It returns `false` if a
+known model is already unloaded, `NotFound` for an unknown logical ID, and
+`Conflict` while a load, artifact mutation or active lease prevents unloading.
+Downloads and internal Whisper removal use the same exclusion boundary;
+`remove_whisper_model` only removes internal artifacts, never external files.
+
+`model_runtime_status` is a nonblocking, best-effort resource snapshot.
+`busyModels` counts admitted operations; `transitioningModels` counts entries
+whose lifecycle lock is held. Resident estimates exclude unknown sizes, which
+are counted in `unknownResidentModels`; zero estimated bytes does not imply no
+memory use. Built-in adapters currently report unknown sizes. Whisper's loaded
+entry represents a prepared adapter and authorized path; native weights belong
+to its per-window subprocess. These commands introduce no frontend model path
+or bookmark contract.
 
 Browse filter payloads use camelCase keys from the frontend:
 
