@@ -56,8 +56,10 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `record_watch_progress` | `{ profileId, mediaKind, mediaId, positionSec, durationSec?, completed, captionMode? }` | `void` | 5 |
 | `get_resume_position` | `{ profileId, mediaKind, mediaId }` | `ResumeInfo \| null` | 5 |
 | `get_proxy_port` | `{}` | `number` (deprecated - use `resolve_stream`) | 5 |
-| `get_model_status` | `{}` | `{ installed: boolean, modelId: string }` | 6 |
+| `get_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | 6 / M2 |
 | `list_internal_models` | `{}` | `{ modelId, capability, backend, availability: 'missing'\|'unverified'\|'available', artifactRevision, observedAt }[]`; never includes an absolute path | M2 |
+| `get_nllb_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | 7 / M2 |
+| `get_enrich_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | enrichment / M2 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
 | `start_caption_session` | `{ profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
 | `set_caption_playhead` | `{ sec: number }` | `void` | 6 |

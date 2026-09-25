@@ -44,6 +44,7 @@ const GENRE_THRESHOLD: f32 = 0.78;
 pub struct EnrichModelStatus {
     pub installed: bool,
     pub model_id: String,
+    pub availability: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,11 +69,16 @@ pub(crate) fn marker(dir: &Path) -> PathBuf {
 }
 
 #[tauri::command]
-pub async fn get_enrich_model_status(app: AppHandle) -> Result<EnrichModelStatus, ApiError> {
+pub async fn get_enrich_model_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<EnrichModelStatus, ApiError> {
     let dir = embeddings_dir(&app)?;
+    let observed = super::models::observe_internal_model(&app, &state.pool, MODEL_ID).await?;
     Ok(EnrichModelStatus {
         installed: marker(&dir).exists(),
-        model_id: MODEL_ID.to_string(),
+        model_id: observed.descriptor.id.as_str().to_string(),
+        availability: observed.availability.as_str().to_string(),
     })
 }
 

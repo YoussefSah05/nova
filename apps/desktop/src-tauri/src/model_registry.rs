@@ -1,7 +1,7 @@
 //! Offline discovery for the current internal model layouts. This metadata
 //! registry does not install, load, unload, or authenticate model artifacts.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use nova_core::{
     models::{
@@ -10,9 +10,18 @@ use nova_core::{
     },
     now_ts,
 };
-use nova_storage::RegisteredModel;
+use nova_storage::{ModelRepository, RegisteredModel};
 use nova_transcribe::{default_model, is_installed as whisper_installed, model_paths};
 use nova_translate::model as nllb;
+use sqlx::SqlitePool;
+use tokio::sync::Mutex;
+
+use crate::ipc::ApiError;
+
+// Status requests may arrive together while an installer changes local files.
+// Serialize the observation and write so an older probe cannot overwrite a
+// newer one after it has finished.
+static REFRESH_LOCK: Mutex<()> = Mutex::const_new(());
 
 pub fn internal_library() -> Result<ModelLibrary, ModelContractError> {
     Ok(ModelLibrary {
@@ -32,6 +41,7 @@ fn registration(
 ) -> Result<RegisteredModel, ModelContractError> {
     let id = ModelId::new(id)?;
     Ok(RegisteredModel {
+        library: library.clone(),
         descriptor: ModelDescriptor {
             id: id.clone(),
             capability: capability.to_string(),
@@ -148,9 +158,24 @@ pub fn discover_internal(
     Ok((library, models))
 }
 
+pub async fn refresh_internal(
+    app_data_dir: PathBuf,
+    pool: &SqlitePool,
+) -> Result<Vec<RegisteredModel>, ApiError> {
+    let _guard = REFRESH_LOCK.lock().await;
+    let (library, models) = tokio::task::spawn_blocking(move || discover_internal(&app_data_dir))
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let repo = ModelRepository::new(pool);
+    repo.record_internal(&library, &models).await?;
+    Ok(repo.list_internal().await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nova_storage::init_app_db;
 
     #[test]
     fn discovery_is_offline_and_preserves_existing_internal_paths() {
@@ -233,5 +258,55 @@ mod tests {
             embedding_availability(&embedding_dir),
             ModelAvailability::Unverified
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_persists_unavailable_and_restored_location_with_stable_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("app.db");
+        let pool = init_app_db(db_path.to_str().unwrap()).await.unwrap();
+        let id = nllb::MODEL_ID;
+
+        let missing = refresh_internal(dir.path().to_path_buf(), &pool)
+            .await
+            .unwrap();
+        let first = missing
+            .iter()
+            .find(|model| model.descriptor.id.as_str() == id)
+            .unwrap();
+        assert_eq!(first.availability, ModelAvailability::Missing);
+        assert_eq!(
+            first.location.resolve(dir.path(), &first.library),
+            Some(dir.path().join("models/nllb"))
+        );
+
+        let nllb_dir = dir.path().join("models/nllb");
+        std::fs::create_dir_all(&nllb_dir).unwrap();
+        for path in nllb::required_artifact_paths(&nllb_dir) {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
+        let present = refresh_internal(dir.path().to_path_buf(), &pool)
+            .await
+            .unwrap();
+        let second = present
+            .iter()
+            .find(|model| model.descriptor.id.as_str() == id)
+            .unwrap();
+        assert_eq!(second.availability, ModelAvailability::Available);
+        assert_eq!(second.descriptor.id, first.descriptor.id);
+
+        std::fs::remove_dir_all(&nllb_dir).unwrap();
+        let unavailable = refresh_internal(dir.path().to_path_buf(), &pool)
+            .await
+            .unwrap();
+        let third = unavailable
+            .iter()
+            .find(|model| model.descriptor.id.as_str() == id)
+            .unwrap();
+        assert_eq!(third.availability, ModelAvailability::Missing);
+        assert_eq!(third.descriptor.id, first.descriptor.id);
+        assert_eq!(third.location, first.location);
+        pool.close().await;
     }
 }

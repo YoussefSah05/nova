@@ -500,14 +500,19 @@ redesign. `master-plan.md` dependencies did not change.
   library, logical descriptors, one location per model, availability and the
   observation time. Profile migrations and existing settings are unchanged.
   `nova-stack.json` records the new app migration head. SQLx offline metadata
-  includes the four new compile-time checked queries.
+  includes the four compile-time checked queries. The read path reconstructs
+  and validates the persisted library root as well as each location, so a
+  stored model can be resolved without treating its ID as a filesystem path.
 - Desktop discovery uses the existing Whisper model descriptor/path helper,
   NLLB model ID/installed layout, and E5 logical ID. It probes only the current
   `app_data_dir/models/{whisper,nllb,embeddings}` locations and updates the app
-  repository in one transaction. `list_internal_models` exposes IDs, capability,
-  backend, last observed availability and optional revision through Tauri; it
-  never returns an absolute path or credential-bearing URL. Existing download,
-  status, inference, caption, translation and enrichment flows are unchanged.
+  repository in one transaction. `list_internal_models` and the three existing
+  model-status commands refresh this registry through one serialized offline
+  observation path. Status responses add `availability` while preserving their
+  existing `installed` boolean semantics. IPC exposes IDs, capability, backend,
+  last observed availability and optional revision; it never returns an
+  absolute path or credential-bearing URL. Existing download, inference,
+  caption, translation and enrichment flows retain their current paths.
 - Discovery does not create model directories, download data or load a model.
   `missing` means no required artifact evidence; `unverified` means a partial,
   empty, malformed or opaque layout; `available` means the Whisper or NLLB
@@ -521,9 +526,12 @@ redesign. `master-plan.md` dependencies did not change.
 
 Focused tests cover normalized path/ID contracts, unchanged internal path
 resolution, fresh app migration, upgrade from app schema 0001 with profile and
-setting preservation, reopen and availability transitions, transaction rollback
-on an invalid batch, rejection of a corrupted persisted path, missing/partial/
-empty/malformed layouts and offline discovery without filesystem creation.
+setting preservation, reopen and availability transitions, logical ID stability
+when a persisted location changes, transaction rollback on an invalid batch,
+rejection of corrupted persisted library roots/locations, and a real offline
+missing → available → missing discovery/persistence cycle without downloads.
+They also cover partial/empty/malformed layouts and discovery without
+filesystem creation.
 No production model or authenticated provider URL is read by those tests.
 
 Validation commands/results for this slice:
@@ -538,6 +546,22 @@ Validation commands/results for this slice:
 - `just typecheck`, `pnpm verify-environment --manifest-only`,
   `cargo fmt --all -- --check`, and `git diff --check`: pass.
 
+Completion validation for the persisted-library read and status integration:
+
+- `SQLX_OFFLINE=true cargo test -p nova-storage --test model_registry --locked`:
+  pass (4 tests, including fresh/upgrade, relocation, invalid-batch rollback
+  and corrupt-root rejection).
+- `SQLX_OFFLINE=true cargo test -p nova-desktop --locked model_registry::tests`:
+  pass (4 tests, including missing → available → missing persisted discovery).
+- `just check`, `just lint`, `just typecheck`, `just test`,
+  `pnpm -C apps/desktop build`, `pnpm verify-environment --manifest-only`,
+  `cargo fmt --all -- --check`, and `git diff --check`: pass. The frontend
+  production build retains its existing large-chunk warning.
+- The first `just test` attempt could not bind the existing catalog-reasoner
+  loopback fixture under the sandbox (`Operation not permitted`); the unchanged
+  full suite passed with local loopback permission. No provider or user data
+  was used.
+
 A raw `cargo test` invocation without `SQLX_OFFLINE=true` picked up the local
 development `DATABASE_URL`, whose database predates app migration 0002, and SQLx
 reported missing model tables at compile time. The repository's `just` recipes
@@ -547,6 +571,10 @@ under `/tmp`, not a user database. `cargo sqlx prepare` itself could not parse
 this installation's `cargo metadata` output, so the documented SQLx
 `SQLX_OFFLINE_DIR` compile path generated the four cache files. The offline
 workspace check then passed.
+
+The bounded internal model-library/persistence milestone is complete. No new
+migration was needed beyond the already additive app schema 0002; the read-path
+and status integration use it without moving model files or changing settings.
 
 Remaining M2 scope: external/removable library authorization and offline-device
 behavior (M2.3); artifact provenance/digest verification and richer registry

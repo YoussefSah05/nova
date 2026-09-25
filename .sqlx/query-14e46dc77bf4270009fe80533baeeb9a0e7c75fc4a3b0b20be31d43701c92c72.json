@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT d.id, d.capability, d.backend, d.artifact_revision,\n                    l.library_id, l.relative_path, l.availability, l.observed_at\n             FROM model_descriptors d\n             JOIN model_locations l ON l.model_id = d.id\n             JOIN model_libraries b ON b.id = l.library_id\n             WHERE b.kind = 'internal'\n             ORDER BY d.id",
+  "query": "SELECT d.id, d.capability, d.backend, d.artifact_revision,\n                    l.library_id, b.relative_root, l.relative_path, l.availability, l.observed_at\n             FROM model_descriptors d\n             JOIN model_locations l ON l.model_id = d.id\n             JOIN model_libraries b ON b.id = l.library_id\n             WHERE b.kind = 'internal'\n             ORDER BY d.id",
   "describe": {
     "columns": [
       {
@@ -29,18 +29,23 @@
         "type_info": "Text"
       },
       {
-        "name": "relative_path",
+        "name": "relative_root",
         "ordinal": 5,
         "type_info": "Text"
       },
       {
-        "name": "availability",
+        "name": "relative_path",
         "ordinal": 6,
         "type_info": "Text"
       },
       {
-        "name": "observed_at",
+        "name": "availability",
         "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "observed_at",
+        "ordinal": 8,
         "type_info": "Integer"
       }
     ],
@@ -55,8 +60,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "963d8ae3da3c8e9378bf21f04ae1436de400870f8668f583bd2b6e23fb76d07d"
+  "hash": "14e46dc77bf4270009fe80533baeeb9a0e7c75fc4a3b0b20be31d43701c92c72"
 }

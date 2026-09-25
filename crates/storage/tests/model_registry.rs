@@ -14,6 +14,7 @@ fn library() -> ModelLibrary {
 
 fn model(id: &str, availability: ModelAvailability) -> RegisteredModel {
     RegisteredModel {
+        library: library(),
         descriptor: ModelDescriptor {
             id: ModelId::new(id).unwrap(),
             capability: "translation".into(),
@@ -50,7 +51,12 @@ async fn fresh_app_db_persists_internal_model_observations() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].descriptor.id.as_str(), "nllb-200-distilled-600M");
     assert_eq!(list[0].availability, ModelAvailability::Missing);
+    assert_eq!(list[0].library, library());
     assert_eq!(list[0].location.relative_path.as_str(), "nllb");
+    assert_eq!(
+        list[0].location.resolve(dir.path(), &list[0].library),
+        Some(dir.path().join("models/nllb"))
+    );
 
     repo.record_internal(
         &library(),
@@ -74,6 +80,26 @@ async fn fresh_app_db_persists_internal_model_observations() {
     assert_eq!(
         repo.list_internal().await.unwrap()[0].availability,
         ModelAvailability::Missing
+    );
+    let mut relocated_library = library();
+    relocated_library.relative_root = RelativeModelPath::new("relocated-models").unwrap();
+    let mut relocated = model("nllb-200-distilled-600M", ModelAvailability::Missing);
+    relocated.library = relocated_library.clone();
+    relocated.location.relative_path = RelativeModelPath::new("translation").unwrap();
+    repo.record_internal(&relocated_library, &[relocated])
+        .await
+        .unwrap();
+    let persisted = repo.list_internal().await.unwrap();
+    assert_eq!(persisted.len(), 1);
+    assert_eq!(
+        persisted[0].descriptor.id.as_str(),
+        "nllb-200-distilled-600M"
+    );
+    assert_eq!(
+        persisted[0]
+            .location
+            .resolve(dir.path(), &persisted[0].library),
+        Some(dir.path().join("relocated-models/translation"))
     );
     reopened.close().await;
 }
@@ -149,6 +175,14 @@ async fn invalid_batch_does_not_publish_partial_registry_state() {
         .await
         .is_err());
     assert!(repo.list_internal().await.unwrap().is_empty());
+
+    let mut bad_library = model("wrong-library", ModelAvailability::Unverified);
+    bad_library.library.relative_root = RelativeModelPath::new("elsewhere").unwrap();
+    assert!(repo
+        .record_internal(&library(), &[bad_library])
+        .await
+        .is_err());
+    assert!(repo.list_internal().await.unwrap().is_empty());
     pool.close().await;
 }
 
@@ -171,6 +205,15 @@ async fn corrupted_persisted_location_is_rejected_before_resolution() {
     .execute(&pool)
     .await
     .unwrap();
+    assert!(repo.list_internal().await.is_err());
+    sqlx::query("UPDATE model_locations SET relative_path = 'nllb' WHERE model_id = 'fixture'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE model_libraries SET relative_root = '../outside' WHERE id = 'internal'")
+        .execute(&pool)
+        .await
+        .unwrap();
     assert!(repo.list_internal().await.is_err());
     pool.close().await;
 }

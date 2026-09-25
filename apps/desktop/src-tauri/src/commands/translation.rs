@@ -34,6 +34,7 @@ struct ModelDownloadEvent {
 pub struct ModelStatus {
     pub installed: bool,
     pub model_id: String,
+    pub availability: String,
 }
 
 /// A language offered in the "Translate to" picker.
@@ -47,11 +48,17 @@ pub struct TargetLanguageDto {
 // ── Model commands (mirror the whisper model commands) ──────────────────────────
 
 #[tauri::command]
-pub async fn get_nllb_model_status(app: AppHandle) -> Result<ModelStatus, ApiError> {
+pub async fn get_nllb_model_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ModelStatus, ApiError> {
     let models_dir = nllb_models_dir(&app)?;
+    let observed =
+        super::models::observe_internal_model(&app, &state.pool, nllb_model::MODEL_ID).await?;
     Ok(ModelStatus {
         installed: nllb_model::is_installed(&models_dir),
-        model_id: nllb_model::MODEL_ID.to_string(),
+        model_id: observed.descriptor.id.as_str().to_string(),
+        availability: observed.availability.as_str().to_string(),
     })
 }
 

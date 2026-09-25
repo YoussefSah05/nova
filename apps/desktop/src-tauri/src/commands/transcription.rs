@@ -33,17 +33,23 @@ struct ModelDownloadEvent {
 pub struct ModelStatus {
     pub installed: bool,
     pub model_id: String,
+    pub availability: String,
 }
 
 // ── Model commands ────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn get_model_status(app: AppHandle) -> Result<ModelStatus, ApiError> {
+pub async fn get_model_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ModelStatus, ApiError> {
     let models_dir = whisper_models_dir(&app)?;
     let model = default_model();
+    let observed = super::models::observe_internal_model(&app, &state.pool, model.id).await?;
     Ok(ModelStatus {
         installed: is_installed(&models_dir, &model),
-        model_id: model.id.to_string(),
+        model_id: observed.descriptor.id.as_str().to_string(),
+        availability: observed.availability.as_str().to_string(),
     })
 }
 

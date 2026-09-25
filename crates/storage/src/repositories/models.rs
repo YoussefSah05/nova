@@ -10,6 +10,7 @@ use crate::error::StorageError;
 
 #[derive(Debug, Clone)]
 pub struct RegisteredModel {
+    pub library: ModelLibrary,
     pub descriptor: ModelDescriptor,
     pub location: ModelLocation,
     pub availability: ModelAvailability,
@@ -45,7 +46,8 @@ impl<'a> ModelRepository<'a> {
         .await?;
 
         for model in models {
-            if model.location.model_id != model.descriptor.id
+            if model.library != *library
+                || model.location.model_id != model.descriptor.id
                 || model.location.library_id != library.id
             {
                 return Err(StorageError::InvalidModelRecord);
@@ -92,7 +94,7 @@ impl<'a> ModelRepository<'a> {
     pub async fn list_internal(&self) -> Result<Vec<RegisteredModel>, StorageError> {
         let rows = sqlx::query!(
             "SELECT d.id, d.capability, d.backend, d.artifact_revision,
-                    l.library_id, l.relative_path, l.availability, l.observed_at
+                    l.library_id, b.relative_root, l.relative_path, l.availability, l.observed_at
              FROM model_descriptors d
              JOIN model_locations l ON l.model_id = d.id
              JOIN model_libraries b ON b.id = l.library_id
@@ -104,7 +106,12 @@ impl<'a> ModelRepository<'a> {
         rows.into_iter()
             .map(|row| {
                 let id = ModelId::new(row.id)?;
+                let library_id = ModelLibraryId::new(row.library_id)?;
                 Ok(RegisteredModel {
+                    library: ModelLibrary {
+                        id: library_id.clone(),
+                        relative_root: RelativeModelPath::new(row.relative_root)?,
+                    },
                     descriptor: ModelDescriptor {
                         id: id.clone(),
                         capability: row.capability,
@@ -113,7 +120,7 @@ impl<'a> ModelRepository<'a> {
                     },
                     location: ModelLocation {
                         model_id: id,
-                        library_id: ModelLibraryId::new(row.library_id)?,
+                        library_id,
                         relative_path: RelativeModelPath::new(row.relative_path)?,
                     },
                     availability: ModelAvailability::parse(&row.availability)?,
