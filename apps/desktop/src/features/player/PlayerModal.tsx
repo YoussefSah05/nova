@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openNativePlayback, closeNativePlayback } from "./nativePlayback";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Hls, { type ErrorData } from "hls.js";
@@ -108,12 +109,6 @@ interface ResolvedStream {
   height: number | null;
   fallbackReason: string | null;
   captionState: CaptionState;
-}
-
-interface NativeOpenResult {
-  token: string;
-  engine: "mpv";
-  embedded: boolean;
 }
 
 type NativePlayerPhase = "opening" | "buffering" | "playing" | "paused" | "ended" | "error";
@@ -242,6 +237,7 @@ export function PlayerModal({
   // Mirrors `nativeToken` so the stale-event guard and the unmount-only close
   // always see the latest token, even during the async open window.
   const nativeTokenRef = useRef<string | null>(null);
+  const nativeOpeningRef = useRef(false);
   const [nativeEmbedded, setNativeEmbedded] = useState(false);
   // False until the current load paints its first frame. Drives an opaque
   // cover so the previous file's frame can't show during a switch, while still
@@ -428,6 +424,7 @@ export function PlayerModal({
     if (!USE_MPV_ENGINE) return;
 
     let cancelled = false;
+    nativeOpeningRef.current = true;
     setNativeToken(null);
     setNativeEmbedded(false);
     setHasPainted(false);
@@ -442,13 +439,17 @@ export function PlayerModal({
       try {
         // The engine reuses the live session and swaps files via `loadfile
         // replace`, so switching content is one call — no close/teardown here.
-        const result = await invoke<NativeOpenResult>("mpv_open_stream", {
-          profileId,
-          mediaKind: media.kind,
-          mediaId: media.id,
-          title: media.title,
-        });
-        if (cancelled) return;
+        const result = await openNativePlayback(
+          {
+            profileId,
+            mediaKind: media.kind,
+            mediaId: media.id,
+            title: media.title,
+          },
+          () => cancelled
+        );
+        if (cancelled || !result) return;
+        nativeOpeningRef.current = false;
         nativeTokenRef.current = result.token;
         setNativeToken(result.token);
         setNativeEmbedded(result.embedded);
@@ -472,7 +473,7 @@ export function PlayerModal({
     return () => {
       const token = nativeTokenRef.current;
       if (token) {
-        void invoke("mpv_close", { token }).catch(() => undefined);
+        void closeNativePlayback(token).catch(() => undefined);
         nativeTokenRef.current = null;
       }
     };
@@ -494,7 +495,12 @@ export function PlayerModal({
     // Only apply state belonging to the current load. Drop stale tokens and
     // the no-session (token === null) snapshots so a switch never regresses
     // the UI. The ref tracks the newest token even mid-switch.
-    if (!nativeTokenRef.current || state.token !== nativeTokenRef.current) return;
+    if (
+      nativeOpeningRef.current ||
+      !nativeTokenRef.current ||
+      state.token !== nativeTokenRef.current
+    )
+      return;
 
     setCurrentTime(state.positionSec);
     setDuration(state.durationSec ?? 0);
@@ -1025,16 +1031,27 @@ export function PlayerModal({
   // frame follows the new size.
   useEffect(() => {
     const win = getCurrentWindow();
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
-    void win.isFullscreen().then((fs) => setIsFullscreen(fs));
+    void win
+      .isFullscreen()
+      .then((fs) => {
+        if (!cancelled) setIsFullscreen(fs);
+      })
+      .catch(() => undefined);
     void win
       .onResized(() => {
         if (USE_MPV_ENGINE) void invoke("mpv_request_redraw").catch(() => undefined);
       })
       .then((un) => {
-        unlisten = un;
-      });
-    return () => unlisten?.();
+        if (cancelled) un();
+        else unlisten = un;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   // -- Cinema mode: constrain the native video to the top region ----------

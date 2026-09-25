@@ -92,7 +92,15 @@ pub async fn start() -> Result<ProxyHandle, ProxyError> {
 
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                attempt.error("too many upstream redirects")
+            } else if !routes::is_safe_upstream(attempt.url().as_str()) {
+                attempt.error("blocked local upstream redirect")
+            } else {
+                attempt.follow()
+            }
+        }))
         .user_agent("Mozilla/5.0 (compatible; nova-iptv/1.0)")
         .build()?;
 
@@ -152,6 +160,16 @@ mod tests {
     fn rejects_loopback() {
         assert!(!is_safe_upstream("http://127.0.0.1/proxy?url=foo"));
         assert!(!is_safe_upstream("http://localhost:8080/x"));
+        for url in [
+            "http://[::1]/x",
+            "http://127.2.3.4/x",
+            "http://localhost./x",
+            "http://a.localhost/x",
+            "http://0.0.0.0/x",
+            "http://[::ffff:127.0.0.1]/x",
+        ] {
+            assert!(!is_safe_upstream(url));
+        }
     }
 
     #[test]

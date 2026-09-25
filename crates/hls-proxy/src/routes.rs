@@ -154,7 +154,7 @@ async fn fetch_and_rewrite_manifest(
     let res = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, url = %upstream_url, "manifest fetch failed");
+            tracing::warn!(error = %e.without_url(), "manifest fetch failed");
             return (StatusCode::BAD_GATEWAY, "manifest fetch failed").into_response();
         }
     };
@@ -162,7 +162,7 @@ async fn fetch_and_rewrite_manifest(
     let body = match res.text().await {
         Ok(b) => b,
         Err(e) => {
-            tracing::warn!(error = %e, "manifest body read failed");
+            tracing::warn!(error = %e.without_url(), "manifest body read failed");
             return (StatusCode::BAD_GATEWAY, "manifest body read failed").into_response();
         }
     };
@@ -194,7 +194,7 @@ async fn forward(
     let upstream = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, url = %url, "upstream fetch failed");
+            tracing::warn!(error = %e.without_url(), "upstream fetch failed");
             return (StatusCode::BAD_GATEWAY, "upstream fetch failed").into_response();
         }
     };
@@ -205,7 +205,7 @@ async fn forward(
         let body = match upstream.text().await {
             Ok(b) => b,
             Err(e) => {
-                tracing::warn!(error = %e, url = %url, "manifest proxy body read failed");
+                tracing::warn!(error = %e.without_url(), "manifest proxy body read failed");
                 return (StatusCode::BAD_GATEWAY, "manifest body read failed").into_response();
             }
         };
@@ -290,13 +290,26 @@ pub(crate) fn is_safe_upstream(url: &str) -> bool {
     if !matches!(parsed.scheme(), "http" | "https") {
         return false;
     }
-    if let Some(host) = parsed.host_str() {
-        let lower = host.to_ascii_lowercase();
-        if lower == "localhost" || lower == "127.0.0.1" || lower == "::1" {
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let lower = host.trim_end_matches('.').to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") {
+        return false;
+    }
+    let literal = lower.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = literal.parse::<std::net::IpAddr>() {
+        if ip.is_loopback() || ip.is_unspecified() {
             return false;
         }
-    } else {
-        return false;
+        if let std::net::IpAddr::V6(ip) = ip {
+            if ip
+                .to_ipv4_mapped()
+                .is_some_and(|v4| v4.is_loopback() || v4.is_unspecified())
+            {
+                return false;
+            }
+        }
     }
     true
 }

@@ -120,7 +120,6 @@ impl SessionRegistry {
                         tracing::warn!(
                             error = %e,
                             route = ?route,
-                            url = %upstream_url,
                             "probe failed; using fast playback fallback"
                         );
                         (
@@ -160,7 +159,6 @@ impl SessionRegistry {
                         error = %e,
                         route = ?route,
                         fallback_route = ?fallback_route,
-                        url = %upstream_url,
                         "remux failed; using fast playback fallback"
                     );
                     route = fallback_route;

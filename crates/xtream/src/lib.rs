@@ -38,12 +38,10 @@ impl XtreamCredentials {
                 _ => {}
             }
         }
-        let base_url = format!("{}://{}", parsed.scheme(), parsed.host_str()?);
-        let base_url = if let Some(port) = parsed.port() {
-            format!("{base_url}:{port}")
-        } else {
-            base_url
-        };
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return None;
+        }
+        let base_url = parsed.origin().ascii_serialization();
         Some(XtreamCredentials {
             base_url,
             username: username?,
@@ -54,14 +52,20 @@ impl XtreamCredentials {
     fn api_url(&self, action: &str) -> String {
         format!(
             "{}/player_api.php?username={}&password={}&action={}",
-            self.base_url, self.username, self.password, action
+            self.base_url,
+            url_component(&self.username),
+            url_component(&self.password),
+            action
         )
     }
 
     fn live_stream_url(&self, id: i64) -> String {
         format!(
             "{}/live/{}/{}/{}.m3u8",
-            self.base_url, self.username, self.password, id
+            self.base_url,
+            url_component(&self.username),
+            url_component(&self.password),
+            id
         )
     }
 
@@ -69,7 +73,11 @@ impl XtreamCredentials {
         let ext = if ext.is_empty() { "mp4" } else { ext };
         format!(
             "{}/movie/{}/{}/{}.{}",
-            self.base_url, self.username, self.password, id, ext
+            self.base_url,
+            url_component(&self.username),
+            url_component(&self.password),
+            id,
+            url_component(ext)
         )
     }
 
@@ -79,7 +87,11 @@ impl XtreamCredentials {
         let ext = if ext.is_empty() { "mp4" } else { ext };
         format!(
             "{}/series/{}/{}/{}.{}",
-            self.base_url, self.username, self.password, episode_id, ext
+            self.base_url,
+            url_component(&self.username),
+            url_component(&self.password),
+            url_component(episode_id),
+            url_component(ext)
         )
     }
 
@@ -88,9 +100,25 @@ impl XtreamCredentials {
     pub fn xmltv_url(&self) -> String {
         format!(
             "{}/xmltv.php?username={}&password={}",
-            self.base_url, self.username, self.password
+            self.base_url,
+            url_component(&self.username),
+            url_component(&self.password)
         )
     }
+}
+
+// Encode credentials as individual query values / path segments.
+fn url_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -489,7 +517,7 @@ where
     }
 
     let mut de = serde_json::Deserializer::from_reader(reader);
-    serde::Deserializer::deserialize_seq(
+    let count = serde::Deserializer::deserialize_seq(
         &mut de,
         ArrayVisitor {
             convert,
@@ -497,7 +525,18 @@ where
             _t: std::marker::PhantomData,
         },
     )
-    .map_err(|e| e.to_string())
+    .map_err(json_error_summary)?;
+    de.end().map_err(json_error_summary)?;
+    Ok(count)
+}
+
+fn json_error_summary(error: serde_json::Error) -> String {
+    // serde can quote invalid field values; never echo provider payloads.
+    format!(
+        "invalid provider JSON at line {} column {}",
+        error.line(),
+        error.column()
+    )
 }
 
 // ── Internal JSON structs ─────────────────────────────────────────────────────
@@ -901,5 +940,39 @@ mod tests {
         .unwrap();
         assert_eq!(count, 3);
         assert_eq!(ids, [1, 2, 3]);
+    }
+    #[test]
+    fn credentials_preserve_reserved_characters_as_single_components() {
+        let c = XtreamCredentials {
+            base_url: "https://example.invalid".into(),
+            username: "fixture +&".into(),
+            password: "fixture/#?%".into(),
+        };
+        for value in [c.api_url("get_live_streams"), c.xmltv_url()] {
+            let url = reqwest::Url::parse(&value).unwrap();
+            let pairs: std::collections::HashMap<_, _> = url.query_pairs().collect();
+            assert!(pairs.get("username").is_some_and(|v| v == &c.username));
+            assert!(pairs.get("password").is_some_and(|v| v == &c.password));
+            assert!(url.fragment().is_none());
+        }
+        for value in [
+            c.live_stream_url(1),
+            c.vod_stream_url(1, "mp4"),
+            c.series_episode_url("1", "mp4"),
+        ] {
+            let url = reqwest::Url::parse(&value).unwrap();
+            assert_eq!(url.path_segments().unwrap().count(), 4);
+            assert!(url.query().is_none() && url.fragment().is_none());
+        }
+    }
+
+    #[test]
+    fn streaming_parser_rejects_trailing_data_without_echoing_values() {
+        for input in [r#"[] trailing"#, r#"["sensitive-fixture-value"]"#] {
+            let result =
+                parse_json_array::<u32, _, _>(input.as_bytes(), |_| unreachable!(), |_| true);
+            assert!(result.is_err());
+            assert!(!result.unwrap_err().contains("sensitive-fixture-value"));
+        }
     }
 }

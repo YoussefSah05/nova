@@ -140,7 +140,7 @@ async fn stream_via_curl(
             url,
         ])
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit()) // curl errors appear in the terminal for debugging
+        .stderr(Stdio::null()) // curl diagnostics can contain authenticated URLs
         .kill_on_drop(true)
         .spawn()
     {
@@ -171,12 +171,11 @@ async fn stream_via_curl(
                         && !trimmed.starts_with("#EXTM3U")
                         && !trimmed.starts_with("#EXTINF")
                     {
-                        let preview = trimmed.chars().take(120).collect::<String>();
                         let _ = tx
-                            .send(Err(format!(
-                                "server did not return a playlist — got: {preview}\n\
-                             (check the URL and credentials)"
-                            )))
+                            .send(Err(
+                                "server did not return a playlist (check the URL and credentials)"
+                                    .to_string(),
+                            ))
                             .await;
                         let _ = child.kill().await;
                         return;

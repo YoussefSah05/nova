@@ -129,7 +129,7 @@ impl RemuxSession {
         .arg(dir_path.join("seg_%05d.m4s"))
         .arg(&master_path);
 
-        let child = cmd.spawn()?;
+        let child = spawn_remux(cmd)?;
         let mut session = Self { child, dir };
         session.await_ready(&master_path, startup_timeout).await?;
         Ok(session)
@@ -166,6 +166,12 @@ impl RemuxSession {
     }
 }
 
+fn spawn_remux(mut cmd: Command) -> Result<Child, std::io::Error> {
+    // stderr was never consumed. A chatty provider eventually filled the pipe
+    // and blocked ffmpeg; discard diagnostics that may also contain credentials.
+    cmd.stderr(std::process::Stdio::null()).spawn()
+}
+
 impl Drop for RemuxSession {
     fn drop(&mut self) {
         // `kill_on_drop` on the Command builder ensures the child is killed
@@ -180,6 +186,23 @@ mod tests {
 
     // Smoke test that ffmpeg is at least on PATH; the full lifecycle is
     // exercised by the hls-proxy integration tests.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn noisy_process_cannot_block_on_stderr() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "dd if=/dev/zero bs=1024 count=1024 >&2"])
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped());
+        let mut child = spawn_remux(cmd).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+        assert!(
+            result.is_ok(),
+            "an undrained stderr pipe stalled the remuxer"
+        );
+        assert!(result.unwrap().unwrap().success());
+    }
+
     #[tokio::test]
     async fn ffmpeg_binary_resolves() {
         let out = Command::new(ffmpeg_bin()).arg("-version").output().await;

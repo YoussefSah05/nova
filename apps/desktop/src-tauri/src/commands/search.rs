@@ -318,7 +318,7 @@ pub async fn semantic_search_catalog(
             } else {
                 let pool2 = pool.clone();
                 let vectors = state
-                    .catalog_vectors(source_id, "movie", count, || async move {
+                    .catalog_vectors(|| async move {
                         EmbeddingRepository::new(&pool2)
                             .load_catalog(source_id, "movie", MODEL_ID)
                             .await
@@ -416,7 +416,7 @@ pub async fn semantic_search_channels(
             } else {
                 let pool2 = pool.clone();
                 let vectors = state
-                    .catalog_vectors(source_id, "live", count, || async move {
+                    .catalog_vectors(|| async move {
                         EmbeddingRepository::new(&pool2)
                             .load_catalog(source_id, "live", MODEL_ID)
                             .await

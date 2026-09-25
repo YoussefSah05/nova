@@ -65,19 +65,12 @@ impl JobQueue {
     /// Spawn a background drain if one isn't already running. Safe to call
     /// liberally (after every enqueue, and once at startup).
     ///
-    /// Known micro-race: a job enqueued in the instant between the running
-    /// drain's final empty `claim_next` and its lock release may wait for the
-    /// next `kick`. Jobs are durable, so this self-heals on the next enqueue or
-    /// app start; acceptable for a local single-user queue.
+    /// A kick waits for an active drain to release the lock, then checks again.
+    /// This includes jobs inserted after that drain's final empty claim.
     pub fn kick(self: &Arc<Self>) {
         let me = Arc::clone(self);
         tokio::spawn(async move {
-            // If another drain holds the lock it will observe our row (it was
-            // inserted before this kick), so we can simply bow out.
-            let _guard = match me.drain_lock.try_lock() {
-                Ok(guard) => guard,
-                Err(_) => return,
-            };
+            let _guard = me.drain_lock.lock().await;
             let repo = JobRepository::new(&me.pool);
             loop {
                 match repo.claim_next(&me.kind).await {
@@ -145,6 +138,35 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         panic!("queue did not drain in time");
+    }
+
+    #[tokio::test]
+    async fn kick_during_drain_shutdown_is_not_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = Arc::new(
+            init_profile_db(dir.path().join("jobs.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let seen = Arc::new(AtomicUsize::new(0));
+        let queue = Arc::new(JobQueue::new(
+            pool.clone(),
+            "test",
+            Arc::new(CountingHandler {
+                seen: seen.clone(),
+                fail_payload: "fail",
+            }),
+        ));
+        // Model a drain that has observed an empty queue but still owns its lock.
+        let guard = queue.drain_lock.lock().await;
+        queue.enqueue("late arrival", 0).await.unwrap();
+        queue.kick();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        drop(guard);
+        wait_drained(&pool).await;
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

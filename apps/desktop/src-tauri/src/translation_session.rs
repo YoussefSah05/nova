@@ -48,6 +48,7 @@ struct Handle {
 
 /// Everything a translation session needs, assembled by the command layer.
 pub struct StartCtx {
+    pub session_id: String,
     pub app: AppHandle,
     pub pool: Arc<SqlitePool>,
     pub media_kind: String,
@@ -109,6 +110,7 @@ struct CueDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CuesEvent {
+    session_id: String,
     media_kind: String,
     media_id: i64,
     /// The *target* language (what the cue text is in).
@@ -119,6 +121,7 @@ struct CuesEvent {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StatusEvent {
+    session_id: String,
     media_kind: String,
     media_id: i64,
     /// `preparing` | `streaming` | `failed`
@@ -329,6 +332,7 @@ fn emit_cues(ctx: &StartCtx, language: &str, cues: Vec<CueDto>) {
     let _ = ctx.app.emit(
         "translation:cues",
         CuesEvent {
+            session_id: ctx.session_id.clone(),
             media_kind: ctx.media_kind.clone(),
             media_id: ctx.media_id,
             language: language.to_string(),
@@ -341,6 +345,7 @@ fn emit_status(ctx: &StartCtx, state: &str, error: Option<String>) {
     let _ = ctx.app.emit(
         "translation:status",
         StatusEvent {
+            session_id: ctx.session_id.clone(),
             media_kind: ctx.media_kind.clone(),
             media_id: ctx.media_id,
             state: state.to_string(),

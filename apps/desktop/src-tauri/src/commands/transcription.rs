@@ -72,6 +72,7 @@ pub async fn download_whisper_model(app: AppHandle) -> Result<(), ApiError> {
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn start_caption_session(
+    session_id: String,
     profile_id: String,
     media_kind: String,
     media_id: i64,
@@ -84,6 +85,7 @@ pub async fn start_caption_session(
 ) -> Result<(), ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     let ctx = StartCtx {
+        session_id,
         app: app.clone(),
         pool,
         media_kind,

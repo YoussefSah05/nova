@@ -520,13 +520,15 @@ impl MpvSession {
     /// drops any `mpv:state` still draining from the previous file, and resets
     /// the per-file phase tracking so the new load reports `Opening` first.
     fn load(&mut self, url: &str, title: &str) -> Result<String, MpvError> {
+        // Keep the current token valid if loadfile rejects the request, so
+        // callers can still close/control the existing session after failure.
+        let _ = self.set_property("force-media-title", title);
+        self.command(&["loadfile", url, "replace"])?;
         let token = Uuid::new_v4().to_string();
         self.token = token.clone();
         self.last_phase = MpvPlaybackPhase::Opening;
         self.last_error = None;
         self.opened_at = Instant::now();
-        let _ = self.set_property("force-media-title", title);
-        self.command(&["loadfile", url, "replace"])?;
         Ok(token)
     }
 

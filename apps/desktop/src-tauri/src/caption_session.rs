@@ -85,6 +85,7 @@ struct SessionHandle {
 
 /// Everything a session needs to run, assembled by the command layer.
 pub struct StartCtx {
+    pub session_id: String,
     pub app: AppHandle,
     pub pool: Arc<SqlitePool>,
     pub media_kind: String,
@@ -154,6 +155,7 @@ struct CueDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CuesEvent {
+    session_id: String,
     media_kind: String,
     media_id: i64,
     language: String,
@@ -163,6 +165,7 @@ struct CuesEvent {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StatusEvent {
+    session_id: String,
     media_kind: String,
     media_id: i64,
     /// `preparing` | `streaming` | `complete` | `failed`
@@ -643,6 +646,7 @@ fn emit_cues(ctx: &StartCtx, language: &str, segments: &[TranscriptSegment]) {
     let _ = ctx.app.emit(
         "transcription:cues",
         CuesEvent {
+            session_id: ctx.session_id.clone(),
             media_kind: ctx.media_kind.clone(),
             media_id: ctx.media_id,
             language: language.to_string(),
@@ -655,6 +659,7 @@ fn emit_status(ctx: &StartCtx, state: &str, covered_sec: Option<f64>, error: Opt
     let _ = ctx.app.emit(
         "transcription:status",
         StatusEvent {
+            session_id: ctx.session_id.clone(),
             media_kind: ctx.media_kind.clone(),
             media_id: ctx.media_id,
             state: state.to_string(),

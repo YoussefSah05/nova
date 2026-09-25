@@ -294,3 +294,12 @@ Stages:
 The UI should stop loading whenever `done` is `true`. A non-null `warning` means the import
 completed with recoverable issues, such as one optional provider endpoint failing after other
 content was imported. A non-null `error` means the import failed and should be shown to the user.
+
+### Caption session identity (P00 stability correction)
+
+`start_caption_session` and `start_translation_session` require a frontend-generated
+`sessionId` string, unique for each profile/media/audio-track/target activation.
+`transcription:cues`, `transcription:status`, `translation:cues`, and
+`translation:status` echo that `sessionId`. The player subscribes before starting
+and ignores events from other sessions. Starts and stops are serialized per engine;
+model-download completion cannot restart an inactive session.

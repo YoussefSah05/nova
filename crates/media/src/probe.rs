@@ -98,6 +98,15 @@ pub async fn probe_stream(url: &str, deadline: Duration) -> Result<StreamProbe, 
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped());
 
+    run_probe(cmd, url, deadline).await
+}
+
+async fn run_probe(
+    mut cmd: Command,
+    url: &str,
+    deadline: Duration,
+) -> Result<StreamProbe, ProbeError> {
+    cmd.kill_on_drop(true);
     let child_future = async {
         let output = cmd.output().await?;
         Ok::<_, std::io::Error>(output)
@@ -109,9 +118,10 @@ pub async fn probe_stream(url: &str, deadline: Duration) -> Result<StreamProbe, 
     };
 
     if !output.status.success() {
-        return Err(ProbeError::Failed(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
+        return Err(ProbeError::Failed(format!(
+            "process exited with status {:?}",
+            output.status.code()
+        )));
     }
 
     let parsed: FfprobeOutput = serde_json::from_slice(&output.stdout)?;
@@ -339,5 +349,46 @@ mod tests {
             recommend_route(false, false, Some("mov,mp4"), Some("av1"), Some("aac")),
             PlaybackRoute::TranscodeHls
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod cancellation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn timeout_terminates_the_probe_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo $$ > \"$1\"; exec sleep 30", "probe-fixture"])
+            .arg(&pidfile)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        assert!(matches!(
+            run_probe(cmd, "fixture", Duration::from_millis(300)).await,
+            Err(ProbeError::Timeout(_))
+        ));
+        let pid = tokio::fs::read_to_string(pidfile).await.unwrap();
+        let mut alive = true;
+        for _ in 0..50 {
+            alive = Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await
+                .unwrap()
+                .success();
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Clean up the regression's leaked process even when this assertion fails.
+        if alive {
+            let _ = Command::new("kill").arg(pid.trim()).status().await;
+        }
+        assert!(!alive, "ffprobe child survived its timeout");
     }
 }

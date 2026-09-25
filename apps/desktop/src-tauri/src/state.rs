@@ -10,13 +10,6 @@ use crate::airplay::AirPlayEngine;
 use crate::caption_session::CaptionSessionManager;
 use crate::translation_session::TranslationSessionManager;
 
-/// An in-memory catalog vector index, validated against the DB row count so it
-/// reloads only after a (re-)enrichment changes the vectors.
-pub struct CachedIndex {
-    pub count: i64,
-    pub vectors: Arc<Vec<(i64, Vec<f32>)>>,
-}
-
 pub struct AppState {
     /// Pool for app.db (profiles, app_settings).
     pub pool: Arc<SqlitePool>,
@@ -42,9 +35,6 @@ pub struct AppState {
     /// On-device embedder for semantic search query/segment embedding, loaded
     /// once on first use (cold ONNX init is slow). `None` until then.
     semantic_embedder: Mutex<Option<Arc<dyn Embedder>>>,
-    /// Per-`source:kind` catalog vector index, cached across searches and
-    /// reloaded when the persisted vector count changes.
-    catalog_index: Mutex<HashMap<String, CachedIndex>>,
 }
 
 impl AppState {
@@ -60,7 +50,6 @@ impl AppState {
             caption_sessions: Arc::new(CaptionSessionManager::new()),
             translation_sessions: Arc::new(TranslationSessionManager::new()),
             semantic_embedder: Mutex::new(None),
-            catalog_index: Mutex::new(HashMap::new()),
         }
     }
 
@@ -94,38 +83,45 @@ impl AppState {
         Ok(arc)
     }
 
-    /// Return the cached catalog vector index for `source:kind`, reloading via
-    /// `load` only when the live `count` differs from the cached one (so a
-    /// re-enrichment is picked up without any explicit invalidation wiring).
+    /// Load from the caller's profile on every search. Row counts are not a
+    /// revision: refresh and re-enrichment can replace every vector at the same
+    /// count, and source IDs are local to each profile database.
     pub async fn catalog_vectors<F, Fut>(
         &self,
-        source_id: i64,
-        kind: &str,
-        count: i64,
         load: F,
     ) -> Result<Arc<Vec<(i64, Vec<f32>)>>, String>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Vec<(i64, Vec<f32>)>, String>>,
     {
-        let key = format!("{source_id}:{kind}");
-        {
-            let guard = self.catalog_index.lock().await;
-            if let Some(idx) = guard.get(&key) {
-                if idx.count == count {
-                    return Ok(idx.vectors.clone());
-                }
-            }
-        }
-        let vectors = Arc::new(load().await?);
-        let mut guard = self.catalog_index.lock().await;
-        guard.insert(
-            key,
-            CachedIndex {
-                count,
-                vectors: vectors.clone(),
-            },
-        );
-        Ok(vectors)
+        Ok(Arc::new(load().await?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn catalog_vectors_do_not_reuse_another_profiles_or_replaced_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = nova_storage::init_app_db(dir.path().join("app.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let state = AppState::new(pool, 0, SessionRegistry::default());
+        let first = state
+            .catalog_vectors(|| async { Ok(vec![(1, vec![1.0, 0.0])]) })
+            .await
+            .unwrap();
+        let other_profile = state
+            .catalog_vectors(|| async { Ok(vec![(1, vec![0.0, 1.0])]) })
+            .await
+            .unwrap();
+        assert_ne!(*first, *other_profile);
+        let refreshed = state
+            .catalog_vectors(|| async { Ok(vec![(2, vec![0.0, 1.0])]) })
+            .await
+            .unwrap();
+        assert_eq!(refreshed[0].0, 2);
     }
 }

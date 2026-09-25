@@ -199,7 +199,7 @@ async fn run_refresh(
                     source_id,
                     epg_source_id,
                     started_at,
-                    e.to_string(),
+                    e.without_url().to_string(),
                     pool,
                 )
                 .await
@@ -222,7 +222,7 @@ async fn run_refresh(
                 source_id,
                 epg_source_id,
                 started_at,
-                e.to_string(),
+                e.without_url().to_string(),
                 pool,
             )
             .await

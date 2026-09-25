@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { invokeSession } from "./sessionCommands";
 
 export interface AirPlayStatus {
   available: boolean;
@@ -75,6 +76,7 @@ export function useAirPlay({
 
   // Mutable handoff state kept in refs so the event subscription stays stable.
   const engageRef = useRef<EngageState>("idle");
+  const generationRef = useRef(0);
   const proxyTokenRef = useRef<string | null>(null);
   const prevEngagedRef = useRef(false);
   const resumeRef = useRef<{ position: number; wasPlaying: boolean } | null>(null);
@@ -96,11 +98,16 @@ export function useAirPlay({
   // Release the proxy session + AVPlayer item and reset to idle.
   const teardown = useCallback(async () => {
     clearAttemptTimer();
+    generationRef.current += 1;
     engageRef.current = "idle";
+    prevEngagedRef.current = false;
+    resumeRef.current = null;
     const token = proxyTokenRef.current;
     proxyTokenRef.current = null;
     setEngaged(false);
-    await invoke("airplay_disengage", { proxyToken: token }).catch(() => undefined);
+    await invokeSession("airplay", "airplay_disengage", { proxyToken: token }).catch(
+      () => undefined
+    );
   }, [clearAttemptTimer]);
 
   // Disconnect/stop: hand back to mpv at the external position, then tear down.
@@ -143,6 +150,7 @@ export function useAirPlay({
 
   const handlePickerClosed = useCallback(async () => {
     if (!enabled || engageRef.current !== "idle") return;
+    const generation = generationRef.current;
     const position = cbRef.current.getPosition();
     const wasPlaying = cbRef.current.getPlaying();
     resumeRef.current = { position, wasPlaying };
@@ -150,12 +158,17 @@ export function useAirPlay({
 
     try {
       const { profileId, mediaKind, mediaId } = mediaRef.current;
-      const res = await invoke<{ proxyToken: string }>("airplay_engage", {
+      const res = (await invokeSession("airplay", "airplay_engage", {
         profileId,
         mediaKind,
         mediaId,
         positionSec: position,
-      });
+      })) as { proxyToken: string };
+      if (generation !== generationRef.current) {
+        // Teardown is queued behind this engage; release its newly-known token.
+        await invoke("stop_playback", { token: res.proxyToken }).catch(() => undefined);
+        return;
+      }
       proxyTokenRef.current = res.proxyToken;
       // If the route never activates (user cancelled / picked the Mac), revert.
       clearAttemptTimer();
@@ -163,18 +176,24 @@ export function useAirPlay({
         if (engageRef.current === "attempting") void teardown();
       }, ENGAGE_TIMEOUT_MS);
     } catch {
-      await teardown();
+      if (generation === generationRef.current) await teardown();
     }
   }, [enabled, clearAttemptTimer, teardown]);
 
   // Subscribe once; handlers read mutable state from refs.
   useEffect(() => {
     if (!enabled) return;
-    const statusUnlisten = listen<AirPlayStatus>("airplay:status", (e) => handleStatus(e.payload));
-    const pickerUnlisten = listen("airplay:picker-closed", () => void handlePickerClosed());
+    let cancelled = false;
+    const statusUnlisten = listen<AirPlayStatus>("airplay:status", (e) => {
+      if (!cancelled) handleStatus(e.payload);
+    });
+    const pickerUnlisten = listen("airplay:picker-closed", () => {
+      if (!cancelled) void handlePickerClosed();
+    });
     return () => {
-      void statusUnlisten.then((f) => f());
-      void pickerUnlisten.then((f) => f());
+      cancelled = true;
+      void statusUnlisten.then((f) => f()).catch(() => undefined);
+      void pickerUnlisten.then((f) => f()).catch(() => undefined);
     };
   }, [enabled, handleStatus, handlePickerClosed]);
 
@@ -183,7 +202,7 @@ export function useAirPlay({
   useEffect(() => {
     if (engageRef.current !== "idle") void teardown();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaKind, mediaId]);
+  }, [profileId, mediaKind, mediaId, enabled]);
 
   // Position the native route-picker overlay over the button slot. Hidden while
   // unavailable, controls are hidden, or already engaged (the overlay has its

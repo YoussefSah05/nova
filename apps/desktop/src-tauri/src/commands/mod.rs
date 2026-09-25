@@ -275,7 +275,7 @@ async fn start_import(
                     {
                         tracing::warn!(source_id, error = %e, "failed to register M3U url-tvg");
                     } else {
-                        tracing::info!(source_id, url = %url_tvg, "M3U url-tvg registered");
+                        tracing::info!(source_id, "M3U url-tvg registered");
                     }
                 }
             }
@@ -284,7 +284,16 @@ async fn start_import(
 
     // Spawn import task — returns immediately, streams progress events.
     tokio::spawn(async move {
-        run_import(source_id, rx, pool, app, mode).await;
+        run_import(
+            source_id,
+            rx,
+            pool,
+            |progress| {
+                let _ = app.emit("playlist:import:progress", progress);
+            },
+            mode,
+        )
+        .await;
     });
 }
 
@@ -808,7 +817,7 @@ async fn run_import(
     source_id: i64,
     mut rx: tokio::sync::mpsc::Receiver<Result<ParsedEntry, String>>,
     pool: std::sync::Arc<sqlx::SqlitePool>,
-    app: AppHandle,
+    emit: impl Fn(ImportProgress),
     mode: ImportMode,
 ) {
     let started_at = Instant::now();
@@ -818,7 +827,7 @@ async fn run_import(
     // Emit immediately so the UI transitions to the progress screen before
     // the first chunk even arrives.
     emit_import_progress(
-        &app,
+        &emit,
         source_id,
         ImportStage::Connecting,
         &stats,
@@ -835,7 +844,7 @@ async fn run_import(
         Err(e) => {
             stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
             emit_import_progress(
-                &app,
+                &emit,
                 source_id,
                 ImportStage::Failed,
                 &stats,
@@ -855,7 +864,7 @@ async fn run_import(
             Err(e) => {
                 stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
                 emit_import_progress(
-                    &app,
+                    &emit,
                     source_id,
                     ImportStage::Failed,
                     &stats,
@@ -903,7 +912,7 @@ async fn run_import(
                 errors.push(e.clone());
                 stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
                 emit_import_progress(
-                    &app,
+                    &emit,
                     source_id,
                     ImportStage::Receiving,
                     &stats,
@@ -939,7 +948,7 @@ async fn run_import(
         {
             stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
             emit_import_progress(
-                &app,
+                &emit,
                 source_id,
                 ImportStage::Failed,
                 &stats,
@@ -955,7 +964,7 @@ async fn run_import(
         if stats.parsed.is_multiple_of(500) {
             stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
             emit_import_progress(
-                &app,
+                &emit,
                 source_id,
                 ImportStage::Receiving,
                 &stats,
@@ -966,6 +975,22 @@ async fn run_import(
         }
     }
 
+    // Any endpoint failure or receive timeout makes a replacement incomplete.
+    // Dropping this transaction keeps the previous catalog and user state intact.
+    if mode == ImportMode::Replace && !errors.is_empty() {
+        stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
+        emit_import_progress(
+            &emit,
+            source_id,
+            ImportStage::Failed,
+            &stats,
+            Some("Refresh incomplete; previous catalog retained".to_string()),
+            warning_from_errors(&errors),
+            true,
+        );
+        return;
+    }
+
     if stats.parsed == 0 {
         let error = if errors.is_empty() {
             "import completed without any playlist entries".to_string()
@@ -974,7 +999,7 @@ async fn run_import(
         };
         stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
         emit_import_progress(
-            &app,
+            &emit,
             source_id,
             ImportStage::Failed,
             &stats,
@@ -987,7 +1012,7 @@ async fn run_import(
 
     stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
     emit_import_progress(
-        &app,
+        &emit,
         source_id,
         ImportStage::Persisting,
         &stats,
@@ -1007,7 +1032,7 @@ async fn run_import(
     {
         stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
         emit_import_progress(
-            &app,
+            &emit,
             source_id,
             ImportStage::Failed,
             &stats,
@@ -1023,7 +1048,7 @@ async fn run_import(
         if let Err(e) = restore_user_state(&mut tx, source_id, &snap).await {
             stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
             emit_import_progress(
-                &app,
+                &emit,
                 source_id,
                 ImportStage::Failed,
                 &stats,
@@ -1038,7 +1063,7 @@ async fn run_import(
     if let Err(e) = SourceRepository::touch_refreshed_tx(&mut tx, source_id).await {
         stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
         emit_import_progress(
-            &app,
+            &emit,
             source_id,
             ImportStage::Failed,
             &stats,
@@ -1053,7 +1078,7 @@ async fn run_import(
     if let Err(e) = tx.commit().await {
         stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
         emit_import_progress(
-            &app,
+            &emit,
             source_id,
             ImportStage::Failed,
             &stats,
@@ -1083,7 +1108,7 @@ async fn run_import(
     );
 
     emit_import_progress(
-        &app,
+        &emit,
         source_id,
         ImportStage::Complete,
         &stats,
@@ -1108,7 +1133,7 @@ struct ImportStats {
 }
 
 fn emit_import_progress(
-    app: &AppHandle,
+    emit: &impl Fn(ImportProgress),
     source_id: i64,
     stage: ImportStage,
     stats: &ImportStats,
@@ -1116,24 +1141,21 @@ fn emit_import_progress(
     warning: Option<String>,
     done: bool,
 ) {
-    let _ = app.emit(
-        "playlist:import:progress",
-        ImportProgress {
-            source_id,
-            stage,
-            parsed: stats.parsed,
-            inserted: stats.inserted,
-            live_count: stats.live_count,
-            movie_count: stats.movie_count,
-            series_count: stats.series_count,
-            failed_count: stats.failed_count,
-            skipped_count: stats.skipped_count,
-            elapsed_ms: stats.elapsed_ms,
-            done,
-            error,
-            warning,
-        },
-    );
+    emit(ImportProgress {
+        source_id,
+        stage,
+        parsed: stats.parsed,
+        inserted: stats.inserted,
+        live_count: stats.live_count,
+        movie_count: stats.movie_count,
+        series_count: stats.series_count,
+        failed_count: stats.failed_count,
+        skipped_count: stats.skipped_count,
+        elapsed_ms: stats.elapsed_ms,
+        done,
+        error,
+        warning,
+    });
 }
 
 fn warning_from_errors(errors: &[String]) -> Option<String> {
@@ -1389,4 +1411,131 @@ async fn open_profile_db(
         .insert_profile_pool(profile_id.to_string(), pool)
         .await;
     Ok(())
+}
+
+#[cfg(test)]
+mod stabilization_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn entry(name: &str) -> ParsedEntry {
+        ParsedEntry {
+            kind: MediaKind::Movie,
+            name: name.into(),
+            clean_title: name.into(),
+            group_title: String::new(),
+            stream_url: format!("https://example.invalid/{name}.mp4"),
+            tvg_id: None,
+            logo_url: None,
+            country_prefix: None,
+            year: None,
+            series_title: None,
+            season: None,
+            episode: None,
+            category: None,
+        }
+    }
+
+    async fn import(
+        pool: Arc<sqlx::SqlitePool>,
+        id: i64,
+        rows: Vec<Result<ParsedEntry, String>>,
+        mode: ImportMode,
+    ) -> ImportProgress {
+        let (tx, rx) = tokio::sync::mpsc::channel(rows.len().max(1));
+        for row in rows {
+            tx.send(row).await.unwrap();
+        }
+        drop(tx);
+        let events = Mutex::new(Vec::new());
+        run_import(id, rx, pool, |p| events.lock().unwrap().push(p), mode).await;
+        let events = events.into_inner().unwrap();
+        assert_eq!(events.iter().filter(|p| p.done).count(), 1);
+        events.last().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_preserves_catalog_flags_and_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = Arc::new(
+            init_profile_db(dir.path().join("profile.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let id = SourceRepository::new(&pool)
+            .create("m3u", "test", "https://example.invalid/list.m3u")
+            .await
+            .unwrap()
+            .id;
+        import(
+            pool.clone(),
+            id,
+            vec![Ok(entry("original"))],
+            ImportMode::Append,
+        )
+        .await;
+        let vod = VodRepository::new(&pool);
+        let original = vod
+            .list(id, 10, 0, None, None, false, false, ContentSort::Default)
+            .await
+            .unwrap()[0]
+            .clone();
+        vod.set_favorite(original.id, true).await.unwrap();
+        WatchHistoryRepository::new(&pool)
+            .record_progress("vod", original.id, 42.0, Some(100.0), false, None)
+            .await
+            .unwrap();
+        let failed = import(
+            pool.clone(),
+            id,
+            vec![
+                Ok(entry("partial")),
+                Err("provider endpoint unavailable".into()),
+            ],
+            ImportMode::Replace,
+        )
+        .await;
+        assert!(matches!(failed.stage, ImportStage::Failed));
+        let rows = vod
+            .list(id, 10, 0, None, None, false, false, ContentSort::Default)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "original");
+        assert!(rows[0].is_favorite);
+        assert_eq!(
+            WatchHistoryRepository::new(&pool)
+                .resume_position("vod", original.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .position_sec,
+            42.0
+        );
+        // A complete refresh still commits, preserves user state and admits new titles.
+        let ok = import(
+            pool.clone(),
+            id,
+            vec![Ok(entry("new")), Ok(entry("original"))],
+            ImportMode::Replace,
+        )
+        .await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+        let rows = vod
+            .list(id, 10, 0, None, None, false, false, ContentSort::Default)
+            .await
+            .unwrap();
+        let original = rows.iter().find(|v| v.name == "original").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(original.is_favorite);
+        assert_eq!(
+            WatchHistoryRepository::new(&pool)
+                .resume_position("vod", original.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .position_sec,
+            42.0
+        );
+    }
 }

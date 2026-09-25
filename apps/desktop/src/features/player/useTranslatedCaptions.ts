@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { invokeSession } from "./sessionCommands";
 
 import type { Cue } from "./CaptionOverlay";
 import type { AudioTrackSelection } from "./useSourceCaptions";
@@ -35,12 +36,14 @@ export interface TranslatedCaptionsState {
 }
 
 interface CuesEvent {
+  sessionId: string;
   mediaKind: string;
   mediaId: number;
   language: string;
   cues: Cue[];
 }
 interface StatusEvent {
+  sessionId: string;
   mediaKind: string;
   mediaId: number;
   state: "preparing" | "streaming" | "failed";
@@ -90,7 +93,7 @@ export function useTranslatedCaptions(
 
   const trackIndex = audioTrack?.index ?? 0;
   // Re-key on (media, track, target): switching any tears down + restarts.
-  const sessionKey = `${media.kind}:${media.id}:${trackIndex}:${targetLang}`;
+  const sessionKey = `${profileId}:${media.kind}:${media.id}:${trackIndex}:${targetLang}`;
   const eligible = active && media.kind !== "live" && targetLang.length > 0;
 
   const playheadRef = useRef(getPlayhead);
@@ -98,33 +101,44 @@ export function useTranslatedCaptions(
   playheadRef.current = getPlayhead;
   durationRef.current = getDuration;
 
-  const startSession = useCallback(async () => {
-    setStatus("preparing");
-    try {
-      const dur = durationRef.current();
-      await invoke("start_translation_session", {
-        profileId,
-        mediaKind: media.kind,
-        mediaId: media.id,
-        fromSec: playheadRef.current(),
-        durationSec: dur > 0 ? dur : null,
-        audioTrackIndex: trackIndex,
-        targetLang,
-      });
-    } catch (e) {
-      setStatus("failed");
-      setError(String(e));
-    }
-  }, [profileId, media.kind, media.id, trackIndex, targetLang]);
+  const sessionRef = useRef<string | null>(null);
+
+  const startSession = useCallback(
+    async (sessionId: string) => {
+      if (sessionRef.current !== sessionId) return;
+      setStatus("preparing");
+      try {
+        const dur = durationRef.current();
+        await invokeSession("translation", "start_translation_session", {
+          sessionId,
+          profileId,
+          mediaKind: media.kind,
+          mediaId: media.id,
+          fromSec: playheadRef.current(),
+          durationSec: dur > 0 ? dur : null,
+          audioTrackIndex: trackIndex,
+          targetLang,
+        });
+      } catch (e) {
+        if (sessionRef.current !== sessionId) return;
+        setStatus("failed");
+        setError(String(e));
+      }
+    },
+    [profileId, media.kind, media.id, trackIndex, targetLang]
+  );
 
   const downloadModel = useCallback(() => {
+    const sessionId = sessionRef.current;
+    if (!sessionId) return;
     void (async () => {
       setStatus("downloadingModel");
       setModelPct(null);
       try {
         await invoke("download_nllb_model");
-        await startSession();
+        await startSession(sessionId);
       } catch (e) {
+        if (sessionRef.current !== sessionId) return;
         setStatus("failed");
         setError(String(e));
       }
@@ -142,46 +156,56 @@ export function useTranslatedCaptions(
   useEffect(() => {
     if (!eligible) return;
     let cancelled = false;
+    const sessionId = crypto.randomUUID();
+    sessionRef.current = sessionId;
     const unlisteners: Array<() => void> = [];
 
-    void Promise.all([
-      listen<CuesEvent>("translation:cues", (ev) => {
-        const p = ev.payload;
-        if (p.mediaKind !== media.kind || p.mediaId !== media.id) return;
-        setCues((prev) => mergeCues(prev, p.cues));
-      }),
-      listen<StatusEvent>("translation:status", (ev) => {
-        const p = ev.payload;
-        if (p.mediaKind !== media.kind || p.mediaId !== media.id) return;
-        if (p.state === "failed") {
-          setStatus("failed");
-          setError(p.error ?? "translation failed");
-        } else {
-          setStatus(p.state);
-        }
-      }),
-      listen<ModelProgress>("nllb:download:progress", (ev) => {
-        const p = ev.payload;
-        setModelPct(
-          p.totalBytes && p.totalBytes > 0
-            ? Math.round((p.downloadedBytes / p.totalBytes) * 100)
-            : null
-        );
-      }),
-    ]).then((uns) => {
-      if (cancelled) {
-        uns.forEach((u) => u());
-        return;
-      }
-      unlisteners.push(...uns);
-    });
+    const subscriptions = Promise.all(
+      [
+        listen<CuesEvent>("translation:cues", (ev) => {
+          if (cancelled) return;
+          const p = ev.payload;
+          if (p.sessionId !== sessionId || p.mediaKind !== media.kind || p.mediaId !== media.id)
+            return;
+          setCues((prev) => mergeCues(prev, p.cues));
+        }),
+        listen<StatusEvent>("translation:status", (ev) => {
+          if (cancelled) return;
+          const p = ev.payload;
+          if (p.sessionId !== sessionId || p.mediaKind !== media.kind || p.mediaId !== media.id)
+            return;
+          if (p.state === "failed") {
+            setStatus("failed");
+            setError(p.error ?? "translation failed");
+          } else {
+            setStatus(p.state);
+          }
+        }),
+        listen<ModelProgress>("nllb:download:progress", (ev) => {
+          if (cancelled) return;
+          const p = ev.payload;
+          setModelPct(
+            p.totalBytes && p.totalBytes > 0
+              ? Math.round((p.downloadedBytes / p.totalBytes) * 100)
+              : null
+          );
+        }),
+      ].map((subscription) =>
+        subscription.then((unlisten) => {
+          if (cancelled) unlisten();
+          else unlisteners.push(unlisten);
+        })
+      )
+    );
 
     void (async () => {
       try {
+        await subscriptions;
+        if (cancelled) return;
         const model = await invoke<ModelStatusResult>("get_nllb_model_status");
         if (cancelled) return;
         if (model.installed) {
-          await startSession();
+          await startSession(sessionId);
         } else {
           setStatus("needsModel");
         }
@@ -201,9 +225,10 @@ export function useTranslatedCaptions(
 
     return () => {
       cancelled = true;
+      if (sessionRef.current === sessionId) sessionRef.current = null;
       window.clearInterval(interval);
       unlisteners.forEach((u) => u());
-      void invoke("stop_translation_session").catch(() => undefined);
+      void invokeSession("translation", "stop_translation_session").catch(() => undefined);
     };
   }, [eligible, profileId, sessionKey, startSession, media.kind, media.id]);
 

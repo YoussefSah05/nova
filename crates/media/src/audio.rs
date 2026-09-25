@@ -140,7 +140,8 @@ async fn run(mut cmd: Command, deadline: Duration) -> Result<(), AudioError> {
         Err(_) => return Err(AudioError::Timeout(deadline)),
     };
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // ffmpeg stderr can contain authenticated URLs (including redirects).
+        let stderr = "audio extraction failed".to_string();
         return Err(AudioError::Failed(output.status.code(), stderr));
     }
     Ok(())
