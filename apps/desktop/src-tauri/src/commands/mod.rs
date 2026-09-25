@@ -1539,4 +1539,73 @@ mod stabilization_tests {
             42.0
         );
     }
+
+    /// Opt-in live check of the same fetch, import, and SQLite commit path used
+    /// by add_source. The credential-bearing URL stays in the process environment
+    /// and the isolated profile database is removed when the test exits.
+    #[tokio::test]
+    #[ignore = "requires NOVA_PROBE_URL and network access"]
+    async fn real_provider_import_persists_catalog() {
+        let url = std::env::var("NOVA_PROBE_URL").expect("set NOVA_PROBE_URL");
+        let creds = nova_xtream::detect(&url)
+            .then(|| nova_xtream::XtreamCredentials::from_url(&url))
+            .flatten();
+        let kind = if creds.is_some() { "xtream" } else { "m3u" };
+        let dir = tempfile::tempdir().unwrap();
+        let pool = Arc::new(
+            init_profile_db(dir.path().join("profile.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let source_id = SourceRepository::new(&pool)
+            .create(kind, "live validation", &url)
+            .await
+            .unwrap()
+            .id;
+        let rx = match creds {
+            Some(creds) => nova_xtream::fetch(&creds).await,
+            None => nova_m3u::parse(&url).await.entries,
+        };
+        let events = Mutex::new(Vec::new());
+        tokio::time::timeout(
+            Duration::from_secs(360),
+            run_import(
+                source_id,
+                rx,
+                pool.clone(),
+                |event| events.lock().unwrap().push(event),
+                ImportMode::Append,
+            ),
+        )
+        .await
+        .expect("live import exceeded deadline");
+        let events = events.into_inner().unwrap();
+        assert_eq!(events.iter().filter(|event| event.done).count(), 1);
+        let result = events.last().unwrap();
+        assert!(
+            matches!(result.stage, ImportStage::Complete),
+            "live import failed: {:?}",
+            result.error
+        );
+        assert!(result.parsed > 0);
+        assert_eq!(result.failed_count, 0);
+
+        let persisted: i64 = sqlx::query_scalar(
+            "SELECT (SELECT COUNT(*) FROM channels WHERE source_id = ?) + \
+                    (SELECT COUNT(*) FROM vod_items WHERE source_id = ?) + \
+                    (SELECT COUNT(*) FROM series_episodes WHERE source_id = ?)",
+        )
+        .bind(source_id)
+        .bind(source_id)
+        .bind(source_id)
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert!(persisted > 0);
+        assert_eq!(persisted as u64, result.inserted);
+        println!(
+            "live import completed: parsed={}, persisted={}, errors={}",
+            result.parsed, persisted, result.failed_count
+        );
+    }
 }

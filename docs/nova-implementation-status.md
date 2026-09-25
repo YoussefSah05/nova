@@ -212,6 +212,30 @@ No product code was changed during this diagnosis. A current successful download
 of the same URL, or restored provider access, is needed to continue the real
 import validation. P00's earlier synthetic validation does not clear this blocker.
 
+### Live provider revalidation — 2026-09-25
+
+A newly supplied credential-bearing M3U link was checked without storing its URL
+in the repository or printing its credentials. Its direct GET returned HTTP 200
+with an M3U header. Nova routed it as Xtream and the headless probe completed
+cleanly in 6.7 seconds: 8,667 live channels, 28,591 movies, and 5,299 series
+(42,557 entries total), with zero errors.
+
+An opt-in test now exercises the same fetch and `run_import` path against a
+temporary migrated profile database. It passed for the supplied link: 42,557
+entries parsed and 42,557 rows committed, with zero import errors. The test uses
+`NOVA_PROBE_URL` from the process environment and deletes its temporary database;
+the credential-bearing URL is absent from source, fixtures, and test output.
+Validation commands: `cargo fmt --all --check`, the `nova-xtream` headless probe,
+and `SQLX_OFFLINE=true cargo test -p nova-desktop --lib
+real_provider_import_persists_catalog --locked -- --ignored --nocapture` with the
+URL supplied only through `NOVA_PROBE_URL`. The ordinary
+`SQLX_OFFLINE=true cargo test -p nova-desktop -p nova-xtream -p nova-m3u --locked`
+run also passed (52 tests; the opt-in live test remains ignored by default).
+
+This establishes that the current fetch, parser, and SQLite import path works for
+this reachable provider account. It does not establish why the previously saved
+profile account returned HTTP 403, or certify Tauri UI and playback behavior.
+
 ## M1 source-aware architecture audit — 2026-09-25
 
 **Outcome:** M1.1 and M1.2 are complete as a source audit and dependency plan.
