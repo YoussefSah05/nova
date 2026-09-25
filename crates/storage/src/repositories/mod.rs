@@ -4,6 +4,7 @@ pub mod embeddings;
 pub mod enrich;
 pub mod epg_sources;
 pub mod jobs;
+pub mod models;
 pub mod playback;
 pub mod profile_settings;
 pub mod profiles;
@@ -25,6 +26,7 @@ pub use enrich::{
 };
 pub use epg_sources::{EpgSource, EpgSourcesRepository};
 pub use jobs::{Job, JobRepository};
+pub use models::{ModelRepository, RegisteredModel};
 pub use playback::{PlaybackRepository, ResolvedStreamUrl};
 pub use profile_settings::ProfileSettingsRepository;
 pub use profiles::ProfileRepository;

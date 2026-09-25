@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO model_libraries (id, kind, relative_root) VALUES (?, 'internal', ?)\n             ON CONFLICT(id) DO UPDATE SET relative_root = excluded.relative_root",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2984421c799fd314ab0a3bdda68a4a8298f993d5c999bc11ad2970aa4538bb80"
+}

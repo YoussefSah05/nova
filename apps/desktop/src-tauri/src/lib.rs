@@ -2,6 +2,7 @@ pub mod airplay;
 pub mod caption_session;
 pub mod commands;
 pub mod ipc;
+pub mod model_registry;
 #[cfg(target_os = "macos")]
 pub mod mpv_layer;
 #[cfg(target_os = "macos")]
@@ -135,6 +136,7 @@ pub fn run() {
             commands::playback::get_resume_position,
             // Phase 6 — Transcription (VOD), streaming caption sessions
             commands::transcription::get_model_status,
+            commands::models::list_internal_models,
             commands::transcription::download_whisper_model,
             commands::transcription::start_caption_session,
             commands::transcription::set_caption_playhead,

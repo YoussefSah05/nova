@@ -38,7 +38,7 @@
   },
   "macos": { "minimumSystemVersion": "14.0" },
   "database": {
-    "registryMigration": "0001_init.sql",
+    "registryMigration": "0002_internal_model_registry.sql",
     "profileMigration": "0020_catalog_state_cleanup.sql"
   },
   "unverified": [

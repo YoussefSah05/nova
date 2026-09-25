@@ -43,6 +43,21 @@ pub fn is_installed(models_dir: &Path) -> bool {
             .any(|v| models_dir.join(v).is_file())
 }
 
+/// Paths required by the existing CTranslate2 layout. The vocabulary has two
+/// accepted names; choose the one already present for offline inspection.
+pub fn required_artifact_paths(models_dir: &Path) -> Vec<PathBuf> {
+    let vocabulary = VOCAB_CANDIDATES
+        .iter()
+        .find(|name| models_dir.join(name).is_file())
+        .unwrap_or(&VOCAB_CANDIDATES[0]);
+    vec![
+        models_dir.join(MODEL_BIN),
+        models_dir.join(CONFIG_JSON),
+        models_dir.join(SPM_FILE),
+        models_dir.join(vocabulary),
+    ]
+}
+
 /// Progress for the first-run model download, surfaced to the UI.
 #[derive(Debug, Clone)]
 pub struct ModelDownloadProgress {

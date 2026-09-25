@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO model_locations\n                    (model_id, library_id, relative_path, availability, observed_at)\n                 VALUES (?, ?, ?, ?, ?)\n                 ON CONFLICT(model_id) DO UPDATE SET library_id = excluded.library_id,\n                    relative_path = excluded.relative_path,\n                    availability = excluded.availability, observed_at = excluded.observed_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "42afa3b1b1e205ff353ceead4c86a392c51463002b83608018c121f4e2be9fcb"
+}

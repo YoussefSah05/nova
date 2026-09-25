@@ -10,6 +10,8 @@ use crate::EnrichError;
 /// The model used for catalog text. Multilingual (worldwide IPTV), small + fast
 /// (~118M, 384-dim). e5 models expect a task prefix; we use `passage:` for titles.
 pub const MODEL: EmbeddingModel = EmbeddingModel::MultilingualE5Small;
+/// Stable logical identity already used for persisted catalog embeddings.
+pub const MODEL_ID: &str = "multilingual-e5-small";
 
 /// Produces embedding vectors for short catalog strings. `Send + Sync` so it can
 /// live in a background job behind an `Arc`.

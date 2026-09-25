@@ -10,4 +10,8 @@ pub enum StorageError {
     Serde(#[from] serde_json::Error),
     #[error("not found")]
     NotFound,
+    #[error("invalid model registry record")]
+    InvalidModelRecord,
+    #[error("model registry contract error: {0}")]
+    ModelContract(#[from] nova_core::models::ModelContractError),
 }

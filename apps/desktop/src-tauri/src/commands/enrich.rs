@@ -26,7 +26,8 @@ use crate::state::AppState;
 
 use super::require_profile_pool;
 
-pub(crate) const MODEL_ID: &str = "multilingual-e5-small";
+pub(crate) use nova_enrich::MODEL_ID;
+
 /// Rows embedded per batch; small enough that progress advances visibly.
 const EMBED_CHUNK: usize = 256;
 /// TMDB results flushed to the DB this often, so a long pass persists progress

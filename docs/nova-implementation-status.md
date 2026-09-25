@@ -481,3 +481,75 @@ real AI inference/downloads, full-scale app performance, signing/notarization an
 release DMG packaging. Prior P00 native smoke/release-build evidence is retained
 above and is not presented as a new run. No current provider credentials or user
 profile databases were accessed for this audit.
+
+## M2.1 / internal M2.2–M2.4 — internal model registry
+
+Updated: 2026-09-25. This is the bounded next slice selected by the M1 audit.
+It adds a logical registry for the three **existing internal** model layouts and
+stops before external libraries, runtime ownership, resource admission or UI
+redesign. `master-plan.md` dependencies did not change.
+
+### Implemented contract and reuse
+
+- `nova-core::models` defines validated `ModelId`, `ModelLibraryId`,
+  `RelativeModelPath`, `ModelDescriptor`, `ModelLibrary`, `ModelLocation` and
+  `ModelAvailability`. A location resolves relative to a registered library
+  root; `..`, absolute paths, ambiguous segments and control characters are
+  rejected. No absolute machine path is persisted as a model identity.
+- Additive app migration `0002_internal_model_registry.sql` stores the internal
+  library, logical descriptors, one location per model, availability and the
+  observation time. Profile migrations and existing settings are unchanged.
+  `nova-stack.json` records the new app migration head. SQLx offline metadata
+  includes the four new compile-time checked queries.
+- Desktop discovery uses the existing Whisper model descriptor/path helper,
+  NLLB model ID/installed layout, and E5 logical ID. It probes only the current
+  `app_data_dir/models/{whisper,nllb,embeddings}` locations and updates the app
+  repository in one transaction. `list_internal_models` exposes IDs, capability,
+  backend, last observed availability and optional revision through Tauri; it
+  never returns an absolute path or credential-bearing URL. Existing download,
+  status, inference, caption, translation and enrichment flows are unchanged.
+- Discovery does not create model directories, download data or load a model.
+  `missing` means no required artifact evidence; `unverified` means a partial,
+  empty, malformed or opaque layout; `available` means the Whisper or NLLB
+  layout passed shallow local checks for this platform. **Available is not
+  cryptographic verification or a successful inference.** Existing mutable
+  download sources have no pinned digest, so `artifact_revision` remains null.
+  The FastEmbed marker alone remains unverified because the cache layout is
+  opaque to this metadata probe.
+
+### Validation and limits
+
+Focused tests cover normalized path/ID contracts, unchanged internal path
+resolution, fresh app migration, upgrade from app schema 0001 with profile and
+setting preservation, reopen and availability transitions, transaction rollback
+on an invalid batch, rejection of a corrupted persisted path, missing/partial/
+empty/malformed layouts and offline discovery without filesystem creation.
+No production model or authenticated provider URL is read by those tests.
+
+Validation commands/results for this slice:
+
+- `just check`: pass, including Tauri and SQLx offline checks.
+- `just lint`: pass, including Clippy `-D warnings` and ESLint.
+- `SQLX_OFFLINE=true cargo test -p nova-storage --test model_registry --locked`:
+  focused fresh/upgrade/rollback cases pass before the final expanded run.
+- `SQLX_OFFLINE=true cargo test -p nova-desktop --locked model_registry::tests`:
+  initial offline/partial/corrupt cases pass before the final expanded run.
+- `just test`: pass — 268 Rust tests/doctests, 2 existing ignores; 28 frontend tests.
+- `just typecheck`, `pnpm verify-environment --manifest-only`,
+  `cargo fmt --all -- --check`, and `git diff --check`: pass.
+
+A raw `cargo test` invocation without `SQLX_OFFLINE=true` picked up the local
+development `DATABASE_URL`, whose database predates app migration 0002, and SQLx
+reported missing model tables at compile time. The repository's `just` recipes
+set `SQLX_OFFLINE=true`; the command above and CI use that intended path. The
+new query metadata was generated using a temporary, synthetic combined schema
+under `/tmp`, not a user database. `cargo sqlx prepare` itself could not parse
+this installation's `cargo metadata` output, so the documented SQLx
+`SQLX_OFFLINE_DIR` compile path generated the four cache files. The offline
+workspace check then passed.
+
+Remaining M2 scope: external/removable library authorization and offline-device
+behavior (M2.3); artifact provenance/digest verification and richer registry
+metadata; runtime leases/unload (M2.5); resource and worker admission (M2.6/M7).
+The next bounded milestone is M2.3, after preserving the M1 data/privacy gates
+for any new integration. No following milestone was implemented here.

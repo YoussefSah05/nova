@@ -16,11 +16,11 @@ pub use db::{init_app_db, init_profile_db};
 pub use error::StorageError;
 pub use repositories::{
     from_blob, to_blob, CaptionStyleRepository, ChannelRepository, EmbeddingRepository,
-    EnrichUpdate, EpgSource, EpgSourcesRepository, Job, JobRepository, NowAndNext,
+    EnrichUpdate, EpgSource, EpgSourcesRepository, Job, JobRepository, ModelRepository, NowAndNext,
     PlaybackRepository, ProfileRepository, ProfileSettingsRepository, ProgramsRepository,
-    ResolvedStreamUrl, ResumePosition, SearchHit, SearchRepository, SeriesRepository,
-    SeriesTmdbQuery, SeriesTmdbWrite, SourceRepository, SourceSegment, StoredTranscript,
-    TmdbCacheRepository, TmdbQuery, TmdbWrite, TranscriptLine, TranscriptRepository,
-    TranslationRepository, TranslationRow, UnenrichedRow, VodRepository, WatchHistoryRepository,
-    WatchSnapshot,
+    RegisteredModel, ResolvedStreamUrl, ResumePosition, SearchHit, SearchRepository,
+    SeriesRepository, SeriesTmdbQuery, SeriesTmdbWrite, SourceRepository, SourceSegment,
+    StoredTranscript, TmdbCacheRepository, TmdbQuery, TmdbWrite, TranscriptLine,
+    TranscriptRepository, TranslationRepository, TranslationRow, UnenrichedRow, VodRepository,
+    WatchHistoryRepository, WatchSnapshot,
 };
