@@ -26,7 +26,9 @@ pub use enrich::{
 };
 pub use epg_sources::{EpgSource, EpgSourcesRepository};
 pub use jobs::{Job, JobRepository};
-pub use models::{ModelRepository, RegisteredModel};
+pub use models::{
+    ExternalLibraryRecord, ExternalRegisteredModel, ModelRepository, RegisteredModel,
+};
 pub use playback::{PlaybackRepository, ResolvedStreamUrl};
 pub use profile_settings::ProfileSettingsRepository;
 pub use profiles::ProfileRepository;

@@ -97,6 +97,8 @@ pub enum ModelAvailability {
     Missing,
     Unverified,
     Available,
+    /// The library is disconnected or its persisted access grant cannot be used.
+    Unavailable,
 }
 
 impl ModelAvailability {
@@ -105,6 +107,7 @@ impl ModelAvailability {
             Self::Missing => "missing",
             Self::Unverified => "unverified",
             Self::Available => "available",
+            Self::Unavailable => "unavailable",
         }
     }
 
@@ -113,6 +116,7 @@ impl ModelAvailability {
             "missing" => Ok(Self::Missing),
             "unverified" => Ok(Self::Unverified),
             "available" => Ok(Self::Available),
+            "unavailable" => Ok(Self::Unavailable),
             _ => Err(ModelContractError::UnknownValue),
         }
     }

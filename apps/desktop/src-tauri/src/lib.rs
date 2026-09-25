@@ -2,6 +2,8 @@ pub mod airplay;
 pub mod caption_session;
 pub mod commands;
 pub mod ipc;
+#[cfg(target_os = "macos")]
+pub mod mac_model_library;
 pub mod model_registry;
 #[cfg(target_os = "macos")]
 pub mod mpv_layer;
@@ -54,6 +56,19 @@ pub fn run() {
         .manage(state::AppState::new(pool, proxy_port, proxy_sessions))
         .setup(|app| {
             let engine = app.state::<state::AppState>().mpv_engine.clone();
+
+            // A removed drive should stop advertising its models even when
+            // Settings is closed. The probe only reads local metadata and the
+            // app DB; it never touches playback or starts inference.
+            let model_pool = app.state::<state::AppState>().pool.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    if model_registry::refresh_external(&model_pool).await.is_err() {
+                        tracing::warn!("could not refresh external model-library status");
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                }
+            });
 
             // Wire the wakeup callback → "mpv:state" Tauri event. The
             // frontend `PlayerModal` listens for this instead of polling.
@@ -137,6 +152,8 @@ pub fn run() {
             // Phase 6 — Transcription (VOD), streaming caption sessions
             commands::transcription::get_model_status,
             commands::models::list_internal_models,
+            commands::models::add_external_model_library,
+            commands::models::list_external_model_libraries,
             commands::transcription::download_whisper_model,
             commands::transcription::start_caption_session,
             commands::transcription::set_caption_playhead,

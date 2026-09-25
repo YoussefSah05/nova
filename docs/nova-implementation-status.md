@@ -576,8 +576,70 @@ The bounded internal model-library/persistence milestone is complete. No new
 migration was needed beyond the already additive app schema 0002; the read-path
 and status integration use it without moving model files or changing settings.
 
-Remaining M2 scope: external/removable library authorization and offline-device
-behavior (M2.3); artifact provenance/digest verification and richer registry
-metadata; runtime leases/unload (M2.5); resource and worker admission (M2.6/M7).
-The next bounded milestone is M2.3, after preserving the M1 data/privacy gates
-for any new integration. No following milestone was implemented here.
+Remaining after this internal slice: external/removable library authorization and
+offline-device behavior (M2.3); artifact provenance/digest verification and
+richer registry metadata; runtime leases/unload (M2.5); resource and worker
+admission (M2.6/M7). The next bounded milestone, M2.3, is recorded below.
+
+## M2.3 — removable model-library availability
+
+Updated: 2026-09-25. This milestone extends the existing registry without
+changing playback, catalog rows, profile databases, download paths or inference
+scheduling. `master-plan.md` ordering remains valid.
+
+- App migration `0003_external_model_libraries.sql` adds separate external
+  library grants and per-library relative model locations. App schema 0002,
+  internal model locations, profiles and settings are preserved. Each external
+  library has a stable logical ID. The bookmark is stored as an opaque local
+  blob in app.db; no absolute root path is stored as a model ID or sent through
+  IPC. `nova-stack.json` names the new migration head, and SQLx offline query
+  metadata was regenerated against a synthetic combined schema.
+- The macOS folder picker runs on the main AppKit thread behind a Tauri command.
+  The webview cannot submit an arbitrary filesystem path. Nova prefers a
+  read-only security-scoped bookmark and falls back to a normal bookmark for
+  the current non-sandboxed bundle. Bookmark resolution is noninteractive and
+  does not mount a missing drive. A scoped grant is stopped after each bounded
+  metadata probe, including failure paths. No bookmark bytes or resolved path
+  appear in UI DTOs or logs; tests use synthetic local folders. The current bundle has no App Sandbox
+  entitlement; a future sandboxed distribution must qualify entitlement and
+  bookmark migration under Apple's [macOS App Sandbox file-access guidance](https://developer.apple.com/documentation/security/accessing-files-from-the-macos-app-sandbox).
+- Disconnect or failed grant resolution records `unavailable` for every model
+  in that external library, without deleting its descriptor, relative location
+  or bookmark. A connected folder with no model artifacts reports `missing`.
+  Reconnection refreshes availability under the same IDs. Registry refreshes
+  on startup, every 30 seconds while running, and when Settings requests the
+  list. Only known Whisper, NLLB and embedding layouts are probed, with no
+  download, runtime load or filesystem writes. Internal observations and
+  external libraries are separate; one drive's failure cannot alter another
+  library's rows. The UI shows connection and model state with a manual refresh.
+- Existing AI jobs still use their existing internal model paths. External
+  inventory is not advertised as an inference selection; path selection and
+  inference leases belong to M2.5. Playback never consults this registry.
+
+Focused validation covers schema 0002 → 0003 upgrade, preserved app settings,
+internal records and FK integrity; multi-library isolation and transaction
+rollback; removed/recreated folder state with stable IDs; symlink rejection;
+and a real macOS bookmark → registry → SQLite disconnect/reconnect cycle using
+a synthetic local folder.
+There is no physical removable-drive, native picker interaction, signed bundle
+or App Sandbox entitlement qualification in this run.
+
+Validation commands/results for M2.3:
+
+- `SQLX_OFFLINE=true cargo test -p nova-storage --test external_model_libraries --locked`:
+  pass (3 migration, isolation and rollback tests).
+- `SQLX_OFFLINE=true cargo test -p nova-desktop --locked model_registry::tests`:
+  pass (6 tests); `SQLX_OFFLINE=true cargo test -p nova-desktop --locked
+  native_bookmark_refresh_persists_disconnect_and_reconnect`: pass after the
+  final integrated test was added.
+- `just check`, `just lint` (zero warnings), `just typecheck`,
+  `pnpm -C apps/desktop build`, `pnpm verify-environment --manifest-only`,
+  `cargo fmt --all -- --check`, Prettier check and `git diff --check`: pass.
+- `just test`: pass with loopback permission for existing synthetic HTTP
+  fixtures; two pre-existing Rust tests remain intentionally ignored, and all
+  28 frontend tests pass. The frontend build retains its existing large-chunk
+  warning.
+
+M2.3 is complete at the registry/authorization boundary. The next model
+milestone is M2.5 runtime resolution and ownership; this work does not select
+external files for inference or add scheduling policy.

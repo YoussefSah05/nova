@@ -10,7 +10,7 @@ use nova_core::{
     },
     now_ts,
 };
-use nova_storage::{ModelRepository, RegisteredModel};
+use nova_storage::{ExternalLibraryRecord, ModelRepository, RegisteredModel};
 use nova_transcribe::{default_model, is_installed as whisper_installed, model_paths};
 use nova_translate::model as nllb;
 use sqlx::SqlitePool;
@@ -123,8 +123,14 @@ fn embedding_availability(dir: &Path) -> ModelAvailability {
 pub fn discover_internal(
     app_data_dir: &Path,
 ) -> Result<(ModelLibrary, Vec<RegisteredModel>), ModelContractError> {
-    let library = internal_library()?;
-    let root = library.relative_root.resolve(app_data_dir);
+    discover_library(app_data_dir, internal_library()?)
+}
+
+fn discover_library(
+    base_dir: &Path,
+    library: ModelLibrary,
+) -> Result<(ModelLibrary, Vec<RegisteredModel>), ModelContractError> {
+    let root = library.relative_root.resolve(base_dir);
     let observed_at = now_ts();
     let models = vec![
         registration(
@@ -156,6 +162,133 @@ pub fn discover_internal(
         )?,
     ];
     Ok((library, models))
+}
+
+fn unavailable_models(library: &ModelLibrary) -> Result<Vec<RegisteredModel>, ModelContractError> {
+    let observed_at = now_ts();
+    Ok(vec![
+        registration(
+            library,
+            default_model().id,
+            "transcription",
+            "whisper.cpp",
+            "whisper",
+            ModelAvailability::Unavailable,
+            observed_at,
+        )?,
+        registration(
+            library,
+            nllb::MODEL_ID,
+            "translation",
+            "ctranslate2",
+            "nllb",
+            ModelAvailability::Unavailable,
+            observed_at,
+        )?,
+        registration(
+            library,
+            nova_enrich::MODEL_ID,
+            "embedding",
+            "fastembed",
+            "embeddings",
+            ModelAvailability::Unavailable,
+            observed_at,
+        )?,
+    ])
+}
+
+/// A disconnected root is distinct from an online library lacking artifacts.
+/// No selected external path is persisted or sent to the webview.
+fn observe_external_at(
+    library: &ModelLibrary,
+    selected_root: Option<&Path>,
+) -> Result<(bool, Vec<RegisteredModel>), ModelContractError> {
+    let Some(root) = selected_root.filter(|path| path.is_dir()) else {
+        return Ok((false, unavailable_models(library)?));
+    };
+    let models_dir = library.relative_root.resolve(root);
+    let whisper_dir = models_dir.join("whisper");
+    let whisper_paths = model_paths(&whisper_dir, &default_model());
+    let nllb_dir = models_dir.join("nllb");
+    let embedding_dir = models_dir.join("embeddings");
+    let linked = [
+        models_dir.as_path(),
+        whisper_dir.as_path(),
+        whisper_paths.ggml.as_path(),
+        whisper_paths.coreml_dir.as_path(),
+        nllb_dir.as_path(),
+        embedding_dir.as_path(),
+    ];
+    if linked.iter().any(|path| is_symlink(path))
+        || nllb::required_artifact_paths(&nllb_dir)
+            .iter()
+            .any(|path| is_symlink(path))
+    {
+        return Ok((false, unavailable_models(library)?));
+    }
+    let (_, models) = discover_library(root, library.clone())?;
+    Ok((true, models))
+}
+
+fn is_symlink(path: &Path) -> bool {
+    path.symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+fn probe_external(
+    mut record: ExternalLibraryRecord,
+) -> Result<(ExternalLibraryRecord, Vec<RegisteredModel>), ModelContractError> {
+    #[cfg(target_os = "macos")]
+    let resolved =
+        crate::mac_model_library::with_bookmarked_folder(&record.bookmark_data, |root| {
+            observe_external_at(&record.library, Some(root))
+        });
+    #[cfg(not(target_os = "macos"))]
+    let resolved: Option<(
+        Result<(bool, Vec<RegisteredModel>), ModelContractError>,
+        Option<Vec<u8>>,
+    )> = None;
+
+    let (online, models) = match resolved {
+        Some((observation, renewal)) => {
+            if let Some(bookmark) = renewal {
+                record.bookmark_data = bookmark;
+            }
+            observation?
+        }
+        None => observe_external_at(&record.library, None)?,
+    };
+    record.online = online;
+    record.observed_at = now_ts();
+    Ok((record, models))
+}
+
+pub async fn register_external(
+    pool: &SqlitePool,
+    record: ExternalLibraryRecord,
+) -> Result<(), ApiError> {
+    let _guard = REFRESH_LOCK.lock().await;
+    let (record, models) = tokio::task::spawn_blocking(move || probe_external(record))
+        .await
+        .map_err(|_| ApiError::Internal("model-library probe failed".into()))?
+        .map_err(|_| ApiError::Internal("invalid model-library contract".into()))?;
+    ModelRepository::new(pool)
+        .record_external(&record, &models)
+        .await?;
+    Ok(())
+}
+
+pub async fn refresh_external(pool: &SqlitePool) -> Result<(), ApiError> {
+    let _guard = REFRESH_LOCK.lock().await;
+    let repo = ModelRepository::new(pool);
+    for record in repo.list_external_libraries().await? {
+        let (record, models) = tokio::task::spawn_blocking(move || probe_external(record))
+            .await
+            .map_err(|_| ApiError::Internal("model-library probe failed".into()))?
+            .map_err(|_| ApiError::Internal("invalid model-library contract".into()))?;
+        repo.record_external(&record, &models).await?;
+    }
+    Ok(())
 }
 
 pub async fn refresh_internal(
@@ -308,5 +441,162 @@ mod tests {
         assert_eq!(third.descriptor.id, first.descriptor.id);
         assert_eq!(third.location, first.location);
         pool.close().await;
+    }
+
+    #[test]
+    fn removable_root_disconnects_and_reconnects_without_changing_model_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("removable-library");
+        let library = ModelLibrary {
+            id: ModelLibraryId::new("external-fixture").unwrap(),
+            relative_root: RelativeModelPath::new("models").unwrap(),
+        };
+        std::fs::create_dir_all(root.join("models/nllb")).unwrap();
+        let nllb_dir = root.join("models/nllb");
+        for path in nllb::required_artifact_paths(&nllb_dir) {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
+        let (connected, first) = observe_external_at(&library, Some(&root)).unwrap();
+        assert!(connected);
+        let first_model = first
+            .iter()
+            .find(|m| m.descriptor.id.as_str() == nllb::MODEL_ID)
+            .unwrap();
+        assert_eq!(first_model.availability, ModelAvailability::Available);
+
+        std::fs::remove_dir_all(&root).unwrap();
+        let (connected, offline) = observe_external_at(&library, Some(&root)).unwrap();
+        assert!(!connected);
+        let offline_model = offline
+            .iter()
+            .find(|m| m.descriptor.id.as_str() == nllb::MODEL_ID)
+            .unwrap();
+        assert_eq!(offline_model.availability, ModelAvailability::Unavailable);
+        assert_eq!(offline_model.descriptor.id, first_model.descriptor.id);
+
+        std::fs::create_dir_all(&nllb_dir).unwrap();
+        for path in nllb::required_artifact_paths(&nllb_dir) {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
+        let (connected, restored) = observe_external_at(&library, Some(&root)).unwrap();
+        assert!(connected);
+        let restored_model = restored
+            .iter()
+            .find(|m| m.descriptor.id.as_str() == nllb::MODEL_ID)
+            .unwrap();
+        assert_eq!(restored_model.availability, ModelAvailability::Available);
+        assert_eq!(restored_model.descriptor.id, first_model.descriptor.id);
+        assert_eq!(restored_model.location, first_model.location);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_probe_does_not_follow_model_artifact_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("selected");
+        let nllb_dir = root.join("models/nllb");
+        std::fs::create_dir_all(&nllb_dir).unwrap();
+        let outside = dir.path().join("outside-model");
+        std::fs::write(&outside, b"fixture").unwrap();
+        symlink(&outside, nllb_dir.join("model.bin")).unwrap();
+        let library = ModelLibrary {
+            id: ModelLibraryId::new("external-fixture").unwrap(),
+            relative_root: RelativeModelPath::new("models").unwrap(),
+        };
+        let (online, models) = observe_external_at(&library, Some(&root)).unwrap();
+        assert!(!online);
+        assert!(models
+            .iter()
+            .all(|model| model.availability == ModelAvailability::Unavailable));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn native_bookmark_refresh_persists_disconnect_and_reconnect() {
+        use objc2_foundation::{NSString, NSURLBookmarkCreationOptions, NSURL};
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("removable-library");
+        let nllb_dir = root.join("models/nllb");
+        std::fs::create_dir_all(&nllb_dir).unwrap();
+        for path in nllb::required_artifact_paths(&nllb_dir) {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
+        let url =
+            NSURL::fileURLWithPath_isDirectory(&NSString::from_str(root.to_str().unwrap()), true);
+        let bookmark = url
+            .bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
+                NSURLBookmarkCreationOptions::empty(),
+                None,
+                None,
+            )
+            .unwrap();
+        let mut bookmark_data = vec![0]; // Plain bookmark in the current non-sandboxed bundle.
+        bookmark_data.extend_from_slice(&bookmark.to_vec());
+
+        let pool = init_app_db(dir.path().join("app.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let library = ModelLibrary {
+            id: ModelLibraryId::new("external-fixture").unwrap(),
+            relative_root: RelativeModelPath::new("models").unwrap(),
+        };
+        register_external(
+            &pool,
+            ExternalLibraryRecord {
+                library,
+                display_name: "Fixture library".into(),
+                bookmark_data,
+                online: false,
+                observed_at: now_ts(),
+            },
+        )
+        .await
+        .unwrap();
+        let repo = ModelRepository::new(&pool);
+        let first = repo.list_external_models().await.unwrap();
+        let first_model = first
+            .iter()
+            .find(|m| m.model.descriptor.id.as_str() == nllb::MODEL_ID)
+            .unwrap();
+        assert_eq!(first_model.model.availability, ModelAvailability::Available);
+
+        std::fs::remove_dir_all(&root).unwrap();
+        refresh_external(&pool).await.unwrap();
+        let offline = repo.list_external_models().await.unwrap();
+        let offline_model = offline
+            .iter()
+            .find(|m| m.model.descriptor.id.as_str() == nllb::MODEL_ID)
+            .unwrap();
+        assert_eq!(
+            offline_model.model.availability,
+            ModelAvailability::Unavailable
+        );
+        assert_eq!(
+            offline_model.model.descriptor.id,
+            first_model.model.descriptor.id
+        );
+
+        std::fs::create_dir_all(&nllb_dir).unwrap();
+        for path in nllb::required_artifact_paths(&nllb_dir) {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
+        refresh_external(&pool).await.unwrap();
+        let restored = repo.list_external_models().await.unwrap();
+        let restored_model = restored
+            .iter()
+            .find(|m| m.model.descriptor.id.as_str() == nllb::MODEL_ID)
+            .unwrap();
+        assert_eq!(
+            restored_model.model.availability,
+            ModelAvailability::Available
+        );
+        assert_eq!(restored_model.model.location, first_model.model.location);
     }
 }

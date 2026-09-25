@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { SettingRow, SettingsCard, SettingsButton } from "../SettingsUI";
 import { formatBytes } from "../format";
+import { ExternalModelLibraries } from "./ExternalModelLibraries";
 
 interface ModelStatus {
   installed: boolean;
@@ -148,6 +149,8 @@ export function TranscriptionSection({ profileId }: { profileId: string }) {
           )}
         </SettingRow>
       </SettingsCard>
+
+      <ExternalModelLibraries />
 
       <SettingsCard title="Cache">
         <SettingRow

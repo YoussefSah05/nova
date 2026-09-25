@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO external_model_locations\n                    (library_id, model_id, relative_path, availability, observed_at)\n                 VALUES (?, ?, ?, ?, ?)\n                 ON CONFLICT(library_id, model_id) DO UPDATE SET\n                     relative_path = excluded.relative_path,\n                     availability = excluded.availability,\n                     observed_at = excluded.observed_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "625da331efc5ef8856b7d3543ef74daf688c741e8205b46be4945ccf0cddb0a2"
+}

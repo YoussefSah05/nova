@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT d.id, d.capability, d.backend, d.artifact_revision,\n                    l.library_id, b.relative_root, b.display_name, l.relative_path,\n                    l.availability, l.observed_at\n             FROM external_model_locations l\n             JOIN external_model_libraries b ON b.id = l.library_id\n             JOIN model_descriptors d ON d.id = l.model_id\n             ORDER BY b.id, d.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "capability",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "backend",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "artifact_revision",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "library_id",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "relative_root",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "display_name",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "relative_path",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "availability",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "observed_at",
+        "ordinal": 9,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7a832af75a7dced413938f90f34003099cb05b4889c772966dd10f1691f0df7b"
+}

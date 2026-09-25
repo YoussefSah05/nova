@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, display_name, relative_root, bookmark_data, availability, observed_at\n             FROM external_model_libraries ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "display_name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "relative_root",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "bookmark_data",
+        "ordinal": 3,
+        "type_info": "Blob"
+      },
+      {
+        "name": "availability",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "observed_at",
+        "ordinal": 5,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3bbc28f827c920f1b763d0f66f46610a7097036a418660a7055a00ece677c886"
+}

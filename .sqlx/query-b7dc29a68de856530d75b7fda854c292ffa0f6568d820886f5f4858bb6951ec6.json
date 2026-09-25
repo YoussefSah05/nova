@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE external_model_locations\n             SET availability = ?, observed_at = ? WHERE library_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "b7dc29a68de856530d75b7fda854c292ffa0f6568d820886f5f4858bb6951ec6"
+}

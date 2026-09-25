@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO external_model_libraries\n                (id, display_name, relative_root, bookmark_data, availability, observed_at)\n             VALUES (?, ?, ?, ?, ?, ?)\n             ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name,\n                 relative_root = excluded.relative_root,\n                 bookmark_data = excluded.bookmark_data,\n                 availability = excluded.availability, observed_at = excluded.observed_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "1b4d589090edf34774bc5912ae9854221c385aef96c457d05f0ae9dd6c1c8c37"
+}

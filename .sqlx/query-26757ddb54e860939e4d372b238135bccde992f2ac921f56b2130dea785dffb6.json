@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO model_descriptors (id, capability, backend, artifact_revision)\n                 VALUES (?, ?, ?, ?)\n                 ON CONFLICT(id) DO UPDATE SET capability = excluded.capability,\n                     backend = excluded.backend, artifact_revision = excluded.artifact_revision",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "26757ddb54e860939e4d372b238135bccde992f2ac921f56b2130dea785dffb6"
+}
