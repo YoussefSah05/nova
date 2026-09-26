@@ -766,7 +766,64 @@ temporary directories. Structural availability is not digest verification.
 
 Native ONNX/CTranslate2 calls finish their current batch after cancellation;
 they are not forcibly preempted. Backend resident sizes remain explicitly
-unknown. Per-model admission is implemented, but global memory budgets,
-cross-model priority, playback-aware admission, queue limits and automatic
-eviction belong to **M2.6 resource policy**, the next bounded milestone. M2.5
-is complete; M2.6 and later catalog architecture work have not been started.
+unknown. M2.5 is complete. The bounded M2.6 resource-policy work is recorded
+below; measured memory budgets, queue limits and automatic eviction remain
+future qualification/work items.
+
+## M2.6 — playback-aware model resource policy
+
+Updated: 2026-09-26. A code map was used to locate M2.5 runtime callers,
+the playback engine and the persisted jobs subsystem, then verified against
+their source. It showed the intended navigation links, but source inspection
+was treated as authoritative. `ModelRuntimeManager` is owned by `AppState`;
+model callers are search, enrichment, caption and translation. Playback has
+separate mpv, HLS/web and AirPlay lifecycles. `JobQueue` and `JobRepository`
+persist priorities, but desktop code does not instantiate that queue or enqueue
+these workers. No schema was changed.
+
+- Reused the existing shared runtime, per-model operation guards, Tauri
+  `AppState`, mpv open/close, HLS `resolve_stream`/`stop_playback`, and AirPlay
+  engage/disengage lifecycles. RAII playback guards are acquired and released
+  with those tokens; session replacement, close, cleanup and drop release the
+  correct guard. Distinct players use reference counting so closing one player
+  cannot resume background work while another is still active.
+- Added a process-wide, cancellable priority admission lane for model
+  initialization and inference. It admits one expensive model operation at a
+  time while native resident-memory estimates remain unknown. Priorities follow
+  the master-plan order: realtime captions/translation, interactive search,
+  foreground, metadata, background and maintenance. Queued eligible work is
+  ordered by priority and FIFO within a class. Cancelled waiters are removed.
+- Active playback lets realtime and interactive requests use the lane and
+  suspends foreground/background classes until playback ends. If playback
+  starts during native inference, the bounded operation already in progress
+  completes; ONNX/CTranslate2 cannot be safely preempted. Embedding remains
+  chunked at 256 documents, and translation retains its existing bounded batch.
+- Search and transcript semantic work use interactive priority; caption ASR
+  and translation use realtime priority; catalog/series enrichment uses
+  background priority. Status reports active playback count, queued work and
+  the current class in addition to the existing lease/loaded-model metrics.
+- No migration or durable configuration change was needed. Global admission
+  capacity is intentionally conservative because production memory sizes have
+  not been measured. This is a model-runtime policy, not a general worker pool.
+
+Focused regression tests cover playback guard reference counts, interactive
+work remaining available during playback, background suspension/resume,
+priority/FIFO admission behavior, cancellation cleanup, and cold model loading
+waiting until playback ends. Desktop sources show that imports, EPG and
+enrichment are currently spawned directly; the durable `JobQueue` is not
+integrated there. M2.6 applies classes at the existing model boundaries, while
+durable recovery, queue bounds, backpressure and enforcement of persisted
+`jobs.priority` across desktop workers remain M7 work, as planned.
+
+Validation commands/results:
+
+- `SQLX_OFFLINE=true cargo test -p nova-desktop --lib --locked`: pass (43
+  passed, one pre-existing ignored test).
+- `just test`: pass for the Rust workspace/doctests and 28 frontend tests;
+  existing loopback fixtures required local loopback permission.
+- `just check` and `just lint`: pass, including Tauri checks, Clippy with
+  warnings denied, and ESLint.
+- `cargo fmt --all -- --check` and `git diff --check`: pass.
+
+M2.6 is complete at the model-runtime/playback priority boundary. Full durable
+job scheduling remains in M7; no subsequent milestone has been started.

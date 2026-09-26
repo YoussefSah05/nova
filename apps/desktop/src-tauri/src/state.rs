@@ -2,11 +2,12 @@ use nova_hls_proxy::SessionRegistry;
 use nova_mpv_player::MpvEngine;
 use sqlx::SqlitePool;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::airplay::AirPlayEngine;
 use crate::caption_session::CaptionSessionManager;
 use crate::model_runtime::ModelRuntimeManager;
+use crate::resource_policy::PlaybackActivityGuard;
 use crate::translation_session::TranslationSessionManager;
 
 pub struct AppState {
@@ -33,6 +34,12 @@ pub struct AppState {
     pub translation_sessions: Arc<TranslationSessionManager>,
     /// Owns lazily loaded AI backends and prevents unload during active use.
     pub model_runtime: Arc<ModelRuntimeManager>,
+    /// Native mpv has one replaceable session; this guard tracks its lifetime.
+    pub mpv_activity: Mutex<Option<PlaybackActivityGuard>>,
+    /// Web/HLS and AirPlay sessions are released by their proxy token.
+    pub stream_activity: Mutex<HashMap<String, PlaybackActivityGuard>>,
+    /// AirPlay has one AVPlayer item, separate from local mpv and proxy tokens.
+    pub airplay_activity: Mutex<Option<PlaybackActivityGuard>>,
 }
 
 impl AppState {
@@ -49,6 +56,9 @@ impl AppState {
             caption_sessions: Arc::new(CaptionSessionManager::new()),
             translation_sessions: Arc::new(TranslationSessionManager::new()),
             model_runtime: Arc::new(ModelRuntimeManager::new(pool)),
+            mpv_activity: Mutex::new(None),
+            stream_activity: Mutex::new(HashMap::new()),
+            airplay_activity: Mutex::new(None),
         }
     }
 
@@ -62,6 +72,17 @@ impl AppState {
             .write()
             .await
             .insert(profile_id, Arc::new(pool));
+    }
+
+    pub async fn track_stream_activity(&self, token: String) {
+        self.stream_activity
+            .lock()
+            .await
+            .insert(token, self.model_runtime.playback_activity());
+    }
+
+    pub async fn release_stream_activity(&self, token: &str) {
+        self.stream_activity.lock().await.remove(token);
     }
 
     /// Load from the caller's profile on every search. Row counts are not a
@@ -104,5 +125,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(refreshed[0].0, 2);
+    }
+
+    #[tokio::test]
+    async fn stream_tokens_hold_playback_priority_until_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = nova_storage::init_app_db(dir.path().join("app.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let state = AppState::new(pool, 0, SessionRegistry::default());
+
+        state.track_stream_activity("one".into()).await;
+        state.track_stream_activity("two".into()).await;
+        assert_eq!(
+            state
+                .model_runtime
+                .snapshot()
+                .await
+                .active_playback_sessions,
+            2
+        );
+
+        state.release_stream_activity("one").await;
+        assert_eq!(
+            state
+                .model_runtime
+                .snapshot()
+                .await
+                .active_playback_sessions,
+            1
+        );
+        state.release_stream_activity("two").await;
+        assert_eq!(
+            state
+                .model_runtime
+                .snapshot()
+                .await
+                .active_playback_sessions,
+            0
+        );
     }
 }

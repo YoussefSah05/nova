@@ -10,6 +10,7 @@ pub mod model_runtime;
 pub mod mpv_layer;
 #[cfg(target_os = "macos")]
 pub mod native_player_view;
+pub mod resource_policy;
 pub mod state;
 pub mod translation_session;
 

@@ -61,7 +61,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `add_external_model_library` | `{}` | `libraryId \| null` (`null` if the native folder picker is cancelled); accepts no path from the webview | M2.3 |
 | `list_external_model_libraries` | `{}` | `{ libraryId, displayName, availability: 'available'\|'unavailable', observedAt, models: { modelId, capability, availability: 'missing'\|'unverified'\|'available'\|'unavailable' }[] }[]`; no paths or bookmark data | M2.3 |
 | `unload_model` | `{ modelId: string }` | `boolean`: whether a loaded backend was released; `Conflict` while loading, mutating or leased; does not delete artifacts | M2.5 |
-| `model_runtime_status` | `{}` | `{ loadedModels, activeLeases, busyModels, transitioningModels, estimatedResidentBytes, unknownResidentModels }`; counts only, no paths or grants | M2.5 |
+| `model_runtime_status` | `{}` | `{ loadedModels, activeLeases, busyModels, transitioningModels, estimatedResidentBytes, unknownResidentModels, activePlaybackSessions, queuedWork, activeWorkClass }`; counts/class only, no paths or grants | M2.5 / M2.6 |
 | `get_nllb_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | 7 / M2 |
 | `get_enrich_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | enrichment / M2 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
@@ -107,6 +107,17 @@ memory use. Built-in adapters currently report unknown sizes. Whisper's loaded
 entry represents a prepared adapter and authorized path; native weights belong
 to its per-window subprocess. These commands introduce no frontend model path
 or bookmark contract.
+
+M2.6 admits model initialization and inference through one process-wide lane
+while adapter memory costs remain unknown. Realtime caption/translation work
+ranks above interactive search, which ranks above foreground, metadata,
+background and maintenance work. Active mpv, proxy-stream or AirPlay sessions
+hold playback activity guards: realtime and interactive model work can run,
+while lower-priority work waits cancellably and resumes when the last player
+session closes. An already-running native call is allowed to finish its current
+bounded unit; playback does not forcibly interrupt CTranslate2/ONNX. Persisted
+`jobs.priority` remains a per-kind queue field; desktop commands do not yet use
+`JobQueue`, so durable cross-subsystem job scheduling remains in M7.
 
 Browse filter payloads use camelCase keys from the frontend:
 

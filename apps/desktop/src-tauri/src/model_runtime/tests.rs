@@ -1,4 +1,5 @@
 use super::*;
+use crate::resource_policy::WorkClass;
 use nova_enrich::EnrichError;
 use std::sync::Mutex as SyncMutex;
 use std::time::Duration;
@@ -410,6 +411,83 @@ async fn document_batches_release_admission_and_observe_cancellation_between_bat
     assert_eq!(snapshot.busy_models, 0);
     drop(lease);
     fixture.runtime.unload(nova_enrich::MODEL_ID).await.unwrap();
+}
+
+#[tokio::test]
+async fn playback_prioritizes_interactive_runtime_work_and_pauses_background_work() {
+    let fixture = Fixture::new();
+    let background = fixture.acquire().await;
+    let interactive = fixture.acquire().await;
+    let playback = fixture.runtime.playback_activity();
+    let waiting_lease = background.clone();
+    let waiting = tokio::spawn(async move {
+        waiting_lease
+            .run_blocking_at(
+                WorkClass::Background,
+                &RuntimeCancellation::default(),
+                |_| (),
+            )
+            .await
+    });
+
+    tokio::time::timeout(DEADLINE, async {
+        while fixture.runtime.snapshot().await.queued_work != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fixture.runtime.snapshot().await.active_playback_sessions, 1);
+
+    interactive
+        .run_blocking_at(
+            WorkClass::Interactive,
+            &RuntimeCancellation::default(),
+            |_| (),
+        )
+        .await
+        .unwrap();
+    assert!(!waiting.is_finished());
+    drop(playback);
+    tokio::time::timeout(DEADLINE, waiting)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn playback_defers_cold_model_initialization_until_playback_ends() {
+    let fixture = Fixture::new();
+    let playback = fixture.runtime.playback_activity();
+    let runtime = fixture.runtime.clone();
+    let resolved = fixture.resolved();
+    let waiting = tokio::spawn(async move {
+        runtime
+            .acquire_resolved_at(
+                Fixture::id(),
+                resolved,
+                WorkClass::Background,
+                &RuntimeCancellation::default(),
+            )
+            .await
+    });
+    tokio::time::timeout(DEADLINE, async {
+        while fixture.runtime.snapshot().await.queued_work != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fixture.adapter.loads.load(Ordering::SeqCst), 0);
+    drop(playback);
+    let lease = tokio::time::timeout(DEADLINE, waiting)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(fixture.adapter.loads.load(Ordering::SeqCst), 1);
+    drop(lease);
 }
 
 #[tokio::test]

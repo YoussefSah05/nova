@@ -15,6 +15,7 @@ use sqlx::SqlitePool;
 use tokio::sync::{Mutex, Notify, Semaphore};
 
 use crate::model_registry;
+use crate::resource_policy::{AdmissionController, PlaybackActivityGuard, WorkClass};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeError {
@@ -143,14 +144,16 @@ struct Entry {
     state: Arc<Mutex<Slot>>,
     leases: AtomicUsize,
     operations: Arc<Semaphore>,
+    resources: Arc<AdmissionController>,
 }
 
-impl Default for Entry {
-    fn default() -> Self {
+impl Entry {
+    fn new(resources: Arc<AdmissionController>) -> Self {
         Self {
             state: Arc::new(Mutex::new(Slot::default())),
             leases: AtomicUsize::new(0),
             operations: Arc::new(Semaphore::new(1)),
+            resources,
         }
     }
 }
@@ -197,13 +200,24 @@ impl ModelLease {
         cancellation: &RuntimeCancellation,
         on_progress: impl Fn(usize),
     ) -> Result<Vec<Vec<f32>>, RuntimeError> {
+        self.embed_documents_at(texts, WorkClass::Background, cancellation, on_progress)
+            .await
+    }
+
+    pub async fn embed_documents_at(
+        &self,
+        texts: &[String],
+        class: WorkClass,
+        cancellation: &RuntimeCancellation,
+        on_progress: impl Fn(usize),
+    ) -> Result<Vec<Vec<f32>>, RuntimeError> {
         let mut vectors = Vec::with_capacity(texts.len());
         for batch in texts.chunks(256) {
             let count = batch.len();
             let batch = batch.to_vec();
             let result = self
                 .clone()
-                .run_blocking(cancellation, move |lease| {
+                .run_blocking_at(class, cancellation, move |lease| {
                     lease
                         .embedder()
                         .ok_or(RuntimeError::InvalidModel)?
@@ -229,6 +243,22 @@ impl ModelLease {
         cancellation: &RuntimeCancellation,
         work: impl FnOnce(&ModelLease) -> T + Send + 'static,
     ) -> Result<T, RuntimeError> {
+        self.run_blocking_at(WorkClass::Background, cancellation, work)
+            .await
+    }
+
+    pub async fn run_blocking_at<T: Send + 'static>(
+        self,
+        class: WorkClass,
+        cancellation: &RuntimeCancellation,
+        work: impl FnOnce(&ModelLease) -> T + Send + 'static,
+    ) -> Result<T, RuntimeError> {
+        let admission = self
+            .entry
+            .resources
+            .admit(class, cancellation)
+            .await
+            .map_err(|_| RuntimeError::Cancelled)?;
         let permit = tokio::select! {
             _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
             permit = self.entry.operations.clone().acquire_owned() => permit.map_err(|_| RuntimeError::WorkerFailed)?,
@@ -237,6 +267,7 @@ impl ModelLease {
             return Err(RuntimeError::Cancelled);
         }
         let worker = tokio::task::spawn_blocking(move || {
+            let _admission = admission;
             let _permit = permit;
             work(&self)
         });
@@ -258,6 +289,26 @@ impl ModelLease {
         T: Send + 'static,
         F: std::future::Future<Output = T> + Send + 'static,
     {
+        self.run_async_at(WorkClass::Background, cancellation, work)
+            .await
+    }
+
+    pub async fn run_async_at<T, F>(
+        self,
+        class: WorkClass,
+        cancellation: &RuntimeCancellation,
+        work: impl FnOnce(ModelLease) -> F + Send + 'static,
+    ) -> Result<T, RuntimeError>
+    where
+        T: Send + 'static,
+        F: std::future::Future<Output = T> + Send + 'static,
+    {
+        let admission = self
+            .entry
+            .resources
+            .admit(class, cancellation)
+            .await
+            .map_err(|_| RuntimeError::Cancelled)?;
         let permit = tokio::select! {
             _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
             permit = self.entry.operations.clone().acquire_owned() => permit.map_err(|_| RuntimeError::WorkerFailed)?,
@@ -266,6 +317,7 @@ impl ModelLease {
             return Err(RuntimeError::Cancelled);
         }
         let worker = tokio::spawn(async move {
+            let _admission = admission;
             let _permit = permit;
             work(self).await
         });
@@ -306,6 +358,9 @@ pub struct RuntimeSnapshot {
     pub unknown_resident_models: usize,
     pub busy_models: usize,
     pub transitioning_models: usize,
+    pub active_playback_sessions: usize,
+    pub queued_work: usize,
+    pub active_work_class: Option<WorkClass>,
 }
 
 struct Resolved {
@@ -318,6 +373,7 @@ pub struct ModelRuntimeManager {
     registry_pool: Arc<SqlitePool>,
     entries: Mutex<HashMap<ModelId, Arc<Entry>>>,
     adapters: HashMap<ModelId, Arc<dyn BackendAdapter>>,
+    resources: Arc<AdmissionController>,
 }
 
 impl ModelRuntimeManager {
@@ -342,6 +398,7 @@ impl ModelRuntimeManager {
             registry_pool,
             entries: Mutex::new(HashMap::new()),
             adapters,
+            resources: Arc::new(AdmissionController::default()),
         }
     }
 }
@@ -366,6 +423,17 @@ impl ModelRuntimeManager {
         model_id: &str,
         cancellation: &RuntimeCancellation,
     ) -> Result<ModelLease, RuntimeError> {
+        self.acquire_at(app_data_dir, model_id, WorkClass::Background, cancellation)
+            .await
+    }
+
+    pub async fn acquire_at(
+        &self,
+        app_data_dir: &Path,
+        model_id: &str,
+        class: WorkClass,
+        cancellation: &RuntimeCancellation,
+    ) -> Result<ModelLease, RuntimeError> {
         let id = ModelId::new(model_id).map_err(|_| RuntimeError::InvalidModel)?;
         if !self.adapters.contains_key(&id) {
             return Err(RuntimeError::InvalidModel);
@@ -377,7 +445,8 @@ impl ModelRuntimeManager {
             _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
             resolved = self.resolve(app_data_dir, &id) => resolved?,
         };
-        self.acquire_resolved(id, resolved, cancellation).await
+        self.acquire_resolved_at(id, resolved, class, cancellation)
+            .await
     }
 
     async fn resolve(&self, app_data_dir: &Path, id: &ModelId) -> Result<Resolved, RuntimeError> {
@@ -436,10 +505,22 @@ impl ModelRuntimeManager {
         })
     }
 
+    #[cfg(test)]
     async fn acquire_resolved(
         &self,
         id: ModelId,
         resolved: Resolved,
+        cancellation: &RuntimeCancellation,
+    ) -> Result<ModelLease, RuntimeError> {
+        self.acquire_resolved_at(id, resolved, WorkClass::Background, cancellation)
+            .await
+    }
+
+    async fn acquire_resolved_at(
+        &self,
+        id: ModelId,
+        resolved: Resolved,
+        class: WorkClass,
         cancellation: &RuntimeCancellation,
     ) -> Result<ModelLease, RuntimeError> {
         let adapter = self
@@ -451,7 +532,7 @@ impl ModelRuntimeManager {
             let mut entries = self.entries.lock().await;
             entries
                 .entry(id)
-                .or_insert_with(|| Arc::new(Entry::default()))
+                .or_insert_with(|| Arc::new(Entry::new(Arc::clone(&self.resources))))
                 .clone()
         };
         let mut slot = tokio::select! {
@@ -478,7 +559,13 @@ impl ModelRuntimeManager {
             // requesting future cannot allow another loader or unload to race
             // the native call. A cancelled initiating caller gets no lease;
             // another waiter may reuse the completed shared load.
+            let admission = entry
+                .resources
+                .admit(class, cancellation)
+                .await
+                .map_err(|_| RuntimeError::Cancelled)?;
             let worker = tokio::task::spawn_blocking(move || {
+                let _admission = admission;
                 slot.loaded = None;
                 slot.loaded = Some(Arc::new(load_resolved(resolved, adapter)?));
                 Ok::<_, RuntimeError>(slot)
@@ -539,7 +626,13 @@ impl ModelRuntimeManager {
         if !self.adapters.contains_key(&id) {
             return Err(RuntimeError::InvalidModel);
         }
-        let entry = self.entries.lock().await.entry(id).or_default().clone();
+        let entry = self
+            .entries
+            .lock()
+            .await
+            .entry(id)
+            .or_insert_with(|| Arc::new(Entry::new(Arc::clone(&self.resources))))
+            .clone();
         let mut slot = entry
             .state
             .clone()
@@ -578,7 +671,17 @@ impl ModelRuntimeManager {
                 snapshot.unknown_resident_models += usize::from(loaded.estimated_bytes.is_none());
             }
         }
+        let admission = self.resources.snapshot();
+        snapshot.active_playback_sessions = admission.playback_sessions;
+        snapshot.queued_work = admission.queued_work;
+        snapshot.active_work_class = admission.active_work_class;
         snapshot
+    }
+
+    /// Playback holds this guard for the player session. Background model
+    /// inference remains queued until every active player session releases it.
+    pub fn playback_activity(&self) -> PlaybackActivityGuard {
+        self.resources.playback_started()
     }
 }
 

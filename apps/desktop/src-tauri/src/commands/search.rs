@@ -21,6 +21,7 @@ use crate::commands::enrich::MODEL_ID;
 use crate::commands::transcription::app_data_dir;
 use crate::ipc::ApiError;
 use crate::model_runtime::{ModelLease, RuntimeCancellation};
+use crate::resource_policy::WorkClass;
 use crate::state::AppState;
 
 use super::require_profile_pool;
@@ -74,7 +75,12 @@ async fn semantic_embedder(app: &AppHandle, state: &State<'_, AppState>) -> Opti
     let root = app_data_dir(app).ok()?;
     state
         .model_runtime
-        .acquire(&root, MODEL_ID, &RuntimeCancellation::default())
+        .acquire_at(
+            &root,
+            MODEL_ID,
+            WorkClass::Interactive,
+            &RuntimeCancellation::default(),
+        )
         .await
         .ok()
 }
@@ -82,13 +88,17 @@ async fn semantic_embedder(app: &AppHandle, state: &State<'_, AppState>) -> Opti
 /// Embed a query string off the async runtime (ONNX inference is blocking).
 async fn embed_query_vec(lease: ModelLease, query: String) -> Result<Vec<f32>, ApiError> {
     lease
-        .run_blocking(&RuntimeCancellation::default(), move |lease| {
-            lease
-                .embedder()
-                .ok_or_else(|| ApiError::Internal("wrong model backend".into()))?
-                .embed_query(&query)
-                .map_err(|e| ApiError::Internal(e.to_string()))
-        })
+        .run_blocking_at(
+            WorkClass::Interactive,
+            &RuntimeCancellation::default(),
+            move |lease| {
+                lease
+                    .embedder()
+                    .ok_or_else(|| ApiError::Internal("wrong model backend".into()))?
+                    .embed_query(&query)
+                    .map_err(|e| ApiError::Internal(e.to_string()))
+            },
+        )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
 }
@@ -123,7 +133,12 @@ async fn ensure_segments_embedded(
     let texts: Vec<String> = missing.iter().map(|(_, t)| t.clone()).collect();
     let ids: Vec<i64> = missing.iter().map(|(id, _)| *id).collect();
     let vectors = embedder
-        .embed_documents(&texts, &RuntimeCancellation::default(), |_| {})
+        .embed_documents_at(
+            &texts,
+            WorkClass::Interactive,
+            &RuntimeCancellation::default(),
+            |_| {},
+        )
         .await
         .map_err(super::models::runtime_api_error)?;
     let rows: Vec<(i64, Vec<f32>)> = ids.into_iter().zip(vectors).collect();

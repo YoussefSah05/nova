@@ -44,14 +44,16 @@ pub async fn mpv_open_stream(
         .resolve_stream_url(&media_kind, media_id)
         .await?;
 
-    state
+    let opened = state
         .mpv_engine
         .open(MpvOpenOptions {
             url: resolved.upstream_url,
             title,
             user_agent: Some("Mozilla/5.0 (compatible; nova-iptv/1.0)".to_string()),
         })
-        .map_err(|e| ApiError::Internal(format!("native player failed: {e}")))
+        .map_err(|e| ApiError::Internal(format!("native player failed: {e}")))?;
+    *state.mpv_activity.lock().await = Some(state.model_runtime.playback_activity());
+    Ok(opened)
 }
 
 #[tauri::command]
@@ -59,7 +61,9 @@ pub async fn mpv_close(token: String, state: State<'_, AppState>) -> Result<(), 
     state
         .mpv_engine
         .close(&token)
-        .map_err(|e| ApiError::Internal(format!("native player close failed: {e}")))
+        .map_err(|e| ApiError::Internal(format!("native player close failed: {e}")))?;
+    state.mpv_activity.lock().await.take();
+    Ok(())
 }
 
 #[tauri::command]
@@ -305,6 +309,8 @@ pub async fn resolve_stream(
         ),
     };
 
+    state.track_stream_activity(token.clone()).await;
+
     Ok(ResolvedStream {
         url,
         kind,
@@ -326,6 +332,7 @@ pub async fn resolve_stream(
 #[tauri::command]
 pub async fn stop_playback(token: String, state: State<'_, AppState>) -> Result<(), ApiError> {
     state.hls_sessions.release(&token).await;
+    state.release_stream_activity(&token).await;
     Ok(())
 }
 
@@ -449,6 +456,8 @@ pub async fn airplay_engage(
         ),
     };
 
+    *state.airplay_activity.lock().await = Some(state.model_runtime.playback_activity());
+
     state.airplay.engage(&app, url, position_sec.max(0.0));
     Ok(AirPlayEngageResult {
         proxy_token: info.token,
@@ -463,8 +472,10 @@ pub async fn airplay_disengage(
     state: State<'_, AppState>,
 ) -> Result<(), ApiError> {
     state.airplay.disengage(&app);
+    state.airplay_activity.lock().await.take();
     if let Some(token) = proxy_token {
         state.hls_sessions.release(&token).await;
+        state.release_stream_activity(&token).await;
     }
     Ok(())
 }

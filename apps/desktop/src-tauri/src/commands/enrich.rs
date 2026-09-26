@@ -23,6 +23,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::commands::transcription::app_data_dir;
 use crate::ipc::ApiError;
 use crate::model_runtime::{ModelRuntimeManager, RuntimeCancellation};
+use crate::resource_policy::WorkClass;
 use crate::state::AppState;
 
 use super::require_profile_pool;
@@ -204,7 +205,12 @@ async fn run_enrichment(
         // The first model load is slow (cold ONNX init); tell the UI before we block.
         emit("loading-model", 0, false);
         let lease = runtime
-            .acquire(&model_root, MODEL_ID, &RuntimeCancellation::default())
+            .acquire_at(
+                &model_root,
+                MODEL_ID,
+                WorkClass::Background,
+                &RuntimeCancellation::default(),
+            )
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -213,7 +219,12 @@ async fn run_enrichment(
             .map(|g| g.to_string())
             .collect();
         let label_vectors = lease
-            .embed_documents(&genres, &RuntimeCancellation::default(), |_| {})
+            .embed_documents_at(
+                &genres,
+                WorkClass::Background,
+                &RuntimeCancellation::default(),
+                |_| {},
+            )
             .await
             .map_err(super::models::runtime_api_error)?;
         let classifier = GenreClassifier::new(genres.into_iter().zip(label_vectors).collect());
@@ -223,9 +234,12 @@ async fn run_enrichment(
             .map(|row| row.text.clone())
             .collect();
         let vectors = lease
-            .embed_documents(&texts, &RuntimeCancellation::default(), |processed| {
-                emit("embedding", processed, false)
-            })
+            .embed_documents_at(
+                &texts,
+                WorkClass::Background,
+                &RuntimeCancellation::default(),
+                |processed| emit("embedding", processed, false),
+            )
             .await
             .map_err(super::models::runtime_api_error)?;
         drop(lease);
@@ -285,11 +299,21 @@ async fn run_enrichment(
             .collect();
         let titles: Vec<String> = series_work.iter().map(|(t, _)| t.clone()).collect();
         let lease = runtime
-            .acquire(&model_root, MODEL_ID, &RuntimeCancellation::default())
+            .acquire_at(
+                &model_root,
+                MODEL_ID,
+                WorkClass::Background,
+                &RuntimeCancellation::default(),
+            )
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         let vectors = lease
-            .embed_documents(&texts, &RuntimeCancellation::default(), |_| {})
+            .embed_documents_at(
+                &texts,
+                WorkClass::Background,
+                &RuntimeCancellation::default(),
+                |_| {},
+            )
             .await
             .map_err(super::models::runtime_api_error)?;
         let rows: Vec<(String, Vec<f32>)> = titles.into_iter().zip(vectors).collect();

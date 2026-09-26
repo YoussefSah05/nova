@@ -28,6 +28,7 @@ use tokio::sync::Mutex;
 
 use crate::caption_session::content_key;
 use crate::model_runtime::{ModelRuntimeManager, RuntimeCancellation, RuntimeError};
+use crate::resource_policy::WorkClass;
 
 /// Stop translating once this far ahead of the playhead; resume as it catches up.
 const PREFETCH_AHEAD_SEC: f64 = 90.0;
@@ -254,7 +255,12 @@ async fn run_session_inner(
 
         let tr = match ctx
             .runtime
-            .acquire(&ctx.model_root, nllb_model::MODEL_ID, model_cancel)
+            .acquire_at(
+                &ctx.model_root,
+                nllb_model::MODEL_ID,
+                WorkClass::Realtime,
+                model_cancel,
+            )
             .await
         {
             Ok(lease) => lease,
@@ -279,7 +285,12 @@ async fn run_session_inner(
                     .await
                     .map_err(|e| e.to_string())??;
                 ctx.runtime
-                    .acquire(&ctx.model_root, nllb_model::MODEL_ID, model_cancel)
+                    .acquire_at(
+                        &ctx.model_root,
+                        nllb_model::MODEL_ID,
+                        WorkClass::Realtime,
+                        model_cancel,
+                    )
                     .await
                     .map_err(|e| e.to_string())?
             }
@@ -289,7 +300,7 @@ async fn run_session_inner(
         let src_code = src_nllb.to_string();
         let tgt_code = tgt_nllb.to_string();
         let translated = tr
-            .run_blocking(model_cancel, move |tr| {
+            .run_blocking_at(WorkClass::Realtime, model_cancel, move |tr| {
                 tr.translator()
                     .ok_or("wrong model backend".to_string())?
                     .translate_batch(&texts, &src_code, &tgt_code)

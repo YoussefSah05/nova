@@ -13,6 +13,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::ipc::ApiError;
 use crate::model_registry::{refresh_external, refresh_internal, register_external};
 use crate::model_runtime::RuntimeError;
+use crate::resource_policy::WorkClass;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -53,6 +54,9 @@ pub struct ModelRuntimeStatus {
     pub unknown_resident_models: usize,
     pub busy_models: usize,
     pub transitioning_models: usize,
+    pub active_playback_sessions: usize,
+    pub queued_work: usize,
+    pub active_work_class: Option<String>,
 }
 
 /// Request explicit unload. Active inference leases always win over eviction.
@@ -85,6 +89,12 @@ pub async fn model_runtime_status(
         unknown_resident_models: snapshot.unknown_resident_models,
         busy_models: snapshot.busy_models,
         transitioning_models: snapshot.transitioning_models,
+        active_playback_sessions: snapshot.active_playback_sessions,
+        queued_work: snapshot.queued_work,
+        active_work_class: snapshot
+            .active_work_class
+            .map(WorkClass::as_str)
+            .map(str::to_string),
     })
 }
 

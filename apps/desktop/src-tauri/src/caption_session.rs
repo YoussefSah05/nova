@@ -33,6 +33,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::model_runtime::{ModelRuntimeManager, RuntimeCancellation, RuntimeError};
+use crate::resource_policy::WorkClass;
 use nova_core::TranscriptSegment;
 use nova_media::extract_audio_window;
 use nova_storage::{PlaybackRepository, TranscriptRepository};
@@ -218,7 +219,7 @@ async fn run_session_inner(
     let model = default_model();
     match ctx
         .runtime
-        .acquire(&ctx.model_root, model.id, model_cancel)
+        .acquire_at(&ctx.model_root, model.id, WorkClass::Realtime, model_cancel)
         .await
     {
         Ok(_lease) => {}
@@ -374,12 +375,12 @@ async fn run_session_inner(
         };
         let lease = ctx
             .runtime
-            .acquire(&ctx.model_root, model.id, model_cancel)
+            .acquire_at(&ctx.model_root, model.id, WorkClass::Realtime, model_cancel)
             .await
             .map_err(|e| e.to_string())?;
         let child_cancel = model_cancel.clone();
         let result = lease
-            .run_async(model_cancel, move |lease| async move {
+            .run_async_at(WorkClass::Realtime, model_cancel, move |lease| async move {
                 let _work = work;
                 let model_path = lease.whisper_path().ok_or("wrong model backend")?;
                 transcribe_wav_cancellable(
