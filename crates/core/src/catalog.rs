@@ -13,9 +13,11 @@ use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Serialize};
 
+pub mod blocking;
 pub mod fingerprint;
 pub mod intelligence;
 pub mod media;
+pub mod reconcile;
 pub mod snapshot;
 
 pub const MAX_FIELD_BYTES: usize = 16 * 1024;

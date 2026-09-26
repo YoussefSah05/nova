@@ -2,6 +2,15 @@
 //!
 //! Framed v1 uses u64 big-endian byte lengths, option presence bytes and UTF-8
 //! without normalization. Never use Rust's Hash/DefaultHasher for persisted keys.
+//!
+//! [`VersionedFingerprint`] pairs a digest with the semantic version of the
+//! field set that produced it ([`METADATA_FINGERPRINT_VERSION`]), so a stored
+//! value survives a format change as an explicit, checkable "stale" rather
+//! than an accidental byte match or a silent mismatch. [`catalog::reconcile`]
+//! consumes it to classify unchanged/changed/new/deleted evidence across two
+//! ingest generations.
+//!
+//! [`catalog::reconcile`]: super::reconcile
 
 use super::{ContentKind, SourceRecord};
 use sha2::{Digest, Sha256};
@@ -111,4 +120,77 @@ pub fn binding_fingerprint(namespace: &str, value: &[u8]) -> Fingerprint {
     field(&mut hash, namespace.as_bytes());
     field(&mut hash, value);
     Fingerprint::from_digest(hash.finalize().into())
+}
+
+/// Semantic version of the field set hashed by [`SourceRecord::metadata_fingerprint`].
+/// Bump this whenever that preimage changes (a field is added, removed, reordered,
+/// or re-encoded) so a fingerprint persisted by an older build is never mistaken
+/// for a match against one computed by this build. Distinct from
+/// [`FINGERPRINT_FORMAT`], which describes the low-level byte framing shared by
+/// every fingerprint kind in this module, not which fields a specific kind hashes.
+pub const METADATA_FINGERPRINT_VERSION: u16 = 1;
+
+/// A [`Fingerprint`] tagged with the format version that produced it.
+///
+/// The raw digest already changes when its preimage changes, so a version bump
+/// alone would eventually cause every affected record to reclassify as changed.
+/// But that only works if the *comparison* actually happens; a version tag lets
+/// a caller reject a stale fingerprint outright — before touching the (possibly
+/// expensive) derived work it was guarding — rather than trusting a byte
+/// comparison to always catch a format change with the same field values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VersionedFingerprint {
+    version: u16,
+    fingerprint: Fingerprint,
+}
+
+impl VersionedFingerprint {
+    /// The current-format metadata fingerprint of `record`.
+    pub fn current_metadata(record: &SourceRecord) -> Self {
+        Self {
+            version: METADATA_FINGERPRINT_VERSION,
+            fingerprint: record.metadata_fingerprint(),
+        }
+    }
+
+    pub fn version(&self) -> u16 {
+        self.version
+    }
+
+    pub fn fingerprint(&self) -> Fingerprint {
+        self.fingerprint
+    }
+
+    /// True only when this value's format version matches what this build
+    /// produces today. A caller must treat `false` as unconditionally stale —
+    /// never compare its digest bytes against a current one.
+    pub fn is_current_metadata(&self) -> bool {
+        self.version == METADATA_FINGERPRINT_VERSION
+    }
+
+    /// Explicit `<version-hex>-<digest-hex>` persistence encoding. Never persist
+    /// the bare digest hex alone: without the version tag, a future format
+    /// change cannot distinguish a stale digest from one that happens to match.
+    pub fn to_stored(&self) -> String {
+        format!("{:04x}-{}", self.version, self.fingerprint.to_hex())
+    }
+
+    /// Parse [`Self::to_stored`]'s encoding. Rejects anything malformed rather
+    /// than guessing, since a corrupt stored value must never be silently
+    /// treated as a match.
+    pub fn from_stored(value: &str) -> Option<Self> {
+        let (version, hex) = value.split_once('-')?;
+        if version.is_empty() || version.len() > 4 || hex.len() != 64 {
+            return None;
+        }
+        let version = u16::from_str_radix(version, 16).ok()?;
+        let mut bytes = [0u8; 32];
+        for (i, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+        }
+        Some(Self {
+            version,
+            fingerprint: Fingerprint::from_digest(bytes),
+        })
+    }
 }
