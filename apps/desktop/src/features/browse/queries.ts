@@ -137,6 +137,7 @@ export function movieToItem(m: CanonicalMediaSummary): BrowseItem {
     tvgId: null,
     isFavorite: m.isFavorite,
     isInWatchlist: m.isInWatchlist,
+    dedupGroup: m.dedupGroup,
     entityId: m.entityId,
     movie: m,
   };
@@ -247,10 +248,11 @@ async function fetchItems(
     }
     // Canonical movies (one card per entity). Presentation-only: the same
     // film's language/source copies are still gathered under one card by raw
-    // title until entity resolution consolidates them server-side.
+    // title (falling back to the enrichment cluster) until entity resolution
+    // consolidates them server-side.
     return collapseByKey(
       counted(await invoke<CanonicalMediaSummary[]>(LIST_COMMAND.movies, args)).map(movieToItem),
-      (item) => movieVersionKey(item)
+      (item) => movieVersionKey(item) ?? item.dedupGroup ?? null
     );
   }
   // Series: plain free-text search → hybrid (semantic + keyword) retrieval.

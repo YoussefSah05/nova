@@ -25,9 +25,6 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
 
-/// Rows keyed per backfill transaction; bounds lock time on large catalogs.
-const BACKFILL_BATCH: i64 = 1_000;
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CompileStats {
     /// Existing variants re-bound to a refreshed source record.
@@ -96,6 +93,9 @@ impl<'a> CanonicalRepository<'a> {
         source_id: i64,
     ) -> Result<CompileStats, StorageError> {
         // 1. Re-bind unbound variants to the refreshed record with their key.
+        //    Load-bearing invariant: UNIQUE(source_id, binding_key) gives each
+        //    variant a disjoint candidate set, so this self-referencing UPDATE
+        //    cannot bind one record to two variants within the statement.
         let rebound = sqlx::query!(
             r#"UPDATE stream_variants
                SET vod_item_id = (
@@ -219,16 +219,20 @@ impl<'a> CanonicalRepository<'a> {
         }
 
         // 4. Seed resume state from the legacy mirror only where the entity
-        //    has none (upgrade backfill); entity state always wins.
+        //    has none (upgrade backfill); entity state always wins. History of
+        //    every record sharing the key counts, most recent inserted first
+        //    (so it is the one kept).
         sqlx::query!(
             r#"INSERT INTO entity_watch_state
                    (entity_id, position_sec, duration_sec, watched_at, completed, caption_mode)
                SELECT s.entity_id, wh.position_sec, wh.duration_sec, wh.watched_at,
                       wh.completed, wh.caption_mode
                FROM stream_variants s
-               JOIN watch_history wh ON wh.media_kind = 'vod' AND wh.media_id = s.vod_item_id
+               JOIN vod_items v
+                 ON v.source_id = s.source_id AND v.binding_key = s.binding_key
+               JOIN watch_history wh ON wh.media_kind = 'vod' AND wh.media_id = v.id
                WHERE s.source_id = ?
-               ORDER BY wh.watched_at ASC
+               ORDER BY wh.watched_at DESC
                ON CONFLICT(entity_id) DO NOTHING"#,
             source_id,
         )
@@ -259,6 +263,8 @@ impl<'a> CanonicalRepository<'a> {
         Ok(stats)
     }
 
+    /// Re-derive the legacy flag mirror from entities, for every record of
+    /// the source that maps to a variant by key (including duplicate rows).
     async fn mirror_flags_for_source_tx(
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
@@ -268,13 +274,18 @@ impl<'a> CanonicalRepository<'a> {
                SET is_favorite = COALESCE((
                        SELECT e.is_favorite FROM stream_variants s
                        JOIN canonical_entities e ON e.id = s.entity_id
-                       WHERE s.vod_item_id = vod_items.id), 0),
+                       WHERE s.source_id = vod_items.source_id
+                         AND s.binding_key = vod_items.binding_key), 0),
                    is_in_watchlist = COALESCE((
                        SELECT e.is_in_watchlist FROM stream_variants s
                        JOIN canonical_entities e ON e.id = s.entity_id
-                       WHERE s.vod_item_id = vod_items.id), 0)
+                       WHERE s.source_id = vod_items.source_id
+                         AND s.binding_key = vod_items.binding_key), 0)
                WHERE source_id = ?
-                 AND EXISTS (SELECT 1 FROM stream_variants s WHERE s.vod_item_id = vod_items.id)"#,
+                 AND EXISTS (
+                   SELECT 1 FROM stream_variants s
+                   WHERE s.source_id = vod_items.source_id
+                     AND s.binding_key = vod_items.binding_key)"#,
             source_id,
         )
         .execute(&mut **tx)
@@ -282,23 +293,32 @@ impl<'a> CanonicalRepository<'a> {
         Ok(())
     }
 
-    /// Upgrade step run after SQL migrations: derive binding keys for rows
-    /// written before migration 0021 (in bounded batches), then compile every
-    /// source with unbound records. Idempotent and cheap when nothing is
-    /// pending; legacy flags and resume state seed the new entities.
+    /// Upgrade step run after SQL migrations. Sources with rows written
+    /// before migration 0021 (no binding key) are keyed and compiled in one
+    /// transaction each, so an interrupted upgrade leaves no half-keyed
+    /// source; legacy flags and resume state seed the new entities. Imports
+    /// key rows as they insert them, so steady-state opens only probe the
+    /// empty partial index `idx_vod_unkeyed`.
     pub async fn backfill_movies(&self) -> Result<CompileStats, StorageError> {
-        loop {
+        let pending = sqlx::query_scalar!(
+            r#"SELECT DISTINCT source_id as "source_id!: i64"
+               FROM vod_items WHERE binding_key IS NULL"#,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        let mut total = CompileStats::default();
+        for source_id in pending {
+            // Take the write lock up front: a concurrent opener of the same
+            // profile waits (busy timeout) instead of failing a deferred
+            // read→write upgrade, then finds the source already keyed.
+            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let rows = sqlx::query!(
                 r#"SELECT id as "id!: i64", stream_url as "stream_url!: String"
-                   FROM vod_items WHERE binding_key IS NULL LIMIT ?"#,
-                BACKFILL_BATCH,
+                   FROM vod_items WHERE source_id = ? AND binding_key IS NULL"#,
+                source_id,
             )
-            .fetch_all(self.pool)
+            .fetch_all(&mut *tx)
             .await?;
-            if rows.is_empty() {
-                break;
-            }
-            let mut tx = self.pool.begin().await?;
             for row in rows {
                 // Pre-0021 rows carry no stable upstream ID.
                 let key = binding_key(None, &row.stream_url);
@@ -312,22 +332,6 @@ impl<'a> CanonicalRepository<'a> {
                 .execute(&mut *tx)
                 .await?;
             }
-            tx.commit().await?;
-        }
-        // Pending = a record whose key has no bound variant. Duplicate rows of
-        // an already-bound key are not pending, so reopening stays cheap.
-        let pending = sqlx::query_scalar!(
-            r#"SELECT DISTINCT v.source_id as "source_id!: i64" FROM vod_items v
-               WHERE NOT EXISTS (
-                   SELECT 1 FROM stream_variants s
-                   WHERE s.source_id = v.source_id AND s.binding_key = v.binding_key
-                     AND s.vod_item_id IS NOT NULL)"#,
-        )
-        .fetch_all(self.pool)
-        .await?;
-        let mut total = CompileStats::default();
-        for source_id in pending {
-            let mut tx = self.pool.begin().await?;
             let stats = Self::compile_movies_tx(&mut tx, source_id).await?;
             tx.commit().await?;
             total.rebound += stats.rebound;
@@ -365,7 +369,8 @@ impl<'a> CanonicalRepository<'a> {
                       v.overview as "overview?: String",
                       e.is_favorite as "is_favorite!: i64",
                       e.is_in_watchlist as "is_in_watchlist!: i64",
-                      v.added_at as "added_at?: i64"
+                      v.added_at as "added_at?: i64",
+                      v.dedup_group as "dedup_group?: String"
                FROM stream_variants s
                JOIN canonical_entities e ON e.id = s.entity_id
                JOIN vod_items v ON v.id = s.vod_item_id
@@ -411,6 +416,7 @@ impl<'a> CanonicalRepository<'a> {
                     is_favorite: r.is_favorite != 0,
                     is_in_watchlist: r.is_in_watchlist != 0,
                     added_at: r.added_at,
+                    dedup_group: r.dedup_group,
                 })
             })
             .collect()
@@ -473,7 +479,8 @@ impl<'a> CanonicalRepository<'a> {
                       COALESCE(v.poster_url, v.logo_url) as "poster_url?: String",
                       v.backdrop_url as "backdrop_url?: String",
                       v.overview as "overview?: String",
-                      v.added_at as "added_at?: i64"
+                      v.added_at as "added_at?: i64",
+                      v.dedup_group as "dedup_group?: String"
                FROM canonical_entities e
                LEFT JOIN vod_items v ON v.id = (
                    SELECT MIN(s.vod_item_id) FROM stream_variants s
@@ -527,6 +534,7 @@ impl<'a> CanonicalRepository<'a> {
                 is_favorite: entity.is_favorite != 0,
                 is_in_watchlist: entity.is_in_watchlist != 0,
                 added_at: entity.added_at,
+                dedup_group: entity.dedup_group,
             },
             variants,
             resume,
@@ -626,7 +634,11 @@ impl<'a> CanonicalRepository<'a> {
         .rows_affected();
         sqlx::query!(
             r#"UPDATE vod_items SET is_favorite = ?
-               WHERE id IN (SELECT vod_item_id FROM stream_variants WHERE entity_id = ?)"#,
+               WHERE id IN (
+                   SELECT v.id FROM vod_items v
+                   JOIN stream_variants s
+                     ON s.source_id = v.source_id AND s.binding_key = v.binding_key
+                   WHERE s.entity_id = ?)"#,
             flag,
             id,
         )
@@ -655,7 +667,11 @@ impl<'a> CanonicalRepository<'a> {
         .rows_affected();
         sqlx::query!(
             r#"UPDATE vod_items SET is_in_watchlist = ?
-               WHERE id IN (SELECT vod_item_id FROM stream_variants WHERE entity_id = ?)"#,
+               WHERE id IN (
+                   SELECT v.id FROM vod_items v
+                   JOIN stream_variants s
+                     ON s.source_id = v.source_id AND s.binding_key = v.binding_key
+                   WHERE s.entity_id = ?)"#,
             flag,
             id,
         )

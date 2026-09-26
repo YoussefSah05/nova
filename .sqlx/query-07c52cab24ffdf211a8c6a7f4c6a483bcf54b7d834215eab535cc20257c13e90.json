@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT source_id as \"source_id!: i64\"\n               FROM vod_items WHERE binding_key IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "source_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "07c52cab24ffdf211a8c6a7f4c6a483bcf54b7d834215eab535cc20257c13e90"
+}

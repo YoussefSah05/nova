@@ -360,6 +360,73 @@ async fn duplicate_records_of_one_provider_item_share_an_entity() {
         first, second,
         "an unbound duplicate still resolves its entity"
     );
+    // The legacy mirror covers the unbound duplicate as well.
+    repo.set_favorite(&first, true).await.unwrap();
+    let flags: Vec<i64> = sqlx::query_scalar("SELECT is_favorite FROM vod_items ORDER BY id")
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(flags, [1, 1]);
+    import(
+        &db,
+        &[
+            movie(db.source_id, "Heat", url, None),
+            movie(db.source_id, "Heat copy", url, None),
+        ],
+        true,
+    )
+    .await;
+    let flags: Vec<i64> = sqlx::query_scalar("SELECT is_favorite FROM vod_items ORDER BY id")
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        flags,
+        [1, 1],
+        "mirror re-derived for every duplicate after refresh"
+    );
+}
+
+#[tokio::test]
+async fn many_variants_rebind_to_their_own_records_in_one_compile() {
+    let db = db().await;
+    let rows: Vec<_> = (0..6)
+        .map(|i| {
+            movie(
+                db.source_id,
+                &format!("Film {i}"),
+                &format!("http://host/{i}.mkv"),
+                Some(&format!("xtream:vod:{i}")),
+            )
+        })
+        .collect();
+    import(&db, &rows, false).await;
+    let before: std::collections::HashMap<String, EntityId> = movies(&db)
+        .await
+        .into_iter()
+        .map(|m| (m.title, m.entity_id))
+        .collect();
+    // Refresh in reverse order with a duplicate row of every item: all six
+    // variants are unbound and re-bound by the same UPDATE statement.
+    let mut refreshed = Vec::new();
+    for row in rows.iter().rev() {
+        refreshed.push(row.clone());
+        refreshed.push(VodItem {
+            name: format!("{} copy", row.name),
+            ..row.clone()
+        });
+    }
+    let stats = import(&db, &refreshed, true).await;
+    assert_eq!((stats.rebound, stats.created), (6, 0));
+    let bound: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT vod_item_id) FROM stream_variants")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(bound, 6);
+    for summary in movies(&db).await {
+        let title = summary.title.trim_end_matches(" copy").to_string();
+        assert_eq!(before[&title], summary.entity_id, "{title} kept its entity");
+    }
 }
 
 #[tokio::test]

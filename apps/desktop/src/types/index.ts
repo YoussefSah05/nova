@@ -161,6 +161,8 @@ export interface CanonicalMediaSummary {
   isFavorite: boolean;
   isInWatchlist: boolean;
   addedAt: number | null;
+  /** Enrichment similarity cluster; presentation grouping hint, not identity. */
+  dedupGroup: string | null;
 }
 
 export interface VariantSummary {

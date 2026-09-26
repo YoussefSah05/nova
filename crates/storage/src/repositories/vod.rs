@@ -298,7 +298,11 @@ impl<'a> VodRepository<'a> {
         .await?;
         sqlx::query!(
             r#"UPDATE vod_items SET is_favorite = ?
-               WHERE id = ? OR id IN (SELECT vod_item_id FROM stream_variants WHERE entity_id = ?)"#,
+               WHERE id = ? OR id IN (
+                   SELECT v.id FROM vod_items v
+                   JOIN stream_variants s
+                     ON s.source_id = v.source_id AND s.binding_key = v.binding_key
+                   WHERE s.entity_id = ?)"#,
             flag,
             id,
             entity,
@@ -324,7 +328,11 @@ impl<'a> VodRepository<'a> {
         .await?;
         sqlx::query!(
             r#"UPDATE vod_items SET is_in_watchlist = ?
-               WHERE id = ? OR id IN (SELECT vod_item_id FROM stream_variants WHERE entity_id = ?)"#,
+               WHERE id = ? OR id IN (
+                   SELECT v.id FROM vod_items v
+                   JOIN stream_variants s
+                     ON s.source_id = v.source_id AND s.binding_key = v.binding_key
+                   WHERE s.entity_id = ?)"#,
             flag,
             id,
             entity,

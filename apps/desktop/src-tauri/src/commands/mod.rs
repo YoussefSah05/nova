@@ -53,7 +53,7 @@ pub async fn create_profile(
         .map_err(ApiError::from)?;
 
     // Open (or create) the per-profile DB immediately
-    open_profile_db(&profile.id, &state, &app).await?;
+    ensure_profile_pool(&profile.id, &state, &app).await?;
 
     Ok(profile)
 }
@@ -92,6 +92,11 @@ pub(crate) async fn ensure_profile_pool(
     state: &AppState,
     app: &AppHandle,
 ) -> Result<(), ApiError> {
+    if state.profile_pool(profile_id).await.is_some() {
+        return Ok(());
+    }
+    // Re-check under the open lock: a concurrent caller may have opened it.
+    let _open = state.profile_open.lock().await;
     if state.profile_pool(profile_id).await.is_none() {
         open_profile_db(profile_id, state, app).await?;
     }

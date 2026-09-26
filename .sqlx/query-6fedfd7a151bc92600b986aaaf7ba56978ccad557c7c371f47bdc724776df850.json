@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE vod_items SET is_favorite = ?\n               WHERE id IN (\n                   SELECT v.id FROM vod_items v\n                   JOIN stream_variants s\n                     ON s.source_id = v.source_id AND s.binding_key = v.binding_key\n                   WHERE s.entity_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6fedfd7a151bc92600b986aaaf7ba56978ccad557c7c371f47bdc724776df850"
+}

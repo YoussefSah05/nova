@@ -26,6 +26,7 @@ function movie(id: number): CanonicalMediaSummary {
     isFavorite: false,
     isInWatchlist: false,
     addedAt: null,
+    dedupGroup: null,
   };
 }
 beforeEach(() => mocks.invoke.mockReset());

@@ -183,7 +183,8 @@ async fn upgrade_backfills_canonical_movies_preserving_user_state() {
             .bind(id).bind(source).bind(name).bind(url).bind(fav).bind(wl)
             .execute(&pool).await.unwrap();
     }
-    sqlx::query("INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed) VALUES ('vod', 12, 300, 6000, 5, 0), ('vod', 13, 5400, 5400, 6, 1)")
+    // Heat's two duplicate rows both have history: the newest must win.
+    sqlx::query("INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed) VALUES ('vod', 12, 300, 6000, 5, 0), ('vod', 13, 5400, 5400, 6, 1), ('vod', 10, 100, 6000, 2, 0), ('vod', 14, 900, 6000, 9, 0)")
         .execute(&pool).await.unwrap();
     pool.close().await;
 
@@ -220,13 +221,18 @@ async fn upgrade_backfills_canonical_movies_preserving_user_state() {
         .fetch_one(&upgraded)
         .await
         .unwrap();
-        assert_eq!(counts, (4, 4, 2));
+        assert_eq!(counts, (4, 4, 3));
+        let heat = repo.resume(&by("Heat").entity_id).await.unwrap().unwrap();
+        assert_eq!(
+            heat.position_sec, 900.0,
+            "most recent duplicate history wins"
+        );
         // Legacy rows and history are untouched (additive migration).
         let legacy: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM watch_history")
             .fetch_one(&upgraded)
             .await
             .unwrap();
-        assert_eq!(legacy, 2);
+        assert_eq!(legacy, 4);
         let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
             .fetch_one(&upgraded)
             .await
@@ -239,4 +245,76 @@ async fn upgrade_backfills_canonical_movies_preserving_user_state() {
         assert!(fk.is_empty());
         upgraded.close().await;
     }
+}
+
+/// Concurrent SQL migrations are not safe on SQLite (sqlx's migrator takes no
+/// lock); the desktop serializes profile opens. The canonical data step must
+/// still tolerate concurrent runners: it takes the write lock up front.
+#[tokio::test]
+async fn concurrent_backfills_of_a_legacy_profile_compile_exactly_once() {
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("profile.db");
+    let options = SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true)
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(std::time::Duration::from_secs(5));
+    let pool = SqlitePool::connect_with(options.clone()).await.unwrap();
+    // Schema at head, but rows written the pre-0021 way (no binding keys).
+    sqlx::migrate!("./migrations/profile")
+        .run(&pool)
+        .await
+        .unwrap();
+    let source = SourceRepository::new(&pool)
+        .create("m3u", "legacy", "https://example.invalid/list")
+        .await
+        .unwrap()
+        .id;
+    for i in 0..500 {
+        sqlx::query(
+            "INSERT INTO vod_items (source_id, name, stream_url, is_favorite) VALUES (?, ?, ?, ?)",
+        )
+        .bind(source)
+        .bind(format!("Film {i}"))
+        .bind(format!("https://example.invalid/{i}"))
+        .bind(i64::from(i % 7 == 0))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    pool.close().await;
+
+    let runners: Vec<_> = (0..4)
+        .map(|_| {
+            let options = options.clone();
+            tokio::spawn(async move {
+                let pool = SqlitePool::connect_with(options).await.unwrap();
+                let result = nova_storage::CanonicalRepository::new(&pool)
+                    .backfill_movies()
+                    .await;
+                pool.close().await;
+                result
+            })
+        })
+        .collect();
+    let mut created = 0;
+    for runner in runners {
+        created += runner
+            .await
+            .unwrap()
+            .expect("every concurrent backfill succeeds")
+            .created;
+    }
+    assert_eq!(created, 500, "each entity created by exactly one runner");
+    let upgraded = init_profile_db(path.to_str().unwrap()).await.unwrap();
+    let counts: (i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM canonical_entities), (SELECT COUNT(*) FROM stream_variants), (SELECT COUNT(*) FROM canonical_entities WHERE is_favorite = 1)",
+    )
+    .fetch_one(&upgraded)
+    .await
+    .unwrap();
+    assert_eq!(counts, (500, 500, 72));
+    upgraded.close().await;
 }

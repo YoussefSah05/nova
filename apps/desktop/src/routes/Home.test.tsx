@@ -252,6 +252,7 @@ describe("Home", () => {
           isFavorite: false,
           isInWatchlist: false,
           addedAt: null,
+          dedupGroup: null,
         },
       ]
     );

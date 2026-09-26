@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE vod_items\n               SET is_favorite = COALESCE((\n                       SELECT e.is_favorite FROM stream_variants s\n                       JOIN canonical_entities e ON e.id = s.entity_id\n                       WHERE s.source_id = vod_items.source_id\n                         AND s.binding_key = vod_items.binding_key), 0),\n                   is_in_watchlist = COALESCE((\n                       SELECT e.is_in_watchlist FROM stream_variants s\n                       JOIN canonical_entities e ON e.id = s.entity_id\n                       WHERE s.source_id = vod_items.source_id\n                         AND s.binding_key = vod_items.binding_key), 0)\n               WHERE source_id = ?\n                 AND EXISTS (\n                   SELECT 1 FROM stream_variants s\n                   WHERE s.source_id = vod_items.source_id\n                     AND s.binding_key = vod_items.binding_key)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "29c8b3511afdbb53a7e30550cf4a4d34eeaf5619c5c1cd85b366a91a462fd4ab"
+}

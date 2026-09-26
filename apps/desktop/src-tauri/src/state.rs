@@ -19,6 +19,9 @@ pub struct AppState {
     pub profile_pools: Arc<RwLock<HashMap<String, Arc<SqlitePool>>>>,
     /// One set of bounded persisted workers per opened profile.
     pub desktop_jobs: Mutex<HashMap<String, Arc<DesktopJobs>>>,
+    /// Serializes profile DB opens: migrations and the canonical-catalog data
+    /// step must run once per profile, never concurrently.
+    pub profile_open: Mutex<()>,
     /// Port the local HLS proxy bound to.
     pub hls_proxy_port: u16,
     /// Shared session registry on the proxy. `resolve_stream` calls
@@ -53,6 +56,7 @@ impl AppState {
             active_profile_id: Arc::new(RwLock::new(None)),
             profile_pools: Arc::new(RwLock::new(HashMap::new())),
             desktop_jobs: Mutex::new(HashMap::new()),
+            profile_open: Mutex::new(()),
             hls_proxy_port,
             hls_sessions,
             mpv_engine: MpvEngine::new(),

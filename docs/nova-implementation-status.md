@@ -1076,11 +1076,15 @@ not rewritten, and there is no parallel catalog.
 `vod_items.binding_key`/`locator_key` with indexes. Nothing is dropped or
 reinterpreted, and legacy columns and `watch_history` rows remain as a mirror.
 The data step (`backfill_movies`, run by `init_profile_db` after SQL
-migrations) keys pre-0021 rows in 1,000-row transactions and compiles pending
-sources, seeding entities from legacy favorites, watchlist, resume and
-completion. It is idempotent and about 0.1 s on reopen at 30k movies. It
-follows ADD → MIGRATE → VERIFY. Cutover is this movie slice only; removing
-legacy columns is later.
+migrations) keys and compiles each pre-0021 source in one `BEGIN IMMEDIATE`
+transaction, so an interrupted upgrade leaves no half-keyed source and a
+concurrent runner waits instead of failing. It seeds entities from legacy
+favorites, watchlist, resume and completion, taking the most recent history
+across duplicate rows. `0022_vod_unkeyed_index.sql` (additive partial index)
+makes the steady-state check about 1 ms at 30k movies. Profile opens are
+serialized in the desktop (`AppState::profile_open`), because SQLx's SQLite
+migrator takes no lock. It follows ADD → MIGRATE → VERIFY. Cutover is this
+movie slice only; removing legacy columns is later.
 
 ### Regression coverage
 
@@ -1112,22 +1116,56 @@ the entity and was overwritten by the mirror on refresh. The fix moved the
 write-through into the storage repositories, so every caller is covered.
 
 Scale probe (`scale_probe_compile_30k`, ignored, release build): at 30k movies
-the insert alone is 0.46 s, the first compile 0.97 s, a steady-state refresh
-compile about 0.6 s, a deep browse page 46 ms, and an entity lookup 20 µs.
+the insert alone is 0.45 s, the first compile 0.98 s, a steady-state refresh
+compile about 0.6 s, a deep browse page 44 ms, an entity lookup 21 µs, and the
+reopen check 0.9 ms.
+
+Real-data qualification is opt-in: `real_profile_upgrade` (ignored) copies the
+database named by `NOVA_UPGRADE_DB` with `VACUUM INTO`, upgrades only the copy,
+and asserts no lost favorites, watchlist or resume, no unmapped rows,
+integrity, foreign keys and idempotent reopen. It prints counts only. It was
+exercised on a synthetic pre-0021 database. Running it against the user's real
+profiles was not performed: access to personal profile data was declined in
+this session, so the user needs to run it themselves.
+
+### Independent review
+
+A fresh reviewer inspected `6cec388`. It found nothing Critical. Each finding was
+verified in source before any change:
+
+- High, confirmed and fixed: unserialized profile opens could run the data
+  step concurrently and fail a profile open. Opens are now serialized, and the
+  data step uses `BEGIN IMMEDIATE`. A regression test runs concurrent backfills.
+- High, confirmed and fixed: the canonical grid lost the enrichment
+  `dedup_group` grouping fallback. It is now carried as a presentation-only
+  `dedupGroup` hint.
+- Medium, confirmed and fixed: the steady-state reopen re-scanned the catalog.
+  Fixed with atomic per-source keying plus the 0022 partial index (97 ms →
+  0.9 ms at 30k).
+- Medium, confirmed and fixed: the legacy mirror skipped unbound duplicate
+  rows. The mirror and write-through now match rows by binding key.
+- Low, confirmed and fixed: resume seeding kept the oldest history. It now keeps
+  the newest, across all rows sharing the key. The new regression initially
+  failed and exposed that seeding read only the bound row.
+- Low, documented: the self-referencing rebind depends on
+  `UNIQUE(source_id, binding_key)`. The invariant is commented, and a test
+  rebinds six variants with duplicates in one statement.
 
 ### Validation commands/results
 
-- `just test`: pass: 343 Rust tests/doctests, 0 failed, 4 ignored (3
-  pre-existing plus the opt-in scale probe); 30 frontend tests.
+- `just test`: pass on three consecutive runs: 345 Rust tests/doctests, 0
+  failed, 5 ignored (3 pre-existing plus the opt-in scale and real-profile
+  probes); 30 frontend tests. The stabilization suite passed 15 consecutive
+  isolated runs.
 - `just lint` (Clippy all targets `-D warnings` + ESLint), `just check`,
   `just typecheck`: pass.
 - `pnpm -C apps/desktop build`: pass, with the existing large-chunk warning.
 - `cargo fmt --all -- --check`, `git diff --check`, Prettier on changed
   frontend files: pass.
 - SQLx offline metadata regenerated with `cargo sqlx prepare --workspace` against
-  a schema built from every app/profile migration. Seven stale query files
-  were pruned: four superseded by P07 query changes, three pre-P07 job queries
-  superseded in P06.
+  a schema built from every app/profile migration. Stale query files for
+  superseded query text were pruned, including three job queries superseded in
+  P06.
 
 ### Remaining known gaps
 
@@ -1148,6 +1186,8 @@ compile about 0.6 s, a deep browse page 46 ms, and an entity lookup 20 µs.
   assets.
 - The first large import pays about 1 s of compile time. No generation/snapshot
   publication yet (M3.7).
+- Not yet verified in the running app (`just dev`) or against real profiles.
+  Not merged to `main`.
 
 ### Next milestone
 

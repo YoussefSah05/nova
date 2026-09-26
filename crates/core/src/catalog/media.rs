@@ -54,6 +54,9 @@ pub struct CanonicalMediaSummary {
     pub is_favorite: bool,
     pub is_in_watchlist: bool,
     pub added_at: Option<i64>,
+    /// Enrichment similarity cluster of the representative variant: a
+    /// presentation grouping hint only, never identity (not entity resolution).
+    pub dedup_group: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -134,6 +137,7 @@ mod tests {
             is_favorite: true,
             is_in_watchlist: false,
             added_at: None,
+            dedup_group: None,
         };
         let detail = CanonicalMediaDetail {
             summary,
