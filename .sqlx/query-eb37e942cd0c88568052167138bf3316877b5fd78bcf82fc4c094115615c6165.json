@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE stream_variants SET entity_id = ? WHERE entity_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "eb37e942cd0c88568052167138bf3316877b5fd78bcf82fc4c094115615c6165"
+}

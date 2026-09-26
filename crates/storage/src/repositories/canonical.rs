@@ -25,6 +25,10 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
 
+mod identity;
+
+pub use identity::{LineageEntry, ResolutionReport, MAX_REDIRECT_HOPS};
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CompileStats {
     /// Existing variants re-bound to a refreshed source record.
@@ -86,8 +90,8 @@ impl<'a> CanonicalRepository<'a> {
     /// are written, so a failed import rolls the whole generation back.
     ///
     /// Only records sharing a binding key within one source are treated as
-    /// the same variant. Cross-source/duplicate consolidation is entity
-    /// resolution (a later milestone) and deliberately not attempted here.
+    /// the same variant. Consolidating distinct entities is entity resolution
+    /// ([`Self::resolve_movies_tx`]), which the import runs right after.
     pub async fn compile_movies_tx(
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
@@ -343,7 +347,9 @@ impl<'a> CanonicalRepository<'a> {
 
     // ── Canonical reads ─────────────────────────────────────────────────────
 
-    /// One card per canonical movie with an available variant in `source_id`.
+    /// One card per canonical movie with an available variant in `source_id`,
+    /// shown through its lowest bound row (a merged entity can hold several
+    /// variants of one source). Filters apply to that representative row.
     pub async fn list_movies(
         &self,
         source_id: i64,
@@ -375,6 +381,9 @@ impl<'a> CanonicalRepository<'a> {
                JOIN canonical_entities e ON e.id = s.entity_id
                JOIN vod_items v ON v.id = s.vod_item_id
                WHERE s.source_id = ?
+                 AND s.vod_item_id = (
+                   SELECT MIN(r.vod_item_id) FROM stream_variants r
+                   WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)
                  AND (? IS NULL OR v.category = ?)
                  AND (? IS NULL OR v.name LIKE ? OR v.clean_title LIKE ?
                       OR v.canonical_title LIKE ? OR v.category LIKE ?)
@@ -438,6 +447,9 @@ impl<'a> CanonicalRepository<'a> {
                JOIN canonical_entities e ON e.id = s.entity_id
                JOIN vod_items v ON v.id = s.vod_item_id
                WHERE s.source_id = ?
+                 AND s.vod_item_id = (
+                   SELECT MIN(r.vod_item_id) FROM stream_variants r
+                   WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)
                  AND (? IS NULL OR v.category = ?)
                  AND (? IS NULL OR v.name LIKE ? OR v.clean_title LIKE ?
                       OR v.canonical_title LIKE ? OR v.category LIKE ?)
@@ -462,10 +474,16 @@ impl<'a> CanonicalRepository<'a> {
     /// Detail for one entity: display fields from its first available
     /// variant (or the retained entity title when none is available), every
     /// variant, and resume state.
+    /// A historical (merged) ID returns the surviving entity's detail, with
+    /// the survivor's ID so the caller can update its reference.
     pub async fn movie_detail(
         &self,
         entity_id: &EntityId,
     ) -> Result<Option<CanonicalMediaDetail>, StorageError> {
+        let Some(entity_id) = self.canonical_entity_id(entity_id).await? else {
+            return Ok(None);
+        };
+        let entity_id = &entity_id;
         let id = entity_id.as_str();
         let Some(entity) = sqlx::query!(
             r#"SELECT e.title as "title!: String",
@@ -543,7 +561,10 @@ impl<'a> CanonicalRepository<'a> {
 
     pub async fn resume(&self, entity_id: &EntityId) -> Result<Option<ResumeState>, StorageError> {
         let mut conn = self.pool.acquire().await?;
-        Self::resume_conn(&mut conn, entity_id).await
+        let Some(entity_id) = Self::canonical_entity_conn(&mut conn, entity_id).await? else {
+            return Ok(None);
+        };
+        Self::resume_conn(&mut conn, &entity_id).await
     }
 
     /// Rust-side variant selection: the requested variant when it belongs to
@@ -554,6 +575,10 @@ impl<'a> CanonicalRepository<'a> {
         entity_id: &EntityId,
         variant_id: Option<&VariantId>,
     ) -> Result<Option<MoviePlaybackTarget>, StorageError> {
+        let Some(entity_id) = self.canonical_entity_id(entity_id).await? else {
+            return Ok(None);
+        };
+        let entity_id = &entity_id;
         let id = entity_id.as_str();
         let requested = variant_id.map(VariantId::as_str);
         let row = sqlx::query!(
@@ -615,15 +640,19 @@ impl<'a> CanonicalRepository<'a> {
 
     // ── Canonical user-state actions ────────────────────────────────────────
 
-    /// Returns false when the entity does not exist.
+    /// Returns false when the entity does not exist. A historical ID acts on
+    /// the surviving entity.
     pub async fn set_favorite(
         &self,
         entity_id: &EntityId,
         is_favorite: bool,
     ) -> Result<bool, StorageError> {
-        let id = entity_id.as_str();
         let flag: i64 = is_favorite.into();
         let mut tx = self.pool.begin().await?;
+        let Some(entity_id) = Self::canonical_entity_conn(&mut tx, entity_id).await? else {
+            return Ok(false);
+        };
+        let id = entity_id.as_str();
         let changed = sqlx::query!(
             "UPDATE canonical_entities SET is_favorite = ? WHERE id = ?",
             flag,
@@ -648,15 +677,19 @@ impl<'a> CanonicalRepository<'a> {
         Ok(changed > 0)
     }
 
-    /// Returns false when the entity does not exist.
+    /// Returns false when the entity does not exist. A historical ID acts on
+    /// the surviving entity.
     pub async fn set_in_watchlist(
         &self,
         entity_id: &EntityId,
         in_watchlist: bool,
     ) -> Result<bool, StorageError> {
-        let id = entity_id.as_str();
         let flag: i64 = in_watchlist.into();
         let mut tx = self.pool.begin().await?;
+        let Some(entity_id) = Self::canonical_entity_conn(&mut tx, entity_id).await? else {
+            return Ok(false);
+        };
+        let id = entity_id.as_str();
         let changed = sqlx::query!(
             "UPDATE canonical_entities SET is_in_watchlist = ? WHERE id = ?",
             flag,
@@ -692,9 +725,14 @@ impl<'a> CanonicalRepository<'a> {
         caption_mode: Option<&str>,
     ) -> Result<(), StorageError> {
         let mut conn = self.pool.acquire().await?;
+        // A historical ID records onto its survivor; an unknown one is left
+        // to the foreign key to reject, as before.
+        let entity_id = Self::canonical_entity_conn(&mut conn, entity_id)
+            .await?
+            .unwrap_or_else(|| entity_id.clone());
         Self::record_progress_conn(
             &mut conn,
-            entity_id,
+            &entity_id,
             position_sec,
             duration_sec,
             completed,

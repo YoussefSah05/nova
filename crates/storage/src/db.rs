@@ -26,9 +26,11 @@ pub async fn init_profile_db(path: &str) -> Result<SqlitePool, StorageError> {
     migrator.run(&pool).await?;
     // Data step of the additive canonical-catalog migration (0021): bind
     // pre-existing movie rows to canonical entities, seeding user state.
-    crate::repositories::CanonicalRepository::new(&pool)
-        .backfill_movies()
-        .await?;
+    let canonical = crate::repositories::CanonicalRepository::new(&pool);
+    canonical.backfill_movies().await?;
+    // Entity resolution (0023): resolve once for profiles that predate it or
+    // were last resolved by an older rule set; a no-op otherwise.
+    canonical.ensure_movies_resolved().await?;
     Ok(pool)
 }
 

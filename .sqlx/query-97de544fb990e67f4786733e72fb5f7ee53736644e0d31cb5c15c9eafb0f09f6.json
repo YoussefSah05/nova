@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT entity_a as \"a!: String\", entity_b as \"b!: String\",\n                      operation_id as \"op!: i64\"\n               FROM entity_cannot_link WHERE entity_a = ? OR entity_b = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "a!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "b!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "op!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "97de544fb990e67f4786733e72fb5f7ee53736644e0d31cb5c15c9eafb0f09f6"
+}

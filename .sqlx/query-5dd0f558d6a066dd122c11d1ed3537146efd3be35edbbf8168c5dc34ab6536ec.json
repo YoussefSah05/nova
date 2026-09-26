@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO entity_cannot_link (entity_a, entity_b, operation_id, created_at)\n                   VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "5dd0f558d6a066dd122c11d1ed3537146efd3be35edbbf8168c5dc34ab6536ec"
+}

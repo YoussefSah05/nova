@@ -400,6 +400,7 @@ fn classify(attrs: ExtinfAttrs, stream_url: &str) -> ParsedEntry {
         episode,
         category: Some(category),
         upstream_id: None,
+        provider_tmdb_id: None,
     }
 }
 

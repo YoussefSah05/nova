@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE vod_items\n               SET is_favorite = (SELECT is_favorite FROM canonical_entities WHERE id = ?),\n                   is_in_watchlist = (SELECT is_in_watchlist FROM canonical_entities WHERE id = ?)\n               WHERE id IN (\n                   SELECT v.id FROM vod_items v\n                   JOIN stream_variants s\n                     ON s.source_id = v.source_id AND s.binding_key = v.binding_key\n                   WHERE s.entity_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "53cd1debd2dfdf903aa33da24ce0712b9584f1f2e8fbbc7b21bef2273ca82db7"
+}

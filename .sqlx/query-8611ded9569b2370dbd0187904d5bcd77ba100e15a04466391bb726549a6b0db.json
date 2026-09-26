@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO entity_aliases (entity_id, alias_kind, value, created_at)\n                   VALUES (?, 'external', ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "8611ded9569b2370dbd0187904d5bcd77ba100e15a04466391bb726549a6b0db"
+}

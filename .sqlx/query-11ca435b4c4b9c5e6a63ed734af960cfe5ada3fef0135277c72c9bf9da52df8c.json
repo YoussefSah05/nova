@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO entity_redirects (old_id, new_id, operation_id, created_at)\n               VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "11ca435b4c4b9c5e6a63ed734af960cfe5ada3fef0135277c72c9bf9da52df8c"
+}

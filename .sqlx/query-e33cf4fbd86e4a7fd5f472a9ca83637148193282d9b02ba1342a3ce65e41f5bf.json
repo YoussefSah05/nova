@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE canonical_entities\n               SET state = 'merged', is_favorite = 0, is_in_watchlist = 0\n               WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e33cf4fbd86e4a7fd5f472a9ca83637148193282d9b02ba1342a3ce65e41f5bf"
+}

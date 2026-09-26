@@ -125,3 +125,56 @@ artifact reference. It retains exact context/protocol/output and original expiry
 and returns new results only after a protected commit. Context vetting, a durable
 artifact index, retention, runtime ownership and desktop integration remain pending.
 See [ADR 0010](adr/0010-protected-catalog-derivations.md).
+
+### Entity resolution (P09)
+
+`nova_core::catalog::resolution` decides which canonical entities are the same
+work. It is pure and deterministic: the same evidence yields the same plan in any
+input order. The rules are biased against false merges, since a false merge
+corrupts user state and a missed one only shows a duplicate card.
+
+- **Evidence** (`EntityEvidence`): titles (normalized by `clean::dedup_key`, which
+  keeps distinguishing numbers), years, and trusted IDs namespaced by authority and
+  media kind (`tmdb:movie`). Storage builds it from the entity row, its bound
+  provider rows and its durable aliases. It is never built from model output.
+- **Blocking**: only entities sharing a trusted ID, series coordinate or normalized
+  title are compared (P08 `blocking`). Blocks above 64 members abstain.
+- **Hard contradictions** always reject: different media kind (movie vs series),
+  conflicting IDs in one namespace, different series, different season/episode
+  numbers, years more than one apart, or a recorded cannot-link.
+- **Merge rules**: a shared trusted ID corroborated by a shared title or known
+  years; identical complete episode coordinates in the same series; or an identical
+  normalized title *and* an identical year. A missing year, a year one apart, an
+  uncorroborated ID or internally inconsistent evidence abstains.
+- **No transitive false merges**: an entity whose partners contradict each other is
+  ambiguous and merges with none of them. Clusters join only while every
+  cross-pair is contradiction-free and at most 32 members.
+- **Survivor**: the oldest entity, then the lowest ID. `RULESET_VERSION` is recorded
+  on every merge and re-resolution runs once when it changes.
+
+Only the resolver can construct a `MergeDecision` (private fields, enforced by
+compile-fail doctests), and storage merges nothing else. Abstentions produce
+bounded `AmbiguityCase`s (at most 8 real candidates). `assess_ai_verdict`
+validates a model's `abstain` / `same_as` / `distinct_from` answer against exactly
+those candidates and returns an advisory `AiSuggestion`, which has no path to an
+identity change.
+
+Storage (migration 0023, `CanonicalRepository` identity methods) applies each
+decision atomically in the import transaction:
+
+- variants move to the survivor;
+- favorite/watchlist are ORed, and the most recent resume/completion wins;
+- the absorbed title/year/aliases become survivor aliases, and cannot-links follow
+  the merge;
+- the absorbed entity is tombstoned (`state = 'merged'`, never deleted) and
+  redirected, with chains compressed to one hop;
+- an append-only `entity_lineage` row (triggers reject UPDATE/DELETE) records the
+  rule, ruleset and both sides' prior state, secret-free.
+
+`canonical_entity_id` resolves historical IDs with a bounded (16-hop),
+cycle-checked walk. Corrupt redirects are errors and are never followed.
+Provider-claimed TMDB IDs (Xtream `tmdb`) are stored in
+`vod_items.provider_tmdb_id`, separate from the lexical display-only TMDB
+enrichment, and persisted as `external` aliases so they keep blocking false
+merges after their row disappears. `record_cannot_link` records a user's "these
+are different" correction; it has no UI yet.

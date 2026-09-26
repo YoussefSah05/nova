@@ -77,6 +77,9 @@ pub struct ParsedEntry {
     /// Provider-scoped stable item ID (e.g. `xtream:vod:123`) when the
     /// provider has one. Never a URL; consumed only by the catalog compiler.
     pub upstream_id: Option<String>,
+    /// Provider-claimed TMDB movie ID (Xtream `tmdb`). Identity evidence for
+    /// entity resolution, never displayed; `None` when absent or invalid.
+    pub provider_tmdb_id: Option<i64>,
 }
 
 // ── Storage-mapped types (returned by repositories) ──────────────────────────
@@ -142,6 +145,9 @@ pub struct VodItem {
     /// serialized across IPC and not persisted on read paths.
     #[serde(skip)]
     pub upstream_id: Option<String>,
+    /// Provider-claimed TMDB movie ID, entity-resolution evidence only.
+    #[serde(skip)]
+    pub provider_tmdb_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

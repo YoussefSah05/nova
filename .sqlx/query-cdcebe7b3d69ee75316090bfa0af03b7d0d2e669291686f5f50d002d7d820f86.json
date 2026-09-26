@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as \"n!: i64\" FROM canonical_entities\n               WHERE id IN (?, ?) AND state = 'active' AND kind = 'movie'",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cdcebe7b3d69ee75316090bfa0af03b7d0d2e669291686f5f50d002d7d820f86"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT title as \"title!: String\", year as \"year?: i64\"\n               FROM canonical_entities WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "title!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "year?: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "265347cd731ae6c57c2432b6839ca9f53b7bcfadc8784615c92d72859730532e"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM entity_watch_state WHERE entity_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9bf0f1f4b57c350f8729238bbed5b608ecec0af504cc3d97d7b8241c79836a0c"
+}

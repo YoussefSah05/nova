@@ -34,8 +34,8 @@ impl<'a> VodRepository<'a> {
             let binding_key = binding_key(v.upstream_id.as_deref(), &v.stream_url);
             let locator_key = locator_binding_key(&v.stream_url);
             sqlx::query!(
-                "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at, binding_key, locator_key)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at, binding_key, locator_key, provider_tmdb_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 v.source_id,
                 v.name,
                 v.clean_title,
@@ -46,6 +46,7 @@ impl<'a> VodRepository<'a> {
                 added_at,
                 binding_key,
                 locator_key,
+                v.provider_tmdb_id,
             )
             .execute(&mut **tx)
             .await?;
@@ -158,6 +159,7 @@ impl<'a> VodRepository<'a> {
                 backdrop_url: r.backdrop_url,
                 overview: r.overview,
                 upstream_id: None,
+                provider_tmdb_id: None,
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
@@ -195,6 +197,7 @@ impl<'a> VodRepository<'a> {
                 backdrop_url: r.backdrop_url,
                 overview: r.overview,
                 upstream_id: None,
+                provider_tmdb_id: None,
             })
             .collect(),
         };
@@ -243,6 +246,7 @@ impl<'a> VodRepository<'a> {
                 backdrop_url: r.backdrop_url,
                 overview: r.overview,
                 upstream_id: None,
+                provider_tmdb_id: None,
             })
             .collect())
     }

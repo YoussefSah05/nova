@@ -18,6 +18,7 @@ pub mod fingerprint;
 pub mod intelligence;
 pub mod media;
 pub mod reconcile;
+pub mod resolution;
 pub mod snapshot;
 
 pub const MAX_FIELD_BYTES: usize = 16 * 1024;

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO entity_lineage\n                   (operation, entity_a, entity_b, actor, rule, ruleset_version,\n                    evidence_json, prior_state_json, created_at)\n               VALUES ('merge', ?, ?, 'resolver', ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "3fa075b9b08e8a130410141de1f29d169472fe98253899ccfaf842df83b39ec5"
+}

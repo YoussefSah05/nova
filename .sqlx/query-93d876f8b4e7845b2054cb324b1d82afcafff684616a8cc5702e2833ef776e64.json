@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT entity_a as \"a!: String\", entity_b as \"b!: String\"\n               FROM entity_cannot_link",
+  "describe": {
+    "columns": [
+      {
+        "name": "a!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "b!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "93d876f8b4e7845b2054cb324b1d82afcafff684616a8cc5702e2833ef776e64"
+}

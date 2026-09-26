@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: String\" FROM stream_variants WHERE entity_id = ? ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "080ae617d5fa872ac5affc7acb5d1f0a22cce1b37a74bb91b6f9b6aef7d79188"
+}

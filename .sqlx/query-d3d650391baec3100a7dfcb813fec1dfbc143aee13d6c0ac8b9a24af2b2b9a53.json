@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\", operation as \"operation!: String\",\n                      entity_a as \"entity_a!: String\", entity_b as \"entity_b!: String\",\n                      actor as \"actor!: String\", rule as \"rule?: String\",\n                      ruleset_version as \"ruleset_version?: i64\",\n                      evidence_json as \"evidence_json!: String\",\n                      prior_state_json as \"prior_state_json!: String\",\n                      created_at as \"created_at!: i64\"\n               FROM entity_lineage\n               WHERE entity_a = ? OR entity_b = ?\n               ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "operation!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "entity_a!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "entity_b!: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "actor!: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "rule?: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "ruleset_version?: i64",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "evidence_json!: String",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "prior_state_json!: String",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: i64",
+        "ordinal": 9,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d3d650391baec3100a7dfcb813fec1dfbc143aee13d6c0ac8b9a24af2b2b9a53"
+}

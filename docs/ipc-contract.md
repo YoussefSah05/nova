@@ -156,8 +156,32 @@ above. Legacy `list_vod`, `set_vod_*`, `record_watch_progress` and
 Continue Watching cards address a row). Movie writes and reads through them are
 routed to the owning entity by the storage layer; the per-row columns and
 `watch_history` rows are a compatibility mirror. The compiler merges only
-records sharing a binding key within one source. Cross-source or duplicate
-consolidation is entity resolution and is not performed.
+records sharing a binding key within one source.
+
+### Entity resolution (P09)
+
+After the compiler, the import transaction runs deterministic entity resolution
+across all sources of the profile. Two entities merge only on positive evidence
+(a shared provider TMDB ID corroborated by a title or year, or an identical
+normalized title *and* year) and never across a hard contradiction (different
+media kind, conflicting trusted IDs, different series or episode coordinates,
+clearly incompatible years, or a recorded cannot-link). Anything uncertain stays
+separate. The oldest entity survives.
+
+`entityId` stays stable for clients, including across merges:
+
+- A merged-away (historical) `entityId` remains valid in every movie command.
+  `get_movie`, `set_movie_favorite`, `set_movie_in_watchlist` and
+  `resolve_movie_playback` act on the surviving entity. `get_movie` returns the
+  survivor's `entityId`, which clients should adopt.
+- `list_movies` / `count_movies` return one card per entity per source. A merged
+  entity lists every variant in `get_movie.variants`, and the version picker
+  plays any of them.
+- On merge, favorite/watchlist combine by OR and the most recent resume or
+  completion wins. Nothing is dropped: the prior state of both sides is kept in
+  the append-only identity lineage.
+
+No new commands or events were added. Model output cannot merge identities.
 
 Browse filter payloads use camelCase keys from the frontend:
 

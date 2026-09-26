@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: String\", created_at as \"created_at!: i64\",\n                      title as \"title!: String\", year as \"year?: i64\"\n               FROM canonical_entities\n               WHERE kind = 'movie' AND state = 'active'",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "year?: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "cfd52c7b78e8a7f3d7179df8b33cfc8184a1c09e1f66bb5370fb649c84f4e691"
+}

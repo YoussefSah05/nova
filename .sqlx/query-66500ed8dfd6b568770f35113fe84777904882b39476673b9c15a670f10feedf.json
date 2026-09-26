@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.is_favorite as \"is_favorite!: i64\",\n                      e.is_in_watchlist as \"is_in_watchlist!: i64\",\n                      w.position_sec as \"position_sec?: f64\",\n                      w.duration_sec as \"duration_sec?: f64\",\n                      w.watched_at as \"watched_at?: i64\",\n                      w.completed as \"completed?: i64\",\n                      w.caption_mode as \"caption_mode?: String\"\n               FROM canonical_entities e\n               LEFT JOIN entity_watch_state w ON w.entity_id = e.id\n               WHERE e.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "is_favorite!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_in_watchlist!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "position_sec?: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 3,
+        "type_info": "Float"
+      },
+      {
+        "name": "watched_at?: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "completed?: i64",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "caption_mode?: String",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "66500ed8dfd6b568770f35113fe84777904882b39476673b9c15a670f10feedf"
+}

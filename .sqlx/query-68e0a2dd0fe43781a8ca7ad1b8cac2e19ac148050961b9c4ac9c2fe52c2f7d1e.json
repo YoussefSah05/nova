@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.state as \"state!: String\", r.new_id as \"new_id?: String\"\n                   FROM canonical_entities e\n                   LEFT JOIN entity_redirects r ON r.old_id = e.id\n                   WHERE e.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "state!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "new_id?: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "68e0a2dd0fe43781a8ca7ad1b8cac2e19ac148050961b9c4ac9c2fe52c2f7d1e"
+}

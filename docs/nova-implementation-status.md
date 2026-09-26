@@ -1195,3 +1195,128 @@ Next in the plan: M3.3 versioned fingerprints (unchanged/changed/new/deleted
 classification for reuse), then candidate blocking and entity resolution to
 consolidate movie variants, or the next M9 vertical slice (series). P07 did not
 start them.
+
+## P09 — deterministic canonical entity resolution (movies)
+
+Branch `feat/p09-entity-resolution`, stacked on P08 (`feat/p08-catalog-reconciliation`,
+blocking primitives). Consolidates movie entities that P07 left one-per-provider-item,
+without ever merging on uncertain evidence.
+
+### Implemented contract
+
+- **Pure resolver** (`crates/core/src/catalog/resolution.rs`). Evidence per
+  entity (titles, years, trusted IDs namespaced by authority and kind). Blocking
+  runs via P08's `blocking_keys`, and blocks over 64 abstain. Hard contradictions
+  always reject: kind mismatch, conflicting trusted IDs, different series,
+  different season/episode numbers, years more than 1 apart, and cannot-link.
+  Merge rules: a trusted ID corroborated by a title or year; identical complete
+  episode coordinates; or an identical normalized title *and* year. Everything
+  else abstains with a typed reason. An ambiguous-hub guard and conflict-checked,
+  size-capped clustering prevent transitive false merges. The oldest entity
+  survives (ties go to the lowest ID). `RULESET_VERSION = 1`.
+- **Identity authority**: `MergeDecision` has private fields and is only built
+  by `resolve`. Two compile-fail doctests prove it can't be forged or converted
+  from an `AiSuggestion`.
+- **AI boundary**: `AmbiguityCase` (at most 8 real candidates, resolver-built)
+  → `assess_ai_verdict`. It accepts only `abstain` / `same_as` / `distinct_from`
+  over the case's own candidates, with a 4 KiB limit, protocol version check,
+  subject check and `deny_unknown_fields`. Output is an advisory `AiSuggestion`
+  with no path to storage. No model is wired to it yet.
+- **Storage** (`repositories/canonical/identity.rs`): `resolve_movies_tx` runs
+  in the import transaction after `compile_movies_tx`. `ensure_movies_resolved`
+  runs once on open per ruleset version. Each merge is atomic: variants move to
+  the survivor; favorite/watchlist are ORed; the latest resume/completion wins;
+  aliases and cannot-links follow the merge; the absorbed entity is tombstoned
+  and redirected, with chains compressed; append-only lineage records prior
+  state; the legacy mirror is re-derived. Other APIs: `canonical_entity_id`
+  (bounded, cycle-checked historical-ID walk), `record_cannot_link`, `lineage`.
+- **Historical IDs** are honoured by `movie_detail`, `resume`, `resolve_playback`,
+  `set_favorite`, `set_in_watchlist` and `record_progress`. Detail returns the
+  survivor's ID. `list_movies`/`count_movies` return one card per entity per source.
+- **Trusted-ID producer**: Xtream `get_vod_streams.tmdb` (number or string; 0,
+  empty and non-numeric are rejected) → `ParsedEntry`/`VodItem.provider_tmdb_id`
+  → `vod_items.provider_tmdb_id` → durable `external` alias. Nova's lexical TMDB
+  enrichment match is deliberately *not* treated as identity evidence.
+
+### Migration
+
+`0023_entity_resolution.sql`, additive:
+
+- `canonical_entities.state` (`active` | `merged`) and `vod_items.provider_tmdb_id`;
+- `entity_lineage`, append-only, enforced by UPDATE/DELETE triggers;
+- `entity_redirects`, with `CHECK old_id <> new_id`;
+- `entity_aliases` (`title` | `year` | `external`, not globally unique);
+- `entity_cannot_link`, as an ordered pair with `CHECK a < b`;
+- `entity_resolution_state`, the ruleset marker.
+
+Existing profiles are resolved once on their next open.
+
+### Regression coverage
+
+- Core (20 + 2 compile-fail doctests): exact merge into the oldest entity; movie
+  vs series; conflicting IDs; cross-namespace IDs; remake years reject and near
+  years abstain; missing year yields a bounded ambiguity case; Rocky vs Rocky 2
+  are never compared; localized titles merge only on a corroborated ID; episode
+  coordinates and series; no chaining across ID conflicts or year drift;
+  cannot-link; inconsistent evidence; order independence; oversized blocks;
+  20k-entity scale (under 3 s in a debug build, about 0.3 s observed); ID
+  validation and redaction; AI accept, abstain, reject (7 malformed or
+  out-of-case verdicts, size limit) and candidate bound.
+- Storage (12): cross-source merge with combined state, historical IDs through
+  every API, legacy mirror, lineage prior state (secret-free) and idempotent
+  re-resolve; contradictions and missing years prevent merges; a renumbered
+  item rejoins its entity with favorite/watchlist/completion; trusted IDs
+  outlive their rows and keep blocking; one card per entity with every variant
+  playable; redirect chain compression; corrupt redirect cycles are rejected;
+  cannot-link blocks and makes a third copy ambiguous; lineage is append-only;
+  open-time resolution runs once per ruleset.
+- Xtream (1 new + 1 extended): `tmdb` parsing accepts only positive numbers.
+- Desktop pipeline (1): through the real `run_import`, a renumbered film and a
+  second source's copy (with a provider TMDB ID) resolve to the original entity
+  with favorite, resume and the TMDB alias intact.
+- `real_profile_upgrade` (opt-in) now also asserts that every merged entity
+  redirects in one hop to an active survivor.
+
+Scale probe (release, 30k distinct movies): the resolution pass takes about
+0.25 s per import. A deep browse page (offset 10k) went from 47 to 68 ms because
+of the one-card-per-entity subquery. A covering index was tried and brought no
+measurable gain, so it was not added.
+
+### Validation commands/results
+
+- `just test`: 401 Rust tests, 0 failed, 5 ignored (opt-in probes); 30 frontend tests.
+- `just lint` (Clippy all targets `-D warnings` + ESLint) and `just typecheck`: pass.
+- `cargo fmt --all`: applied. SQLx offline metadata regenerated with
+  `cargo sqlx prepare --workspace -- --all-targets` against a schema built from
+  every app/profile migration; three superseded query files were removed.
+
+### Remaining known gaps
+
+- Movies only. Episode rules exist in core but series/episodes/live are not
+  canonical entities yet.
+- No split/unmerge yet. Lineage keeps both sides' prior state for it.
+  `record_cannot_link` has no command or UI.
+- The frontend still groups movie cards by raw title with years stripped
+  (`movieVersionKey`). That is presentation-only, but it can visually group
+  remakes that resolution deliberately keeps apart. It should be narrowed or
+  dropped now that server-side resolution exists.
+- AI verdicts are validated but no model is invoked, and ambiguity cases are
+  not persisted.
+- On merge, the latest resume wins. An older completion superseded by a newer
+  in-progress rewatch is retained only in lineage.
+- Browse filters and search match a merged entity's representative row only.
+- Few providers supply TMDB IDs, and M3U titles often lack years, so many true
+  duplicates will abstain. That is by design.
+- An entity that gains contradictory evidence after merging is excluded from
+  further merges but not split.
+- Redirects are not generation-scoped (no catalog generations yet).
+- Not verified in the running app (`just dev`) or against real profiles. The
+  first open after upgrade resolves existing libraries, and running
+  `real_profile_upgrade` on a real profile copy is recommended before relying on it.
+
+### Next milestone
+
+Candidates: user-facing "not the same" correction plus split (compensating
+lineage operations), narrowing the frontend title grouping, a bounded model job
+over persisted ambiguity cases, or extending canonical entities to series and
+episodes, where the episode-coordinate rules already apply.

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.entity_id as \"entity_id!: String\",\n                      COALESCE(v.clean_title, v.name) as \"title!: String\",\n                      v.year as \"year?: i64\",\n                      v.provider_tmdb_id as \"tmdb?: i64\"\n               FROM stream_variants s\n               JOIN vod_items v ON v.id = s.vod_item_id\n               JOIN canonical_entities e ON e.id = s.entity_id\n               WHERE e.kind = 'movie' AND e.state = 'active'",
+  "describe": {
+    "columns": [
+      {
+        "name": "entity_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "year?: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "tmdb?: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "5d6c64ec230c901547811c18b71436259287e400e8b246ca6620eba39a9ee91d"
+}

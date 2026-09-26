@@ -1095,6 +1095,23 @@ async fn run_import(
         return false;
     }
 
+    // Deterministic entity resolution across every source of the profile,
+    // still in the import transaction: new or re-listed records merge into
+    // the entity (and user state) they provably belong to, or stay separate.
+    if let Err(e) = CanonicalRepository::resolve_movies_tx(&mut tx).await {
+        stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
+        emit_import_progress(
+            &emit,
+            source_id,
+            ImportStage::Failed,
+            &stats,
+            Some(e.to_string()),
+            None,
+            true,
+        );
+        return false;
+    }
+
     if let Err(e) = SourceRepository::touch_refreshed_tx(&mut tx, source_id).await {
         stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
         emit_import_progress(
@@ -1385,6 +1402,7 @@ fn push_entry(
             backdrop_url: None,
             overview: None,
             upstream_id: e.upstream_id.clone(),
+            provider_tmdb_id: e.provider_tmdb_id,
         }),
         MediaKind::Series => series.push(SeriesEpisode {
             id: 0,
@@ -1471,6 +1489,7 @@ mod stabilization_tests {
             episode: None,
             category: None,
             upstream_id: None,
+            provider_tmdb_id: None,
         }
     }
 
@@ -1698,6 +1717,113 @@ mod stabilization_tests {
             .unwrap();
         assert_eq!(legacy.len(), 1);
         assert_eq!(legacy[0].name, "Heat");
+    }
+
+    #[tokio::test]
+    async fn import_resolves_renumbered_and_cross_source_copies_into_one_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = Arc::new(
+            init_profile_db(dir.path().join("profile.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let sources = SourceRepository::new(&pool);
+        let main = sources
+            .create("xtream", "main", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let backup = sources
+            .create("xtream", "backup", "http://other/get.php")
+            .await
+            .unwrap()
+            .id;
+        let dated = |name: &str, stream_id: u32| ParsedEntry {
+            year: Some(1995),
+            ..xtream_movie(name, stream_id, "p")
+        };
+        import(
+            pool.clone(),
+            main,
+            vec![Ok(dated("Heat", 7))],
+            ImportMode::Append,
+        )
+        .await;
+        let canonical = CanonicalRepository::new(&pool);
+        let filters = nova_storage::MovieFilters::default();
+        let list = |source| {
+            let canonical = CanonicalRepository::new(&pool);
+            let filters = filters.clone();
+            async move {
+                canonical
+                    .list_movies(source, 10, 0, &filters, ContentSort::Default)
+                    .await
+                    .unwrap()
+            }
+        };
+        let entity = list(main).await[0].entity_id.clone();
+        // Pin the original as oldest (entities created in one test second tie).
+        sqlx::query("UPDATE canonical_entities SET created_at = 0 WHERE id = ?")
+            .bind(entity.as_str())
+            .execute(&*pool)
+            .await
+            .unwrap();
+        canonical.set_favorite(&entity, true).await.unwrap();
+        canonical
+            .record_progress(&entity, 42.0, Some(100.0), false, None)
+            .await
+            .unwrap();
+
+        // The provider renumbers the film, and a second source lists it too,
+        // with a provider-claimed TMDB ID under a localized title.
+        let ok = import(
+            pool.clone(),
+            main,
+            vec![Ok(dated("Heat", 70))],
+            ImportMode::Replace,
+        )
+        .await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+        let localized = ParsedEntry {
+            provider_tmdb_id: Some(949),
+            ..dated("Heat FHD", 3)
+        };
+        import(
+            pool.clone(),
+            backup,
+            vec![Ok(localized)],
+            ImportMode::Append,
+        )
+        .await;
+
+        for source in [main, backup] {
+            let movies = list(source).await;
+            assert_eq!(movies.len(), 1);
+            assert_eq!(
+                movies[0].entity_id, entity,
+                "one identity across refresh and sources"
+            );
+            assert!(movies[0].is_favorite);
+        }
+        assert_eq!(
+            canonical
+                .resume(&entity)
+                .await
+                .unwrap()
+                .unwrap()
+                .position_sec,
+            42.0
+        );
+        let detail = canonical.movie_detail(&entity).await.unwrap().unwrap();
+        assert_eq!(detail.variants.iter().filter(|v| v.available).count(), 2);
+        let aliases: Vec<String> = sqlx::query_scalar(
+            "SELECT value FROM entity_aliases WHERE entity_id = ? AND alias_kind = 'external'",
+        )
+        .bind(entity.as_str())
+        .fetch_all(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(aliases, vec!["tmdb:movie:949"]);
     }
 
     /// Opt-in live check of the same fetch, import, and SQLite commit path used

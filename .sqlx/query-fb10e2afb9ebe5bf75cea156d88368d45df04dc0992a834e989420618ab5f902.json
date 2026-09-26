@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE entity_redirects SET new_id = ? WHERE new_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "fb10e2afb9ebe5bf75cea156d88368d45df04dc0992a834e989420618ab5f902"
+}

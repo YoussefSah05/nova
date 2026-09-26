@@ -48,6 +48,7 @@ fn movie(source_id: i64, name: &str, url: &str, upstream: Option<&str>) -> VodIt
         backdrop_url: None,
         overview: None,
         upstream_id: upstream.map(str::to_string),
+        provider_tmdb_id: None,
     }
 }
 
@@ -432,8 +433,8 @@ async fn many_variants_rebind_to_their_own_records_in_one_compile() {
 #[tokio::test]
 async fn distinct_titles_are_never_merged_by_the_compiler() {
     let db = db().await;
-    // Same title/year, different provider items: resolution is out of scope,
-    // so the compiler must not guess (false merges are worse than dupes).
+    // Same title/year, different provider items: the compiler never merges.
+    // Consolidation is the separate, evidence-checked resolution step.
     import(
         &db,
         &[
@@ -750,5 +751,693 @@ async fn scale_probe_compile_30k() {
     let started = std::time::Instant::now();
     repo.backfill_movies().await.unwrap();
     let reopen = started.elapsed();
-    eprintln!("full refresh (delete+insert+compile) {refresh:?}, page {list:?} ({}), entity lookup {lookup:?}, reopen backfill {reopen:?}", page.len());
+    let started = std::time::Instant::now();
+    let report = resolve(&db).await;
+    let resolution = started.elapsed();
+    eprintln!("full refresh (delete+insert+compile) {refresh:?}, page {list:?} ({}), entity lookup {lookup:?}, reopen backfill {reopen:?}, resolution {resolution:?} ({report:?})", page.len());
+}
+
+// ── Entity resolution ───────────────────────────────────────────────────────
+
+async fn second_source(db: &Db) -> i64 {
+    SourceRepository::new(&db.pool)
+        .create(
+            "xtream",
+            "Backup",
+            "http://other/get.php?username=u&password=p",
+        )
+        .await
+        .unwrap()
+        .id
+}
+
+async fn import_to(db: &Db, source_id: i64, rows: &[VodItem], replace: bool) {
+    let mut tx = db.pool.begin().await.unwrap();
+    if replace {
+        WatchHistoryRepository::delete_for_source_media_tx(&mut tx, source_id)
+            .await
+            .unwrap();
+        VodRepository::delete_by_source_tx(&mut tx, source_id)
+            .await
+            .unwrap();
+    }
+    VodRepository::insert_batch_tx(&mut tx, rows).await.unwrap();
+    CanonicalRepository::compile_movies_tx(&mut tx, source_id)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+async fn resolve(db: &Db) -> ResolutionReport {
+    let mut tx = db.pool.begin().await.unwrap();
+    let report = CanonicalRepository::resolve_movies_tx(&mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    report
+}
+
+async fn movies_in(db: &Db, source_id: i64) -> Vec<CanonicalMediaSummary> {
+    CanonicalRepository::new(&db.pool)
+        .list_movies(
+            source_id,
+            100,
+            0,
+            &MovieFilters::default(),
+            ContentSort::Default,
+        )
+        .await
+        .unwrap()
+}
+
+/// Entities are created within the same second in tests; pin creation order
+/// so the survivor (oldest) is predictable.
+async fn set_created_at(db: &Db, entity: &EntityId, at: i64) {
+    sqlx::query("UPDATE canonical_entities SET created_at = ? WHERE id = ?")
+        .bind(at)
+        .bind(entity.as_str())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+}
+
+async fn state_of(db: &Db, entity: &EntityId) -> String {
+    sqlx::query_scalar("SELECT state FROM canonical_entities WHERE id = ?")
+        .bind(entity.as_str())
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+}
+
+fn tmdb(mut item: VodItem, id: i64) -> VodItem {
+    item.provider_tmdb_id = Some(id);
+    item
+}
+
+#[tokio::test]
+async fn cross_source_copies_merge_and_user_state_is_combined() {
+    let db = db().await;
+    let backup = second_source(&db).await;
+    import(
+        &db,
+        &[movie(
+            db.source_id,
+            "Heat",
+            "http://host/1.mkv",
+            Some("xtream:vod:1"),
+        )],
+        false,
+    )
+    .await;
+    import_to(
+        &db,
+        backup,
+        &[movie(
+            backup,
+            "Heat FHD",
+            "http://other/9.mkv",
+            Some("xtream:vod:9"),
+        )],
+        false,
+    )
+    .await;
+    let primary = movies(&db).await[0].entity_id.clone();
+    let copy = movies_in(&db, backup).await[0].entity_id.clone();
+    assert_ne!(primary, copy);
+    set_created_at(&db, &primary, 100).await;
+    set_created_at(&db, &copy, 200).await;
+
+    let repo = CanonicalRepository::new(&db.pool);
+    repo.set_favorite(&primary, true).await.unwrap();
+    repo.record_progress(&primary, 100.0, Some(6000.0), false, None)
+        .await
+        .unwrap();
+    repo.set_in_watchlist(&copy, true).await.unwrap();
+    repo.record_progress(&copy, 2400.0, Some(6000.0), false, Some("source"))
+        .await
+        .unwrap();
+    // Make the copy's watch unambiguously the latest.
+    sqlx::query("UPDATE entity_watch_state SET watched_at = watched_at + 60 WHERE entity_id = ?")
+        .bind(copy.as_str())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    let report = resolve(&db).await;
+    assert_eq!(report.applied, 1);
+    assert_eq!(state_of(&db, &copy).await, "merged");
+
+    // One entity, listed in both sources, with combined flags and the latest resume.
+    for source in [db.source_id, backup] {
+        let list = movies_in(&db, source).await;
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].entity_id, primary);
+        assert!(list[0].is_favorite && list[0].is_in_watchlist);
+    }
+    let detail = repo.movie_detail(&primary).await.unwrap().unwrap();
+    assert_eq!(detail.variants.len(), 2);
+    assert_eq!(detail.resume.unwrap().position_sec, 2400.0);
+
+    // Historical ID resolves deterministically to the survivor everywhere.
+    assert_eq!(
+        repo.canonical_entity_id(&copy).await.unwrap(),
+        Some(primary.clone())
+    );
+    let via_old = repo.movie_detail(&copy).await.unwrap().unwrap();
+    assert_eq!(via_old.summary.entity_id, primary);
+    assert_eq!(
+        repo.resume(&copy).await.unwrap().unwrap().position_sec,
+        2400.0
+    );
+    let target = repo.resolve_playback(&copy, None).await.unwrap().unwrap();
+    assert_eq!(target.entity_id, primary);
+    assert!(repo.set_favorite(&copy, false).await.unwrap());
+    assert!(
+        !repo
+            .movie_detail(&primary)
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .is_favorite
+    );
+    repo.record_progress(&copy, 3000.0, None, false, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.resume(&primary).await.unwrap().unwrap().position_sec,
+        3000.0
+    );
+
+    // The legacy row mirror follows the survivor for both sources' rows.
+    let wl: Vec<i64> = sqlx::query_scalar("SELECT is_in_watchlist FROM vod_items ORDER BY id")
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(wl, vec![1, 1]);
+
+    // Lineage records the rule and both sides' prior state.
+    let lineage = repo.lineage(&copy).await.unwrap();
+    assert_eq!(lineage.len(), 1);
+    let entry = &lineage[0];
+    assert_eq!(
+        (
+            entry.operation.as_str(),
+            entry.actor.as_str(),
+            entry.rule.as_deref()
+        ),
+        ("merge", "resolver", Some("title_year"))
+    );
+    assert_eq!((&entry.entity_a, &entry.entity_b), (&primary, &copy));
+    let prior: serde_json::Value = serde_json::from_str(&entry.prior_state_json).unwrap();
+    assert_eq!(prior["survivor"]["isFavorite"], true);
+    assert_eq!(prior["absorbed"]["isInWatchlist"], true);
+    assert_eq!(prior["absorbed"]["watch"]["positionSec"], 2400.0);
+    assert!(!entry.prior_state_json.contains("http"));
+    assert!(!entry.evidence_json.contains("Heat"));
+
+    // Re-resolving is a no-op.
+    assert_eq!(resolve(&db).await.applied, 0);
+}
+
+#[tokio::test]
+async fn hard_contradictions_and_missing_evidence_prevent_merges() {
+    let db = db().await;
+    let mut remake = movie(
+        db.source_id,
+        "Scarface",
+        "http://host/2.mkv",
+        Some("xtream:vod:2"),
+    );
+    remake.year = Some(1983);
+    let mut original = movie(
+        db.source_id,
+        "Scarface",
+        "http://host/1.mkv",
+        Some("xtream:vod:1"),
+    );
+    original.year = Some(1932);
+    let mut undated = movie(
+        db.source_id,
+        "Alien",
+        "http://host/5.mkv",
+        Some("xtream:vod:5"),
+    );
+    undated.year = None;
+    import(
+        &db,
+        &[
+            original,
+            remake,
+            tmdb(
+                movie(
+                    db.source_id,
+                    "Heat",
+                    "http://host/3.mkv",
+                    Some("xtream:vod:3"),
+                ),
+                949,
+            ),
+            tmdb(
+                movie(
+                    db.source_id,
+                    "Heat",
+                    "http://host/4.mkv",
+                    Some("xtream:vod:4"),
+                ),
+                1_234,
+            ),
+            undated,
+            movie(
+                db.source_id,
+                "Alien",
+                "http://host/6.mkv",
+                Some("xtream:vod:6"),
+            ),
+        ],
+        false,
+    )
+    .await;
+    let report = resolve(&db).await;
+    assert_eq!(report.applied, 0, "{report:?}");
+    assert_eq!(
+        report.stats.rejected, 2,
+        "remake years + conflicting TMDB IDs"
+    );
+    assert_eq!(movies(&db).await.len(), 6);
+}
+
+#[tokio::test]
+async fn a_relisted_item_rejoins_its_entity_with_favorites_and_completion() {
+    let db = db().await;
+    import(
+        &db,
+        &[movie(
+            db.source_id,
+            "Heat",
+            "http://host/7.mkv",
+            Some("xtream:vod:7"),
+        )],
+        false,
+    )
+    .await;
+    let entity = movies(&db).await[0].entity_id.clone();
+    set_created_at(&db, &entity, 100).await;
+    let repo = CanonicalRepository::new(&db.pool);
+    repo.set_favorite(&entity, true).await.unwrap();
+    repo.set_in_watchlist(&entity, true).await.unwrap();
+    repo.record_progress(&entity, 5990.0, Some(6000.0), true, None)
+        .await
+        .unwrap();
+
+    // The provider renumbers the item: new stream ID, new URL. The compiler
+    // mints a new entity; resolution folds it back into the original.
+    import(
+        &db,
+        &[movie(
+            db.source_id,
+            "Heat",
+            "http://host/70.mkv",
+            Some("xtream:vod:70"),
+        )],
+        true,
+    )
+    .await;
+    assert_eq!(resolve(&db).await.applied, 1);
+    let list = movies(&db).await;
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].entity_id, entity, "identity survives the relisting");
+    assert!(list[0].is_favorite && list[0].is_in_watchlist);
+    let resume = repo.resume(&entity).await.unwrap().unwrap();
+    assert!(resume.completed);
+    let target = repo.resolve_playback(&entity, None).await.unwrap().unwrap();
+    assert_eq!(target.media_id, vod_id(&db, "http://host/70.mkv").await);
+}
+
+#[tokio::test]
+async fn trusted_ids_outlive_their_rows_and_keep_blocking_false_merges() {
+    let db = db().await;
+    import(
+        &db,
+        &[tmdb(
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/1.mkv",
+                Some("xtream:vod:1"),
+            ),
+            949,
+        )],
+        false,
+    )
+    .await;
+    let original = movies(&db).await[0].entity_id.clone();
+    resolve(&db).await;
+    // The row disappears; a different film with the same title/year and a
+    // conflicting TMDB ID arrives. The durable alias still separates them.
+    import(
+        &db,
+        &[tmdb(
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/2.mkv",
+                Some("xtream:vod:2"),
+            ),
+            1_234,
+        )],
+        true,
+    )
+    .await;
+    let report = resolve(&db).await;
+    assert_eq!(report.applied, 0);
+    assert_eq!(state_of(&db, &original).await, "active");
+    let aliases: Vec<String> = sqlx::query_scalar(
+        "SELECT value FROM entity_aliases WHERE alias_kind = 'external' ORDER BY value",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(aliases, vec!["tmdb:movie:1234", "tmdb:movie:949"]);
+
+    // A later copy carrying the original ID merges into the original.
+    import(
+        &db,
+        &[tmdb(
+            movie(
+                db.source_id,
+                "Heat (Director's Cut)",
+                "http://host/3.mkv",
+                Some("xtream:vod:3"),
+            ),
+            949,
+        )],
+        true,
+    )
+    .await;
+    let report = resolve(&db).await;
+    assert_eq!(report.applied, 1);
+    let lineage = CanonicalRepository::new(&db.pool)
+        .lineage(&original)
+        .await
+        .unwrap();
+    assert_eq!(lineage.last().unwrap().rule.as_deref(), Some("trusted_id"));
+}
+
+#[tokio::test]
+async fn one_card_per_entity_when_a_source_lists_duplicates() {
+    let db = db().await;
+    import(
+        &db,
+        &[
+            movie(
+                db.source_id,
+                "Heat FHD",
+                "http://host/1.mkv",
+                Some("xtream:vod:1"),
+            ),
+            movie(
+                db.source_id,
+                "Heat 4K",
+                "http://host/2.mkv",
+                Some("xtream:vod:2"),
+            ),
+            movie(
+                db.source_id,
+                "Alien",
+                "http://host/3.mkv",
+                Some("xtream:vod:3"),
+            ),
+        ],
+        false,
+    )
+    .await;
+    assert_eq!(resolve(&db).await.applied, 1);
+    let list = movies(&db).await;
+    assert_eq!(list.len(), 2);
+    let repo = CanonicalRepository::new(&db.pool);
+    assert_eq!(
+        repo.count_movies(db.source_id, &MovieFilters::default())
+            .await
+            .unwrap(),
+        2
+    );
+    let heat = list.iter().find(|m| m.title.starts_with("Heat")).unwrap();
+    let detail = repo.movie_detail(&heat.entity_id).await.unwrap().unwrap();
+    assert_eq!(detail.variants.len(), 2);
+    // Both variants stay individually playable.
+    for variant in &detail.variants {
+        let target = repo
+            .resolve_playback(&heat.entity_id, Some(&variant.variant_id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(target.variant_id, variant.variant_id);
+    }
+}
+
+#[tokio::test]
+async fn redirect_chains_compress_to_the_final_survivor() {
+    let db = db().await;
+    let backup = second_source(&db).await;
+    import(
+        &db,
+        &[
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/1.mkv",
+                Some("xtream:vod:1"),
+            ),
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/2.mkv",
+                Some("xtream:vod:2"),
+            ),
+        ],
+        false,
+    )
+    .await;
+    let first: Vec<EntityId> = movies(&db).await.into_iter().map(|m| m.entity_id).collect();
+    set_created_at(&db, &first[0], 200).await;
+    set_created_at(&db, &first[1], 300).await;
+    resolve(&db).await;
+    let (a, b) = (first[0].clone(), first[1].clone());
+
+    // An even older identity appears later (e.g. restored from another
+    // source) and absorbs the previous survivor.
+    import_to(
+        &db,
+        backup,
+        &[movie(
+            backup,
+            "Heat",
+            "http://other/1.mkv",
+            Some("xtream:vod:1"),
+        )],
+        false,
+    )
+    .await;
+    let z = movies_in(&db, backup).await[0].entity_id.clone();
+    set_created_at(&db, &z, 50).await;
+    assert_eq!(resolve(&db).await.applied, 1);
+
+    let repo = CanonicalRepository::new(&db.pool);
+    for old in [&a, &b] {
+        assert_eq!(
+            repo.canonical_entity_id(old).await.unwrap(),
+            Some(z.clone())
+        );
+        let direct: String =
+            sqlx::query_scalar("SELECT new_id FROM entity_redirects WHERE old_id = ?")
+                .bind(old.as_str())
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(direct, z.as_str(), "chains are compressed to one hop");
+    }
+    assert_eq!(movies(&db).await.len(), 1);
+    assert_eq!(movies(&db).await[0].entity_id, z);
+}
+
+#[tokio::test]
+async fn corrupt_redirect_cycles_are_rejected_not_followed_forever() {
+    let db = db().await;
+    import(
+        &db,
+        &[
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/1.mkv",
+                Some("xtream:vod:1"),
+            ),
+            movie(
+                db.source_id,
+                "Alien",
+                "http://host/2.mkv",
+                Some("xtream:vod:2"),
+            ),
+        ],
+        false,
+    )
+    .await;
+    let ids: Vec<EntityId> = movies(&db).await.into_iter().map(|m| m.entity_id).collect();
+    let (a, b) = (ids[0].as_str(), ids[1].as_str());
+    let op: i64 = sqlx::query_scalar(
+        "INSERT INTO entity_lineage (operation, entity_a, entity_b, actor, evidence_json, prior_state_json, created_at)
+         VALUES ('merge', ?, ?, 'resolver', '{}', '{}', 0) RETURNING id",
+    )
+    .bind(a)
+    .bind(b)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    for (old, new) in [(a, b), (b, a)] {
+        sqlx::query("UPDATE canonical_entities SET state = 'merged' WHERE id = ?")
+            .bind(old)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO entity_redirects (old_id, new_id, operation_id, created_at) VALUES (?, ?, ?, 0)")
+            .bind(old)
+            .bind(new)
+            .bind(op)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+    let repo = CanonicalRepository::new(&db.pool);
+    assert!(matches!(
+        repo.canonical_entity_id(&ids[0]).await,
+        Err(StorageError::InvalidCanonicalRecord)
+    ));
+    assert_eq!(
+        repo.canonical_entity_id(&EntityId::new("mov-unknown").unwrap())
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn cannot_link_blocks_resolution_and_follows_merges() {
+    let db = db().await;
+    let backup = second_source(&db).await;
+    import(
+        &db,
+        &[
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/1.mkv",
+                Some("xtream:vod:1"),
+            ),
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/2.mkv",
+                Some("xtream:vod:2"),
+            ),
+        ],
+        false,
+    )
+    .await;
+    let ids: Vec<EntityId> = movies(&db).await.into_iter().map(|m| m.entity_id).collect();
+    let repo = CanonicalRepository::new(&db.pool);
+    assert!(repo.record_cannot_link(&ids[0], &ids[1]).await.unwrap());
+    assert!(!repo.record_cannot_link(&ids[0], &ids[0]).await.unwrap());
+    let report = resolve(&db).await;
+    assert_eq!(report.applied, 0);
+    assert_eq!(movies(&db).await.len(), 2);
+    let lineage = repo.lineage(&ids[0]).await.unwrap();
+    assert_eq!(
+        (lineage[0].operation.as_str(), lineage[0].actor.as_str()),
+        ("cannot_link", "user")
+    );
+
+    // A third copy matches both, but they are declared distinct: it is
+    // ambiguous and merges with neither.
+    import_to(
+        &db,
+        backup,
+        &[movie(
+            backup,
+            "Heat",
+            "http://other/1.mkv",
+            Some("xtream:vod:1"),
+        )],
+        false,
+    )
+    .await;
+    assert_eq!(resolve(&db).await.applied, 0);
+}
+
+#[tokio::test]
+async fn lineage_is_append_only() {
+    let db = db().await;
+    import(
+        &db,
+        &[
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/1.mkv",
+                Some("xtream:vod:1"),
+            ),
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/2.mkv",
+                Some("xtream:vod:2"),
+            ),
+        ],
+        false,
+    )
+    .await;
+    resolve(&db).await;
+    for sql in [
+        "UPDATE entity_lineage SET rule = 'forged'",
+        "DELETE FROM entity_lineage",
+    ] {
+        let err = sqlx::query(sql).execute(&db.pool).await.unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{err}");
+    }
+}
+
+#[tokio::test]
+async fn open_time_resolution_runs_once_per_ruleset() {
+    let db = db().await;
+    let repo = CanonicalRepository::new(&db.pool);
+    // init_profile_db already resolved the (empty) profile.
+    assert!(repo.ensure_movies_resolved().await.unwrap().is_none());
+    import(
+        &db,
+        &[
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/1.mkv",
+                Some("xtream:vod:1"),
+            ),
+            movie(
+                db.source_id,
+                "Heat",
+                "http://host/2.mkv",
+                Some("xtream:vod:2"),
+            ),
+        ],
+        false,
+    )
+    .await;
+    // A profile last resolved by an older rule set (or before resolution
+    // existed) is resolved on the next open.
+    sqlx::query("DELETE FROM entity_resolution_state")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let report = repo.ensure_movies_resolved().await.unwrap().unwrap();
+    assert_eq!(report.applied, 1);
+    assert!(repo.ensure_movies_resolved().await.unwrap().is_none());
 }

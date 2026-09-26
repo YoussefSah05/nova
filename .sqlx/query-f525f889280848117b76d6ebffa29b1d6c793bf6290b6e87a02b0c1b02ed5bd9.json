@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO entity_resolution_state (id, ruleset_version, resolved_at)\n               VALUES (1, ?, ?)\n               ON CONFLICT(id) DO UPDATE SET\n                   ruleset_version = excluded.ruleset_version,\n                   resolved_at = excluded.resolved_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f525f889280848117b76d6ebffa29b1d6c793bf6290b6e87a02b0c1b02ed5bd9"
+}

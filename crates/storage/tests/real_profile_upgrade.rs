@@ -98,6 +98,22 @@ async fn real_profile_upgrade_preserves_movie_user_state() {
     )
     .await;
     let entities = count(&upgraded, "SELECT COUNT(*) FROM canonical_entities").await;
+    // Entity resolution (0023) runs on this first open: every merged entity
+    // must redirect in one hop to an active survivor.
+    let merged = count(
+        &upgraded,
+        "SELECT COUNT(*) FROM canonical_entities WHERE state = 'merged'",
+    )
+    .await;
+    let dangling = count(
+        &upgraded,
+        "SELECT COUNT(*) FROM canonical_entities e
+         WHERE e.state = 'merged' AND NOT EXISTS (
+             SELECT 1 FROM entity_redirects r
+             JOIN canonical_entities t ON t.id = r.new_id AND t.state = 'active'
+             WHERE r.old_id = e.id)",
+    )
+    .await;
     let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
         .fetch_one(&upgraded)
         .await
@@ -117,12 +133,13 @@ async fn real_profile_upgrade_preserves_movie_user_state() {
 
     eprintln!(
         "movies {movies}, favourites {favorites}, watchlist {watchlist}, resume rows {history}; \
-         entities {entities}; lost favourites {lost_favorites}, lost watchlist {lost_watchlist}, \
+         entities {entities} ({merged} merged); lost favourites {lost_favorites}, lost watchlist {lost_watchlist}, \
          lost resume {lost_resume}, unmapped rows {unmapped}; integrity {integrity}, fk issues {fk}; \
          upgrade {elapsed:?}, reopen {reopen:?}"
     );
     assert_eq!((lost_favorites, lost_watchlist, lost_resume), (0, 0, 0));
     assert_eq!(unmapped, 0);
+    assert_eq!(dangling, 0, "every merged entity redirects to a survivor");
     assert_eq!(integrity, "ok");
     assert_eq!(fk, 0);
     assert_eq!(entities, entities_after_reopen, "backfill is idempotent");

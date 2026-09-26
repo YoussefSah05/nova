@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.entity_id as \"entity_id!: String\",\n                      a.alias_kind as \"kind!: String\",\n                      a.value as \"value!: String\"\n               FROM entity_aliases a\n               JOIN canonical_entities e ON e.id = a.entity_id\n               WHERE e.kind = 'movie' AND e.state = 'active'",
+  "describe": {
+    "columns": [
+      {
+        "name": "entity_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "kind!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "value!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f5aabb58f162182abcca76c7714a72cfe9a22ade673094feea4f3f5244569ecf"
+}

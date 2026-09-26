@@ -567,6 +567,9 @@ struct VodStreamJson {
     category_name: Option<String>,
     #[serde(default)]
     container_extension: Option<String>,
+    /// Panels send a number, a numeric string, `""` or `null`.
+    #[serde(default)]
+    tmdb: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -607,6 +610,7 @@ fn to_live_entry(s: LiveStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
         episode: None,
         category: Some(category),
         upstream_id: None,
+        provider_tmdb_id: None,
     }
 }
 
@@ -636,6 +640,7 @@ fn to_vod_entry(s: VodStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
         episode: None,
         category: Some(category),
         upstream_id: Some(format!("xtream:vod:{}", s.stream_id)),
+        provider_tmdb_id: s.tmdb.as_ref().and_then(parse_tmdb_id),
     }
 }
 
@@ -668,10 +673,22 @@ fn to_series_entry(s: SeriesJson, _creds: &XtreamCredentials) -> ParsedEntry {
         episode: Some(0),
         category: Some(category),
         upstream_id: None,
+        provider_tmdb_id: None,
     }
 }
 
 // ── Local helpers ─────────────────────────────────────────────────────────────
+
+/// A positive TMDB ID from a provider's loosely typed `tmdb` field. Zero,
+/// empty and non-numeric values (common placeholders) are no evidence.
+fn parse_tmdb_id(value: &serde_json::Value) -> Option<i64> {
+    let id = match value {
+        serde_json::Value::Number(n) => n.as_i64()?,
+        serde_json::Value::String(s) => s.trim().parse::<i64>().ok()?,
+        _ => return None,
+    };
+    (1..=999_999_999).contains(&id).then_some(id)
+}
 
 fn has_image_extension(url: &str) -> bool {
     let path = url.split('?').next().unwrap_or(url);
@@ -808,12 +825,38 @@ mod tests {
             stream_icon: Some("https://image.tmdb.org/t/p/w600/abc.jpg".into()),
             category_name: Some("GERMANY MOVIES".into()),
             container_extension: Some("mp4".into()),
+            tmdb: Some(serde_json::json!("280180")),
         };
         let e = to_vod_entry(s, &creds);
         assert_eq!(e.kind, MediaKind::Movie);
         assert_eq!(e.clean_title, "Beverly Hills Cop: Axel F");
         assert_eq!(e.year, Some(2024));
         assert!(e.logo_url.is_some());
+        assert_eq!(e.provider_tmdb_id, Some(280180));
+    }
+
+    #[test]
+    fn provider_tmdb_ids_accept_only_positive_numbers() {
+        use serde_json::json;
+        assert_eq!(parse_tmdb_id(&json!(603)), Some(603));
+        assert_eq!(parse_tmdb_id(&json!(" 603 ")), Some(603));
+        for placeholder in [
+            json!(0),
+            json!("0"),
+            json!(""),
+            json!(null),
+            json!(-5),
+            json!("tt0133093"),
+            json!(1.5),
+        ] {
+            assert_eq!(parse_tmdb_id(&placeholder), None, "{placeholder}");
+        }
+        let parsed: VodStreamJson =
+            serde_json::from_value(json!({ "stream_id": 1, "name": "X", "tmdb": "" })).unwrap();
+        assert_eq!(parsed.tmdb.as_ref().and_then(parse_tmdb_id), None);
+        let parsed: VodStreamJson =
+            serde_json::from_value(json!({ "stream_id": 1, "name": "X" })).unwrap();
+        assert!(parsed.tmdb.is_none());
     }
 
     #[test]
@@ -935,6 +978,7 @@ mod tests {
                 episode: None,
                 category: None,
                 upstream_id: None,
+                provider_tmdb_id: None,
             },
             |entry| {
                 ids.push(entry.name.parse::<u32>().unwrap());

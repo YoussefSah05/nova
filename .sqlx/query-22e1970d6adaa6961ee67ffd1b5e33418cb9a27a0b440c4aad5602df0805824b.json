@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE canonical_entities\n               SET is_favorite = MAX(is_favorite,\n                       (SELECT is_favorite FROM canonical_entities WHERE id = ?)),\n                   is_in_watchlist = MAX(is_in_watchlist,\n                       (SELECT is_in_watchlist FROM canonical_entities WHERE id = ?))\n               WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "22e1970d6adaa6961ee67ffd1b5e33418cb9a27a0b440c4aad5602df0805824b"
+}
