@@ -3,9 +3,9 @@ use nova_core::{
     ParsedEntry, Profile, SeriesEpisode, SeriesSummary, Source, VodItem,
 };
 use nova_storage::{
-    init_profile_db, ChannelRepository, EpgSourcesRepository, ProfileRepository,
-    ProfileSettingsRepository, SeriesRepository, SourceRepository, VodRepository,
-    WatchHistoryRepository, WatchSnapshot,
+    init_profile_db, CanonicalRepository, ChannelRepository, EpgSourcesRepository,
+    ProfileRepository, ProfileSettingsRepository, SeriesRepository, SourceRepository,
+    VodRepository, WatchHistoryRepository, WatchSnapshot,
 };
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, State};
@@ -19,6 +19,7 @@ pub mod caption_style;
 pub mod enrich;
 pub mod epg;
 pub mod models;
+pub mod movies;
 pub mod playback;
 pub mod profile_settings;
 pub mod search;
@@ -741,6 +742,7 @@ pub async fn set_vod_favorite(
     state: State<'_, AppState>,
 ) -> Result<(), ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    // Written through to the owning canonical entity by the repository.
     VodRepository::new(&pool)
         .set_favorite(vod_id, is_favorite)
         .await
@@ -784,6 +786,7 @@ pub async fn set_vod_in_watchlist(
     state: State<'_, AppState>,
 ) -> Result<(), ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    // Written through to the owning canonical entity by the repository.
     VodRepository::new(&pool)
         .set_in_watchlist(vod_id, in_watchlist)
         .await
@@ -1068,6 +1071,23 @@ async fn run_import(
             );
             return false;
         }
+    }
+
+    // Catalog compiler: bind this generation's movie records to canonical
+    // entities in the same transaction, so a failed import leaves the previous
+    // bindings (and all entity-owned user state) intact.
+    if let Err(e) = CanonicalRepository::compile_movies_tx(&mut tx, source_id).await {
+        stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
+        emit_import_progress(
+            &emit,
+            source_id,
+            ImportStage::Failed,
+            &stats,
+            Some(e.to_string()),
+            None,
+            true,
+        );
+        return false;
     }
 
     if let Err(e) = SourceRepository::touch_refreshed_tx(&mut tx, source_id).await {
@@ -1359,6 +1379,7 @@ fn push_entry(
             poster_url: None,
             backdrop_url: None,
             overview: None,
+            upstream_id: e.upstream_id.clone(),
         }),
         MediaKind::Series => series.push(SeriesEpisode {
             id: 0,
@@ -1444,6 +1465,7 @@ mod stabilization_tests {
             season: None,
             episode: None,
             category: None,
+            upstream_id: None,
         }
     }
 
@@ -1548,6 +1570,129 @@ mod stabilization_tests {
                 .position_sec,
             42.0
         );
+    }
+
+    fn xtream_movie(name: &str, stream_id: u32, password: &str) -> ParsedEntry {
+        ParsedEntry {
+            stream_url: format!("http://host/movie/user/{password}/{stream_id}.mkv"),
+            upstream_id: Some(format!("xtream:vod:{stream_id}")),
+            ..entry(name)
+        }
+    }
+
+    #[tokio::test]
+    async fn canonical_movie_state_survives_failed_and_rotated_refreshes() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = Arc::new(
+            init_profile_db(dir.path().join("profile.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        import(
+            pool.clone(),
+            id,
+            vec![Ok(xtream_movie("Heat", 7, "old"))],
+            ImportMode::Append,
+        )
+        .await;
+        let canonical = CanonicalRepository::new(&pool);
+        let filters = nova_storage::MovieFilters::default();
+        let entity = canonical
+            .list_movies(id, 10, 0, &filters, ContentSort::Default)
+            .await
+            .unwrap()[0]
+            .entity_id
+            .clone();
+        canonical.set_favorite(&entity, true).await.unwrap();
+        // The player reports progress against the transient row (as
+        // `record_watch_progress` does): it lands on the entity.
+        let row = canonical
+            .resolve_playback(&entity, None)
+            .await
+            .unwrap()
+            .unwrap()
+            .media_id;
+        let owner = canonical.entity_for_vod(row).await.unwrap().unwrap();
+        canonical
+            .record_progress(&owner, 42.0, Some(100.0), false, None)
+            .await
+            .unwrap();
+
+        let failed = import(
+            pool.clone(),
+            id,
+            vec![
+                Ok(xtream_movie("Other", 8, "new")),
+                Err("provider down".into()),
+            ],
+            ImportMode::Replace,
+        )
+        .await;
+        assert!(matches!(failed.stage, ImportStage::Failed));
+        assert_eq!(
+            canonical
+                .resolve_playback(&entity, None)
+                .await
+                .unwrap()
+                .unwrap()
+                .media_id,
+            row,
+            "rolled-back refresh keeps the previous binding"
+        );
+
+        // Credentials rotate: every URL changes, stable IDs do not.
+        let ok = import(
+            pool.clone(),
+            id,
+            vec![
+                Ok(xtream_movie("Other", 8, "new")),
+                Ok(xtream_movie("Heat", 7, "new")),
+            ],
+            ImportMode::Replace,
+        )
+        .await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+        let movies = canonical
+            .list_movies(id, 10, 0, &filters, ContentSort::Default)
+            .await
+            .unwrap();
+        assert_eq!(movies.len(), 2);
+        let heat = movies.iter().find(|m| m.title == "Heat").unwrap();
+        assert_eq!(heat.entity_id, entity);
+        assert!(heat.is_favorite);
+        let target = canonical
+            .resolve_playback(&entity, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(target.media_id, row, "new generation row");
+        let owner = canonical
+            .entity_for_vod(target.media_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            canonical
+                .resume(&owner)
+                .await
+                .unwrap()
+                .unwrap()
+                .position_sec,
+            42.0
+        );
+        // The pre-P07 URL-keyed restore could not follow a rotated URL; the
+        // legacy mirror is re-derived from the entity instead.
+        let legacy = VodRepository::new(&pool)
+            .list(id, 10, 0, None, None, true, false, ContentSort::Default)
+            .await
+            .unwrap();
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].name, "Heat");
     }
 
     /// Opt-in live check of the same fetch, import, and SQLite commit path used

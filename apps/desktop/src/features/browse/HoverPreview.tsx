@@ -46,13 +46,18 @@ export interface HoverPreviewProps {
 function metaLine(item: BrowseItem, live: boolean): string {
   const parts: string[] = [];
   if (live && item.memberCount && item.memberCount > 1) parts.push(`${item.memberCount} channels`);
-  const year = item.vod?.year;
+  const year = item.movie?.year ?? item.vod?.year;
   if (year) parts.push(String(year));
   if (item.series) {
     const s = item.series.seasonCount;
     if (s) parts.push(`${s} season${s === 1 ? "" : "s"}`);
   }
-  const category = item.vod?.category ?? item.series?.category ?? item.channel?.category ?? null;
+  const category =
+    item.movie?.category ??
+    item.vod?.category ??
+    item.series?.category ??
+    item.channel?.category ??
+    null;
   if (category) parts.push(category);
   return parts.join("  ·  ");
 }
@@ -76,8 +81,9 @@ export function HoverPreview({
     setPos(clamp(anchor, width));
   }, [anchor, width]);
 
-  const backdrop = item.vod?.backdropUrl ?? item.series?.backdropUrl ?? item.posterUrl;
-  const overview = item.vod?.overview ?? item.series?.overview ?? null;
+  const backdrop =
+    item.movie?.backdropUrl ?? item.vod?.backdropUrl ?? item.series?.backdropUrl ?? item.posterUrl;
+  const overview = item.movie?.overview ?? item.vod?.overview ?? item.series?.overview ?? null;
   const meta = metaLine(item, live);
 
   return createPortal(

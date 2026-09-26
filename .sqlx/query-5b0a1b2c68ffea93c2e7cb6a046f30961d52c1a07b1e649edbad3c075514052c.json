@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE canonical_entities SET is_favorite = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "5b0a1b2c68ffea93c2e7cb6a046f30961d52c1a07b1e649edbad3c075514052c"
+}

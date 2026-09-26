@@ -143,6 +143,54 @@ export interface ContinueWatchingItem {
   watchedAt: number;
 }
 
+// ── Canonical media (P07: SourceRecord != CanonicalEntity != StreamVariant) ──
+// Secret-free: no stream/source URLs. Durable user state is addressed by
+// `entityId`; Rust selects the variant to play.
+
+export interface CanonicalMediaSummary {
+  entityId: string;
+  kind: "movie";
+  title: string;
+  /** Raw provider title of the representative variant; display only. */
+  sourceTitle: string;
+  year: number | null;
+  category: string | null;
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  overview: string | null;
+  isFavorite: boolean;
+  isInWatchlist: boolean;
+  addedAt: number | null;
+}
+
+export interface VariantSummary {
+  variantId: string;
+  sourceId: number;
+  sourceName: string;
+  label: string;
+  /** False while the provider no longer lists this variant. */
+  available: boolean;
+}
+
+export interface ResumeState {
+  positionSec: number;
+  durationSec: number | null;
+  completed: boolean;
+}
+
+export interface CanonicalMediaDetail extends CanonicalMediaSummary {
+  variants: VariantSummary[];
+  resume: ResumeState | null;
+}
+
+/** Transient player locator for the Rust-selected variant. */
+export interface MoviePlaybackTarget {
+  entityId: string;
+  variantId: string;
+  mediaKind: "vod";
+  mediaId: number;
+}
+
 // ── Import progress event ─────────────────────────────────────────────────────
 
 export type ImportStage =

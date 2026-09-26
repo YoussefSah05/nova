@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(\n                   (SELECT entity_id FROM stream_variants WHERE vod_item_id = ?),\n                   (SELECT s.entity_id FROM vod_items v\n                    JOIN stream_variants s\n                      ON s.source_id = v.source_id AND s.binding_key = v.binding_key\n                    WHERE v.id = ?)\n               ) as \"entity_id?: String\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "entity_id?: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "06c22f59d2e7ee06e5114b93fc1994b17ca6e5e858fe025ad05d1d9973cc3b92"
+}

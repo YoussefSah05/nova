@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.id as \"variant_id!: String\",\n                      s.source_id as \"source_id!: i64\",\n                      src.name as \"source_name!: String\",\n                      v.name as \"label?: String\",\n                      s.vod_item_id as \"vod_item_id?: i64\"\n               FROM stream_variants s\n               JOIN sources src ON src.id = s.source_id\n               LEFT JOIN vod_items v ON v.id = s.vod_item_id\n               WHERE s.entity_id = ?\n               ORDER BY s.vod_item_id IS NULL, s.vod_item_id, s.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "variant_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_name!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "label?: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "vod_item_id?: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "d530a43afabc770d4b0062d1bf6e0a300373355d13021860e6049d468cd1b41a"
+}

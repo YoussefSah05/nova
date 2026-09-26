@@ -6,6 +6,7 @@
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  CanonicalMediaSummary,
   Channel,
   ChannelGroup,
   ContentSort,
@@ -15,7 +16,9 @@ import type {
 } from "@/types";
 
 export type BrowseTab = "live" | "movies" | "series";
-export type BrowseKind = "live" | "vod" | "series";
+/// `movie` is a canonical entity (P07); `vod` remains for surfaces not yet
+/// migrated (semantic search results, which carry a legacy row).
+export type BrowseKind = "live" | "movie" | "vod" | "series";
 
 /// One catalog entry, normalized across the three content types so cards,
 /// rails, and the grid stay tab-agnostic. The original payload is retained so
@@ -43,6 +46,9 @@ export interface BrowseItem {
   channel?: Channel;
   vod?: VodItem;
   series?: SeriesSummary;
+  /// Canonical movie identity + DTO; user actions and playback use `entityId`.
+  entityId?: string;
+  movie?: CanonicalMediaSummary;
 }
 
 /// Superset of channel + content filters. `country` is ignored for movies/series
@@ -119,6 +125,23 @@ export function vodToItem(v: VodItem): BrowseItem {
   };
 }
 
+export function movieToItem(m: CanonicalMediaSummary): BrowseItem {
+  return {
+    key: `movie-${m.entityId}`,
+    kind: "movie",
+    // Canonical movies have no numeric identity; `entityId` addresses them.
+    id: 0,
+    title: m.title,
+    subtitle: [m.year?.toString(), m.category].filter(Boolean).join(" / ") || null,
+    posterUrl: m.posterUrl,
+    tvgId: null,
+    isFavorite: m.isFavorite,
+    isInWatchlist: m.isInWatchlist,
+    entityId: m.entityId,
+    movie: m,
+  };
+}
+
 export function seriesToItem(s: SeriesSummary): BrowseItem {
   return {
     key: `series-${s.sourceId}-${s.seriesTitle}`,
@@ -138,12 +161,12 @@ export function seriesToItem(s: SeriesSummary): BrowseItem {
 
 const LIST_COMMAND: Record<BrowseTab, string> = {
   live: "list_channels",
-  movies: "list_vod",
+  movies: "list_movies",
   series: "list_series",
 };
 const COUNT_COMMAND: Record<BrowseTab, string> = {
   live: "count_channels",
-  movies: "count_vod",
+  movies: "count_movies",
   series: "count_series",
 };
 const CATEGORIES_COMMAND: Record<BrowseTab, string> = {
@@ -222,11 +245,12 @@ async function fetchItems(
         (item) => movieVersionKey(item) ?? item.dedupGroup ?? null
       );
     }
-    // Gather the same film's language/source copies under one card (title-based,
-    // from the raw name); fall back to the embeddings group when no real title.
+    // Canonical movies (one card per entity). Presentation-only: the same
+    // film's language/source copies are still gathered under one card by raw
+    // title until entity resolution consolidates them server-side.
     return collapseByKey(
-      counted(await invoke<VodItem[]>(LIST_COMMAND.movies, args)).map(vodToItem),
-      (item) => movieVersionKey(item) ?? item.dedupGroup ?? null
+      counted(await invoke<CanonicalMediaSummary[]>(LIST_COMMAND.movies, args)).map(movieToItem),
+      (item) => movieVersionKey(item)
     );
   }
   // Series: plain free-text search → hybrid (semantic + keyword) retrieval.
@@ -353,7 +377,7 @@ const TRAILING_LANG = new Set([
 /// tag; keeps numbers so sequels/parts stay distinct. `null` when no real title
 /// remains (e.g. year-only names) so those never group.
 function movieVersionKey(item: BrowseItem): string | null {
-  const raw = item.vod?.name ?? item.title;
+  const raw = item.movie?.sourceTitle ?? item.vod?.name ?? item.title;
   // Everything after the last '|' drops "FR|", "EN-AR|", "NF-FR| FR|" prefixes.
   const afterPipe = raw.includes("|") ? raw.slice(raw.lastIndexOf("|") + 1) : raw;
   const unbracketed = afterPipe.replace(/[([{][^)\]}]*[)\]}]/g, " ");

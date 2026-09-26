@@ -148,3 +148,95 @@ async fn reused_catalog_id_does_not_relabel_an_old_transcript() {
     assert_eq!(old, old_again, "stable cache survives catalog deletion");
     pool.close().await;
 }
+
+#[tokio::test]
+async fn upgrade_backfills_canonical_movies_preserving_user_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("profile.db");
+    let pool = SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true),
+    )
+    .await
+    .unwrap();
+    let mut old: Migrator = sqlx::migrate!("./migrations/profile");
+    old.migrations =
+        std::borrow::Cow::Owned(old.iter().filter(|m| m.version <= 20).cloned().collect());
+    old.run(&pool).await.unwrap();
+    let source = SourceRepository::new(&pool)
+        .create("m3u", "legacy", "https://example.invalid/list")
+        .await
+        .unwrap()
+        .id;
+    // Representative pre-0021 catalog: favourite, watchlisted, resumed,
+    // completed and untouched movies, plus a duplicate locator.
+    for (id, name, url, fav, wl) in [
+        (10, "Heat", "https://example.invalid/heat", 1, 0),
+        (11, "Alien", "https://example.invalid/alien", 0, 1),
+        (12, "Ran", "https://example.invalid/ran", 0, 0),
+        (13, "Up", "https://example.invalid/up", 0, 0),
+        (14, "Heat (copy)", "https://example.invalid/heat", 0, 0),
+    ] {
+        sqlx::query("INSERT INTO vod_items (id, source_id, name, stream_url, is_favorite, is_in_watchlist) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(id).bind(source).bind(name).bind(url).bind(fav).bind(wl)
+            .execute(&pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed) VALUES ('vod', 12, 300, 6000, 5, 0), ('vod', 13, 5400, 5400, 6, 1)")
+        .execute(&pool).await.unwrap();
+    pool.close().await;
+
+    for _ in 0..2 {
+        // Upgrade, then reopen: the data step must be idempotent.
+        let upgraded = init_profile_db(path.to_str().unwrap()).await.unwrap();
+        let repo = nova_storage::CanonicalRepository::new(&upgraded);
+        let movies = repo
+            .list_movies(
+                source,
+                50,
+                0,
+                &nova_storage::MovieFilters::default(),
+                nova_core::ContentSort::Default,
+            )
+            .await
+            .unwrap();
+        let titles: Vec<_> = movies.iter().map(|m| m.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["Heat", "Alien", "Ran", "Up"],
+            "duplicate locator collapses"
+        );
+        let by = |t: &str| movies.iter().find(|m| m.title == t).unwrap();
+        assert!(by("Heat").is_favorite && !by("Heat").is_in_watchlist);
+        assert!(by("Alien").is_in_watchlist && !by("Alien").is_favorite);
+        let ran = repo.resume(&by("Ran").entity_id).await.unwrap().unwrap();
+        assert_eq!((ran.position_sec, ran.completed), (300.0, false));
+        let up = repo.resume(&by("Up").entity_id).await.unwrap().unwrap();
+        assert!(up.completed, "completion preserved");
+        let counts: (i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM canonical_entities), (SELECT COUNT(*) FROM stream_variants), (SELECT COUNT(*) FROM entity_watch_state)",
+        )
+        .fetch_one(&upgraded)
+        .await
+        .unwrap();
+        assert_eq!(counts, (4, 4, 2));
+        // Legacy rows and history are untouched (additive migration).
+        let legacy: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM watch_history")
+            .fetch_one(&upgraded)
+            .await
+            .unwrap();
+        assert_eq!(legacy, 2);
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&upgraded)
+            .await
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        let fk: Vec<(String,)> = sqlx::query_as("PRAGMA foreign_key_check")
+            .fetch_all(&upgraded)
+            .await
+            .unwrap();
+        assert!(fk.is_empty());
+        upgraded.close().await;
+    }
+}

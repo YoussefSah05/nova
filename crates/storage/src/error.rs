@@ -12,6 +12,8 @@ pub enum StorageError {
     NotFound,
     #[error("invalid model registry record")]
     InvalidModelRecord,
+    #[error("invalid canonical catalog record")]
+    InvalidCanonicalRecord,
     #[error("model registry contract error: {0}")]
     ModelContract(#[from] nova_core::models::ModelContractError),
 }

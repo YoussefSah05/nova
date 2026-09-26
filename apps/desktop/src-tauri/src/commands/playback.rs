@@ -369,6 +369,8 @@ pub async fn record_watch_progress(
     state: State<'_, AppState>,
 ) -> Result<(), ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    // Movie progress lands on the canonical entity (repository write-through);
+    // the player still addresses the transient row.
     WatchHistoryRepository::new(&pool)
         .record_progress(
             &media_kind,

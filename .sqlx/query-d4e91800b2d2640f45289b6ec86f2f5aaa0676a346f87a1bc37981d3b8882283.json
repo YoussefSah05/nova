@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MIN(v.id) as \"vod_item_id!: i64\",\n                      v.binding_key as \"binding_key!: String\"\n               FROM vod_items v\n               WHERE v.source_id = ? AND v.binding_key IS NOT NULL\n                 AND NOT EXISTS (\n                   SELECT 1 FROM stream_variants s\n                   WHERE s.source_id = v.source_id AND s.binding_key = v.binding_key\n                 )\n               GROUP BY v.binding_key",
+  "describe": {
+    "columns": [
+      {
+        "name": "vod_item_id!: i64",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "binding_key!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      null,
+      true
+    ]
+  },
+  "hash": "d4e91800b2d2640f45289b6ec86f2f5aaa0676a346f87a1bc37981d3b8882283"
+}

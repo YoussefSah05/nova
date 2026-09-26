@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Channel, ChannelGroup, Profile, Source, VodItem } from "@/types";
+import type { CanonicalMediaSummary, Channel, ChannelGroup, Profile, Source } from "@/types";
 import { Home } from "./Home";
 
 // The browse grid is windowed (@tanstack/react-virtual), rails lazy-mount via
@@ -130,14 +130,17 @@ function groupFrom(c: Channel): ChannelGroup {
   };
 }
 
-function setupInvoke(channelsFor: (args: InvokeArgs) => Channel[], movies: VodItem[] = []) {
+function setupInvoke(
+  channelsFor: (args: InvokeArgs) => Channel[],
+  movies: CanonicalMediaSummary[] = []
+) {
   mocks.invoke.mockImplementation((command: string, args?: InvokeArgs): Promise<unknown> => {
     switch (command) {
       case "list_sources":
         return Promise.resolve(sources);
       case "count_channels":
         return Promise.resolve(250);
-      case "count_vod":
+      case "count_movies":
         return Promise.resolve(12);
       case "count_series":
         return Promise.resolve(3);
@@ -162,10 +165,16 @@ function setupInvoke(channelsFor: (args: InvokeArgs) => Channel[], movies: VodIt
       case "semantic_search_catalog":
       case "semantic_search_series":
         return Promise.resolve([]);
-      case "list_vod":
+      case "list_movies":
         return Promise.resolve(movies);
-      case "set_vod_favorite":
-      case "set_vod_in_watchlist":
+      case "get_movie": {
+        const found = movies.find((m) => m.entityId === args?.entityId);
+        return found
+          ? Promise.resolve({ ...found, variants: [], resume: null })
+          : Promise.reject(new Error("movie not found"));
+      }
+      case "set_movie_favorite":
+      case "set_movie_in_watchlist":
         return Promise.resolve();
       case "list_channels":
       case "list_series":
@@ -231,22 +240,18 @@ describe("Home", () => {
       () => [],
       [
         {
-          id: 7,
-          sourceId: 1,
-          name: "Review Movie",
-          cleanTitle: null,
+          entityId: "mov-7",
+          kind: "movie",
+          title: "Review Movie",
+          sourceTitle: "Review Movie",
           year: 2024,
-          logoUrl: null,
-          streamUrl: "http://127.0.0.1:9/fixture",
           category: "Movies",
-          isFavorite: false,
-          isInWatchlist: false,
-          addedAt: null,
-          dedupGroup: null,
-          canonicalTitle: null,
           posterUrl: null,
           backdropUrl: null,
           overview: null,
+          isFavorite: false,
+          isInWatchlist: false,
+          addedAt: null,
         },
       ]
     );
@@ -264,5 +269,20 @@ describe("Home", () => {
     expect(
       await screen.findByRole("button", { name: "Remove Review Movie from watchlist" })
     ).toHaveAttribute("aria-pressed", "true");
+    // User state is addressed to the canonical entity, never a provider row.
+    expect(mocks.invoke).toHaveBeenCalledWith("set_movie_favorite", {
+      profileId: profile.id,
+      entityId: "mov-7",
+      isFavorite: true,
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith("set_movie_in_watchlist", {
+      profileId: profile.id,
+      entityId: "mov-7",
+      inWatchlist: true,
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith("get_movie", {
+      profileId: profile.id,
+      entityId: "mov-7",
+    });
   });
 });

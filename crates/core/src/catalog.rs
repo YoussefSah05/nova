@@ -1,4 +1,5 @@
-//! Additive canonical-catalog contracts. Existing imports do not consume these yet.
+//! Additive canonical-catalog contracts. Movies are served through canonical
+//! entities and stream variants (`media`); other kinds still use legacy rows.
 //!
 //! Source evidence is never a canonical identity. IDs are allocated by a future
 //! identity/persistence owner, not generated from titles or provider URLs.
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod fingerprint;
 pub mod intelligence;
+pub mod media;
 pub mod snapshot;
 
 pub const MAX_FIELD_BYTES: usize = 16 * 1024;

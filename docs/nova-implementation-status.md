@@ -1007,3 +1007,151 @@ Afterwards the concurrency modules passed 25 consecutive runs.
 `SourceRecord != CanonicalEntity != StreamVariant` (master-plan M3.1/M3.2
 with the minimum M9 secret-free DTO contract), using an additive migration.
 P06 did not start it.
+
+## P07 — canonical catalog vertical slice (movies)
+
+Updated: 2026-09-26. Branch `feat/p07-canonical-catalog` off `main` at
+`7ce9d95`. Scope: evolve the catalog toward
+`SourceRecord != CanonicalEntity != StreamVariant` for one coherent slice:
+movie browse → detail → favorite/watchlist → play/resume (master-plan
+M3.1/M3.2 plus the minimum M9 secret-free DTO contract). Provider ingestion was
+not rewritten, and there is no parallel catalog.
+
+### Mapping before changes
+
+| Concern | Before P07 (source evidence) |
+| --- | --- |
+| Source record | `vod_items` row (`VodRepository`), numeric ID, deleted/reinserted on every refresh (`snapshot_and_clear`). |
+| Provider types | `ParsedEntry` (M3U/Xtream) → `VodItem` in `push_entry`; the Xtream `stream_id` was dropped. |
+| User state | `vod_items.is_favorite`/`is_in_watchlist` on the provider row; resume/completion in `watch_history(media_kind='vod', media_id=row)`, cascaded away by trigger `catalog_state_vod_ad`. |
+| Refresh continuity | Snapshot/restore keyed by exact credential-bearing `stream_url`, so Xtream credential rotation dropped favorites, watchlist and resume. |
+| Tauri/React DTOs | `VodItem` (with `streamUrl`) through `list_vod`; favorites/playback by row ID; React invents version groups. |
+| Existing contracts | `nova_core::catalog` already had opaque `EntityId`/`VariantId`/`SourceRecordId` and `StreamVariant`, plus framed-SHA-256 `Fingerprint`, all unused by the app. |
+
+### Implemented contract
+
+- **SourceRecord:** `vod_items` stays the provider record and the end of
+  ingestion. `ParsedEntry.upstream_id` is additive: Xtream sets
+  `xtream:vod:<stream_id>`, M3U sets none. At the compiler boundary
+  (`VodRepository::insert_batch_tx`), each row gets a secret-free
+  `binding_key` (versioned framed SHA-256 of the stable ID, else of the
+  locator) and a `locator_key`. The provider ID is not persisted, and
+  `VodItem.upstream_id` is `#[serde(skip)]`.
+- **CanonicalEntity:** `canonical_entities` (opaque `mov-…` `EntityId`) owns
+  favorite, watchlist and `entity_watch_state` (resume, completion, caption
+  mode). No provider row or source deletion removes an entity or its state.
+- **StreamVariant:** `stream_variants` (opaque `var-…` `VariantId`), unique per
+  `(source_id, binding_key)`. `vod_item_id` points at the current record and
+  is `ON DELETE SET NULL`, so refresh unbinds and the compiler re-binds.
+- **Catalog compiler:** `CanonicalRepository::compile_movies_tx` runs inside the
+  existing import transaction, after rows and the legacy restore. It re-binds
+  by key, upgrades locator-keyed variants to stable keys in place, creates
+  entities only for unclaimed keys (seeded from legacy flags/history), refreshes
+  display title/year, and re-derives the legacy flag mirror from the entity. A
+  failed import rolls back and keeps the previous bindings. Only records sharing
+  a key within one source are unified. Cross-source/duplicate consolidation is
+  entity resolution (M3.4/M3.5) and is deliberately not attempted, to avoid
+  false merges.
+- **Canonical API** (`commands/movies.rs`): `list_movies`, `count_movies`,
+  `get_movie`, `set_movie_favorite`, `set_movie_in_watchlist`,
+  `resolve_movie_playback`. DTOs (`nova_core::catalog::media`) carry no stream
+  or source URLs. Rust selects the variant (a requested variant only if it
+  belongs to the entity) and returns a transient player locator. Progress
+  written against it lands on the entity.
+- **Single source of truth:** the legacy `VodRepository::set_favorite` /
+  `set_in_watchlist` and `WatchHistoryRepository::record_progress` /
+  `resume_position` for `vod` write through to (or read from) the owning
+  entity in the storage layer. Unmigrated surfaces (semantic search results,
+  player progress, Continue Watching cards) therefore stay consistent.
+  Continue Watching movies come from entity state.
+- **Frontend slice:** the Movies tab, counts, rails, hero, hover preview, detail
+  (via `get_movie`, including a "Resume · m:ss" hint) and favorite/watchlist use
+  the canonical DTOs and `entityId`. Play resolves through Rust. The existing
+  player is unchanged.
+
+### Migration
+
+`0021_canonical_movies.sql` is additive only: new tables `canonical_entities`,
+`stream_variants`, `entity_watch_state`, and nullable
+`vod_items.binding_key`/`locator_key` with indexes. Nothing is dropped or
+reinterpreted, and legacy columns and `watch_history` rows remain as a mirror.
+The data step (`backfill_movies`, run by `init_profile_db` after SQL
+migrations) keys pre-0021 rows in 1,000-row transactions and compiles pending
+sources, seeding entities from legacy favorites, watchlist, resume and
+completion. It is idempotent and about 0.1 s on reopen at 30k movies. It
+follows ADD → MIGRATE → VERIFY. Cutover is this movie slice only; removing
+legacy columns is later.
+
+### Regression coverage
+
+16 new tests plus updated frontend tests:
+
+- Core (2): binding keys are stable, namespaced and credential-free across
+  rotation; canonical DTO JSON contains no locators.
+- Storage (12): one entity/variant per record and idempotent recompile; state
+  survives refresh and credential rotation with a changed row ID, and never
+  leaks onto a reused ID; completion is preserved and hidden from Continue
+  Watching; a temporarily dropped item keeps its entity and state and returns;
+  locator→stable-key upgrade keeps identity; duplicate records share an
+  entity; distinct items with the same title are never merged; source deletion
+  keeps entities and state; filters/sort/count/paging use entity state; variant
+  selection never plays another entity's variant; legacy row writes land on the
+  entity and survive refresh; upgrade chain from a representative migration-20
+  database preserves every kind of state, is idempotent, and passes
+  `integrity_check`/`foreign_key_check`.
+- Desktop pipeline (1): through the real `run_import`, a failed refresh keeps
+  the previous binding, and a credential-rotated refresh keeps entity, favorite
+  and resume.
+- Frontend: movies are listed through `list_movies` as `movie` items keyed by
+  `entityId` with no URLs; detail and toggles call `get_movie` /
+  `set_movie_*` with the entity ID.
+
+The existing `failed_refresh_preserves_catalog_flags_and_resume` test caught a
+real regression during development: a legacy direct repository write bypassed
+the entity and was overwritten by the mirror on refresh. The fix moved the
+write-through into the storage repositories, so every caller is covered.
+
+Scale probe (`scale_probe_compile_30k`, ignored, release build): at 30k movies
+the insert alone is 0.46 s, the first compile 0.97 s, a steady-state refresh
+compile about 0.6 s, a deep browse page 46 ms, and an entity lookup 20 µs.
+
+### Validation commands/results
+
+- `just test`: pass: 343 Rust tests/doctests, 0 failed, 4 ignored (3
+  pre-existing plus the opt-in scale probe); 30 frontend tests.
+- `just lint` (Clippy all targets `-D warnings` + ESLint), `just check`,
+  `just typecheck`: pass.
+- `pnpm -C apps/desktop build`: pass, with the existing large-chunk warning.
+- `cargo fmt --all -- --check`, `git diff --check`, Prettier on changed
+  frontend files: pass.
+- SQLx offline metadata regenerated with `cargo sqlx prepare --workspace` against
+  a schema built from every app/profile migration. Seven stale query files
+  were pruned: four superseded by P07 query changes, three pre-P07 job queries
+  superseded in P06.
+
+### Remaining known gaps
+
+- One entity per provider item per source. The same film from two sources, or
+  language/quality copies, are separate entities. React still gathers copies
+  by raw title for presentation (`movieVersionKey`) until entity resolution
+  (M3.4/M3.5) consolidates server-side. There is no alias/merge/split history
+  yet (M3.6).
+- M3U items have no stable upstream ID. A changed M3U URL creates a new entity,
+  matching pre-P07 URL-keyed behavior. Deleting and re-adding a source creates
+  new entities (old ones are retained, unlisted, with their state).
+- The player still addresses the transient `('vod', row)` locator returned by
+  Rust. A variant-addressed PlaybackCoordinator is M6.
+- Semantic search, the Command palette and Continue Watching cards still carry
+  legacy `VodItem`/row DTOs (consistent through write-through). Series, live and
+  EPG are unmigrated. Legacy serving DTOs still expose `streamUrl`.
+- Artwork URLs come from the provider or TMDB and are treated as public display
+  assets.
+- The first large import pays about 1 s of compile time. No generation/snapshot
+  publication yet (M3.7).
+
+### Next milestone
+
+Next in the plan: M3.3 versioned fingerprints (unchanged/changed/new/deleted
+classification for reuse), then candidate blocking and entity resolution to
+consolidate movie variants, or the next M9 vertical slice (series). P07 did not
+start them.

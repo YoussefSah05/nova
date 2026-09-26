@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE vod_items SET binding_key = ?, locator_key = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "068bf6ef8dedbfd2e0773ee8146c783a9ed537ddcfeb791f024ca76583c9b7e8"
+}

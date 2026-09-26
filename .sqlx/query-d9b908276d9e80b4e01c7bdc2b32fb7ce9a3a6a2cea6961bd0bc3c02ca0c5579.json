@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE stream_variants SET binding_key = ?, vod_item_id = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "d9b908276d9e80b4e01c7bdc2b32fb7ce9a3a6a2cea6961bd0bc3c02ca0c5579"
+}

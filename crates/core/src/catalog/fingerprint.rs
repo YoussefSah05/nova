@@ -101,3 +101,14 @@ pub fn locator_fingerprint(locator: &[u8], credential_revision: &[u8]) -> Finger
     field(&mut hash, credential_revision);
     Fingerprint::from_digest(hash.finalize().into())
 }
+
+/// Compiler binding digest for a provider-scoped key (`namespace` separates a
+/// stable upstream ID from a locator). Callers scope the result by source.
+/// Not a canonical ID and not credential protection.
+pub fn binding_fingerprint(namespace: &str, value: &[u8]) -> Fingerprint {
+    let mut hash = Sha256::new();
+    field(&mut hash, b"nova.binding.v1");
+    field(&mut hash, namespace.as_bytes());
+    field(&mut hash, value);
+    Fingerprint::from_digest(hash.finalize().into())
+}

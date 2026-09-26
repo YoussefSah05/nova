@@ -74,6 +74,9 @@ pub struct ParsedEntry {
     pub episode: Option<u8>,
     /// Human-readable category extracted from `group_title`, e.g. `"GERMANY MOVIES"`.
     pub category: Option<String>,
+    /// Provider-scoped stable item ID (e.g. `xtream:vod:123`) when the
+    /// provider has one. Never a URL; consumed only by the catalog compiler.
+    pub upstream_id: Option<String>,
 }
 
 // ── Storage-mapped types (returned by repositories) ──────────────────────────
@@ -135,6 +138,10 @@ pub struct VodItem {
     pub poster_url: Option<String>,
     pub backdrop_url: Option<String>,
     pub overview: Option<String>,
+    /// Provider-scoped stable ID from ingestion. Compiler input only: never
+    /// serialized across IPC and not persisted on read paths.
+    #[serde(skip)]
+    pub upstream_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

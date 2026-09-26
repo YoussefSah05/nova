@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO entity_watch_state\n                   (entity_id, position_sec, duration_sec, watched_at, completed, caption_mode)\n               SELECT s.entity_id, wh.position_sec, wh.duration_sec, wh.watched_at,\n                      wh.completed, wh.caption_mode\n               FROM stream_variants s\n               JOIN watch_history wh ON wh.media_kind = 'vod' AND wh.media_id = s.vod_item_id\n               WHERE s.source_id = ?\n               ORDER BY wh.watched_at ASC\n               ON CONFLICT(entity_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "2fa824690c0659b0ad2cb036830794077e7b3614b59355332c59caf8f7066d1f"
+}

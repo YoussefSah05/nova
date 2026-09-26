@@ -1,0 +1,156 @@
+//! Canonical media read/action contracts and compiler binding keys.
+//!
+//! `SourceRecord != CanonicalEntity != StreamVariant`: these DTOs are what the
+//! application layer exposes for canonical media. They are secret-free by
+//! construction — no stream URLs, source URLs, credentials or provider row
+//! locators except the transient playback target resolved by Rust.
+
+use serde::{Deserialize, Serialize};
+
+use super::fingerprint::binding_fingerprint;
+use super::{ContentKind, EntityId, VariantId};
+
+/// Binding key from a provider-scoped stable ID (e.g. `xtream:vod:123`).
+/// Survives credential rotation and URL changes of the same upstream item.
+pub fn upstream_binding_key(upstream_id: &str) -> String {
+    format!(
+        "u1-{}",
+        binding_fingerprint("upstream", upstream_id.as_bytes()).to_hex()
+    )
+}
+
+/// Binding key from a stream locator. Used when no stable ID is known, and to
+/// re-bind variants compiled before one was available.
+pub fn locator_binding_key(locator: &str) -> String {
+    format!(
+        "l1-{}",
+        binding_fingerprint("locator", locator.as_bytes()).to_hex()
+    )
+}
+
+/// Preferred binding key for a source record.
+pub fn binding_key(upstream_id: Option<&str>, locator: &str) -> String {
+    match upstream_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => upstream_binding_key(id),
+        None => locator_binding_key(locator),
+    }
+}
+
+/// A canonical media card. Artwork URLs are public display assets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalMediaSummary {
+    pub entity_id: EntityId,
+    pub kind: ContentKind,
+    pub title: String,
+    /// Raw provider title of the representative variant (quality/version
+    /// labels such as "FHD" or "MULTI"); display only, never identity.
+    pub source_title: String,
+    pub year: Option<i64>,
+    pub category: Option<String>,
+    pub poster_url: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub overview: Option<String>,
+    pub is_favorite: bool,
+    pub is_in_watchlist: bool,
+    pub added_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantSummary {
+    pub variant_id: VariantId,
+    pub source_id: i64,
+    pub source_name: String,
+    pub label: String,
+    /// False while the provider no longer lists this variant.
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeState {
+    pub position_sec: f64,
+    pub duration_sec: Option<f64>,
+    pub completed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalMediaDetail {
+    #[serde(flatten)]
+    pub summary: CanonicalMediaSummary,
+    pub variants: Vec<VariantSummary>,
+    pub resume: Option<ResumeState>,
+}
+
+/// Rust-selected playback target. `media_kind`/`media_id` are a transient
+/// locator for the current catalog generation, used by the existing player;
+/// durable state is keyed by the entity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoviePlaybackTarget {
+    pub entity_id: EntityId,
+    pub variant_id: VariantId,
+    pub media_kind: String,
+    pub media_id: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binding_keys_are_stable_namespaced_and_secret_free() {
+        let url = "http://host/movie/alice/s3cret/42.mkv";
+        let locator = locator_binding_key(url);
+        assert_eq!(locator, locator_binding_key(url));
+        assert!(locator.starts_with("l1-") && locator.len() == 67);
+        assert!(!locator.contains("s3cret") && !locator.contains("alice"));
+        // A stable ID is independent of the (credential-bearing) locator.
+        let rotated = "http://host/movie/alice/n3w/42.mkv";
+        assert_eq!(
+            binding_key(Some("xtream:vod:42"), url),
+            binding_key(Some("xtream:vod:42"), rotated)
+        );
+        assert_ne!(binding_key(None, url), binding_key(None, rotated));
+        // Namespaces never collide even for identical input bytes.
+        assert_ne!(upstream_binding_key("x"), locator_binding_key("x"));
+        assert_eq!(binding_key(Some("  "), url), locator);
+    }
+
+    #[test]
+    fn dto_serialization_contains_no_locators() {
+        let summary = CanonicalMediaSummary {
+            entity_id: EntityId::new("mov-1").unwrap(),
+            kind: ContentKind::Movie,
+            title: "Heat".into(),
+            source_title: "EN - Heat (1995) FHD".into(),
+            year: Some(1995),
+            category: None,
+            poster_url: None,
+            backdrop_url: None,
+            overview: None,
+            is_favorite: true,
+            is_in_watchlist: false,
+            added_at: None,
+        };
+        let detail = CanonicalMediaDetail {
+            summary,
+            variants: vec![VariantSummary {
+                variant_id: VariantId::new("var-1").unwrap(),
+                source_id: 1,
+                source_name: "Provider".into(),
+                label: "EN - Heat (1995) FHD".into(),
+                available: true,
+            }],
+            resume: None,
+        };
+        let json = serde_json::to_string(&detail).unwrap();
+        assert!(json.contains("\"entityId\":\"mov-1\""));
+        assert!(json.contains("\"kind\":\"movie\""));
+        for forbidden in ["streamUrl", "url\"", "http"] {
+            assert!(!json.contains(forbidden), "{forbidden} in {json}");
+        }
+    }
+}

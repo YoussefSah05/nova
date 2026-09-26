@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE canonical_entities SET is_in_watchlist = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "39fdbcf36d7bca1206f43e828d47ae519d0ce21deb828b703e971975b7b941d5"
+}

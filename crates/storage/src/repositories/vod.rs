@@ -1,7 +1,10 @@
+use nova_core::catalog::media::{binding_key, locator_binding_key};
+use nova_core::catalog::EntityId;
 use nova_core::{now_ts, ContentSort, VodItem};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
+use crate::repositories::canonical::CanonicalRepository;
 use crate::repositories::enrich::{EnrichUpdate, TmdbQuery, TmdbWrite, UnenrichedRow};
 
 pub struct VodRepository<'a> {
@@ -26,9 +29,13 @@ impl<'a> VodRepository<'a> {
     ) -> Result<(), StorageError> {
         let added_at = now_ts();
         for v in entries {
+            // Catalog-compiler boundary: secret-free binding keys are derived
+            // here; the provider ID itself is not persisted.
+            let binding_key = binding_key(v.upstream_id.as_deref(), &v.stream_url);
+            let locator_key = locator_binding_key(&v.stream_url);
             sqlx::query!(
-                "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at, binding_key, locator_key)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 v.source_id,
                 v.name,
                 v.clean_title,
@@ -37,6 +44,8 @@ impl<'a> VodRepository<'a> {
                 v.stream_url,
                 v.category,
                 added_at,
+                binding_key,
+                locator_key,
             )
             .execute(&mut **tx)
             .await?;
@@ -148,6 +157,7 @@ impl<'a> VodRepository<'a> {
                 poster_url: r.poster_url,
                 backdrop_url: r.backdrop_url,
                 overview: r.overview,
+                upstream_id: None,
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
@@ -184,6 +194,7 @@ impl<'a> VodRepository<'a> {
                 poster_url: r.poster_url,
                 backdrop_url: r.backdrop_url,
                 overview: r.overview,
+                upstream_id: None,
             })
             .collect(),
         };
@@ -231,6 +242,7 @@ impl<'a> VodRepository<'a> {
                 poster_url: r.poster_url,
                 backdrop_url: r.backdrop_url,
                 overview: r.overview,
+                upstream_id: None,
             })
             .collect())
     }
@@ -270,27 +282,56 @@ impl<'a> VodRepository<'a> {
         Ok(row.n)
     }
 
+    /// Legacy row-addressed write. The canonical entity owns the flag, so it
+    /// is written through to the row's entity and its whole mirror.
     pub async fn set_favorite(&self, id: i64, is_favorite: bool) -> Result<(), StorageError> {
         let flag: i64 = if is_favorite { 1 } else { 0 };
+        let mut tx = self.pool.begin().await?;
+        let entity = CanonicalRepository::entity_for_vod_tx(&mut tx, id).await?;
+        let entity = entity.as_ref().map(EntityId::as_str);
         sqlx::query!(
-            "UPDATE vod_items SET is_favorite = ? WHERE id = ?",
+            "UPDATE canonical_entities SET is_favorite = ? WHERE id = ?",
+            flag,
+            entity,
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query!(
+            r#"UPDATE vod_items SET is_favorite = ?
+               WHERE id = ? OR id IN (SELECT vod_item_id FROM stream_variants WHERE entity_id = ?)"#,
             flag,
             id,
+            entity,
         )
-        .execute(self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
+    /// Legacy row-addressed write, written through like [`Self::set_favorite`].
     pub async fn set_in_watchlist(&self, id: i64, in_watchlist: bool) -> Result<(), StorageError> {
         let flag: i64 = if in_watchlist { 1 } else { 0 };
+        let mut tx = self.pool.begin().await?;
+        let entity = CanonicalRepository::entity_for_vod_tx(&mut tx, id).await?;
+        let entity = entity.as_ref().map(EntityId::as_str);
         sqlx::query!(
-            "UPDATE vod_items SET is_in_watchlist = ? WHERE id = ?",
+            "UPDATE canonical_entities SET is_in_watchlist = ? WHERE id = ?",
+            flag,
+            entity,
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query!(
+            r#"UPDATE vod_items SET is_in_watchlist = ?
+               WHERE id = ? OR id IN (SELECT vod_item_id FROM stream_variants WHERE entity_id = ?)"#,
             flag,
             id,
+            entity,
         )
-        .execute(self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 

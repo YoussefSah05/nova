@@ -15,12 +15,13 @@ pub mod snapshots;
 pub use db::{init_app_db, init_profile_db};
 pub use error::StorageError;
 pub use repositories::{
-    from_blob, to_blob, CaptionStyleRepository, ChannelRepository, EmbeddingRepository,
-    EnrichUpdate, EpgSource, EpgSourcesRepository, ExternalLibraryRecord, ExternalRegisteredModel,
-    Job, JobRepository, ModelRepository, NowAndNext, PlaybackRepository, ProfileRepository,
-    ProfileSettingsRepository, ProgramsRepository, RegisteredModel, ResolvedStreamUrl,
-    ResumePosition, SearchHit, SearchRepository, SeriesRepository, SeriesTmdbQuery,
-    SeriesTmdbWrite, SourceRepository, SourceSegment, StoredTranscript, TmdbCacheRepository,
-    TmdbQuery, TmdbWrite, TranscriptLine, TranscriptRepository, TranslationRepository,
-    TranslationRow, UnenrichedRow, VodRepository, WatchHistoryRepository, WatchSnapshot,
+    from_blob, to_blob, CanonicalRepository, CaptionStyleRepository, ChannelRepository,
+    CompileStats, EmbeddingRepository, EnrichUpdate, EpgSource, EpgSourcesRepository,
+    ExternalLibraryRecord, ExternalRegisteredModel, Job, JobRepository, ModelRepository,
+    MovieFilters, NowAndNext, PlaybackRepository, ProfileRepository, ProfileSettingsRepository,
+    ProgramsRepository, RegisteredModel, ResolvedStreamUrl, ResumePosition, SearchHit,
+    SearchRepository, SeriesRepository, SeriesTmdbQuery, SeriesTmdbWrite, SourceRepository,
+    SourceSegment, StoredTranscript, TmdbCacheRepository, TmdbQuery, TmdbWrite, TranscriptLine,
+    TranscriptRepository, TranslationRepository, TranslationRow, UnenrichedRow, VodRepository,
+    WatchHistoryRepository, WatchSnapshot,
 };

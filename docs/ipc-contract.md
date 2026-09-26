@@ -25,6 +25,12 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `list_vod` | `{ profileId, sourceId, limit, offset, filters? }` | `VodItem[]` | 3 |
 | `count_vod` | `{ profileId, sourceId, filters? }` | `number` | 3 |
 | `list_vod_categories` | `{ profileId, sourceId }` | `string[]` | 3 |
+| `list_movies` | `{ profileId, sourceId, limit, offset, filters? }` | `CanonicalMediaSummary[]` (one per canonical entity with an available variant; secret-free) | P07 |
+| `count_movies` | `{ profileId, sourceId, filters? }` | `number` | P07 |
+| `get_movie` | `{ profileId, entityId }` | `CanonicalMediaDetail` (summary + `variants[]` + entity `resume`) | P07 |
+| `set_movie_favorite` | `{ profileId, entityId, isFavorite }` | `void` | P07 |
+| `set_movie_in_watchlist` | `{ profileId, entityId, inWatchlist }` | `void` | P07 |
+| `resolve_movie_playback` | `{ profileId, entityId, variantId? }` | `MoviePlaybackTarget { entityId, variantId, mediaKind: 'vod', mediaId }` (Rust-selected variant; transient locator) | P07 |
 | `list_series` | `{ profileId, sourceId, filters? }` | `SeriesSummary[]` | 3 |
 | `count_series` | `{ profileId, sourceId, filters? }` | `number` | 3 |
 | `list_series_categories` | `{ profileId, sourceId }` | `string[]` | 3 |
@@ -131,6 +137,27 @@ Import progress may report `stage: "queued"` and enrichment progress
 `stage: "queued"` while work waits for resources; enrichment reports
 `stage: "cancelled"` when `delete_source` cancels it. Repeated requests for the
 same queued work coalesce into one job.
+
+### Canonical movies (P07)
+
+Movies are the first `SourceRecord != CanonicalEntity != StreamVariant` slice.
+`vod_items` rows are provider source records, replaced on every refresh. The
+import transaction's catalog compiler binds each row to a `StreamVariant` by a
+source-scoped, secret-free binding key: a digest of the Xtream stream ID when
+known, otherwise of the locator. Each variant belongs to a canonical entity
+(`entityId`, opaque), which owns favorite, watchlist, resume and completion.
+Identity and user state therefore survive refresh, row-ID reuse and Xtream
+credential rotation. An item the provider temporarily drops keeps its entity
+and state until it returns. The canonical DTOs carry no stream or source URLs.
+
+The movie browse, detail, favorite/watchlist and play paths use the commands
+above. Legacy `list_vod`, `set_vod_*`, `record_watch_progress` and
+`get_resume_position` stay for unmigrated surfaces (semantic search and
+Continue Watching cards address a row). Movie writes and reads through them are
+routed to the owning entity by the storage layer; the per-row columns and
+`watch_history` rows are a compatibility mirror. The compiler merges only
+records sharing a binding key within one source. Cross-source or duplicate
+consolidation is entity resolution and is not performed.
 
 Browse filter payloads use camelCase keys from the frontend:
 

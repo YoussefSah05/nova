@@ -2,6 +2,7 @@ use nova_core::{now_ts, ContinueWatchingItem};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
+use crate::repositories::canonical::CanonicalRepository;
 
 /// A `watch_history` row captured before a refresh, keyed by the media's
 /// `stream_url` so it can be re-pointed at the new row IDs after re-import.
@@ -55,6 +56,22 @@ impl<'a> WatchHistoryRepository<'a> {
     ) -> Result<(), StorageError> {
         let watched_at = now_ts();
         let completed_flag: i64 = if completed { 1 } else { 0 };
+        let mut tx = self.pool.begin().await?;
+        // Movie resume/completion is owned by the canonical entity; the
+        // row-keyed history is kept as its legacy mirror.
+        if media_kind == "vod" {
+            if let Some(entity) = CanonicalRepository::entity_for_vod_tx(&mut tx, media_id).await? {
+                CanonicalRepository::record_progress_conn(
+                    &mut tx,
+                    &entity,
+                    position_sec,
+                    duration_sec,
+                    completed,
+                    caption_mode,
+                )
+                .await?;
+            }
+        }
         sqlx::query!(
             r#"
             INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed, caption_mode)
@@ -74,8 +91,9 @@ impl<'a> WatchHistoryRepository<'a> {
             completed_flag,
             caption_mode,
         )
-        .execute(self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -199,6 +217,18 @@ impl<'a> WatchHistoryRepository<'a> {
         media_kind: &str,
         media_id: i64,
     ) -> Result<Option<ResumePosition>, StorageError> {
+        if media_kind == "vod" {
+            let mut conn = self.pool.acquire().await?;
+            let entity = CanonicalRepository::entity_for_vod_conn(&mut conn, media_id).await?;
+            if let Some(entity) = entity {
+                let state = CanonicalRepository::resume_conn(&mut conn, &entity).await?;
+                return Ok(state.map(|s| ResumePosition {
+                    position_sec: s.position_sec,
+                    duration_sec: s.duration_sec,
+                    completed: s.completed,
+                }));
+            }
+        }
         let row = sqlx::query!(
             r#"SELECT
                 position_sec as "position_sec!: f64",
@@ -219,37 +249,45 @@ impl<'a> WatchHistoryRepository<'a> {
         }))
     }
 
-    /// Continue Watching shelf. Joins `watch_history` with `vod_items` /
-    /// `series_episodes` and excludes completed entries.
-    ///
-    /// Until Phase 5 starts writing playback progress, `watch_history` is empty
-    /// and this returns `Vec::new()`.
+    /// Continue Watching shelf, excluding completed entries. Movies come from
+    /// entity-owned resume state (surviving refresh/credential rotation),
+    /// shown through the entity's first available variant; episodes still use
+    /// `watch_history`.
     pub async fn list_continue_watching(
         &self,
         limit: i64,
     ) -> Result<Vec<ContinueWatchingItem>, StorageError> {
         let rows = sqlx::query!(
             r#"
-            SELECT
-                wh.media_kind  as "media_kind!: String",
-                wh.media_id    as "media_id!: i64",
-                wh.position_sec as "position_sec!: f64",
-                wh.duration_sec as "duration_sec?: f64",
-                wh.watched_at  as "watched_at!: i64",
-                COALESCE(v.source_id, e.source_id)        as "source_id!: i64",
-                COALESCE(v.name, e.series_title)          as "title!: String",
-                CASE
-                    WHEN wh.media_kind = 'episode'
-                    THEN 'S' || printf('%02d', e.season) || 'E' || printf('%02d', e.episode)
-                    ELSE NULL
-                END                                       as "subtitle?: String",
-                COALESCE(v.logo_url, e.logo_url)          as "poster_url?: String"
-            FROM watch_history wh
-            LEFT JOIN vod_items       v ON wh.media_kind = 'vod'     AND v.id = wh.media_id
-            LEFT JOIN series_episodes e ON wh.media_kind = 'episode' AND e.id = wh.media_id
-            WHERE wh.completed = 0
-              AND (v.id IS NOT NULL OR e.id IS NOT NULL)
-            ORDER BY wh.watched_at DESC
+            SELECT media_kind as "media_kind!: String",
+                   media_id as "media_id!: i64",
+                   position_sec as "position_sec!: f64",
+                   duration_sec as "duration_sec?: f64",
+                   watched_at as "watched_at!: i64",
+                   source_id as "source_id!: i64",
+                   title as "title!: String",
+                   subtitle as "subtitle?: String",
+                   poster_url as "poster_url?: String"
+            FROM (
+                SELECT 'vod' AS media_kind, v.id AS media_id,
+                       ews.position_sec, ews.duration_sec, ews.watched_at,
+                       v.source_id, v.name AS title, NULL AS subtitle,
+                       v.logo_url AS poster_url
+                FROM entity_watch_state ews
+                JOIN vod_items v ON v.id = (
+                    SELECT MIN(s.vod_item_id) FROM stream_variants s
+                    WHERE s.entity_id = ews.entity_id AND s.vod_item_id IS NOT NULL)
+                WHERE ews.completed = 0
+                UNION ALL
+                SELECT 'episode', e.id, wh.position_sec, wh.duration_sec, wh.watched_at,
+                       e.source_id, e.series_title,
+                       'S' || printf('%02d', e.season) || 'E' || printf('%02d', e.episode),
+                       e.logo_url
+                FROM watch_history wh
+                JOIN series_episodes e ON e.id = wh.media_id
+                WHERE wh.media_kind = 'episode' AND wh.completed = 0
+            )
+            ORDER BY watched_at DESC
             LIMIT ?
             "#,
             limit,

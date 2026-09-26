@@ -10,7 +10,7 @@ import {
   SearchIcon,
   XIcon,
 } from "lucide-react";
-import type { ImportProgress, Profile, SeriesSummary, Source } from "@/types";
+import type { ImportProgress, MoviePlaybackTarget, Profile, SeriesSummary, Source } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -151,7 +151,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               sourceId: source.id,
               filters: null,
             }),
-            invoke<number>("count_vod", {
+            invoke<number>("count_movies", {
               profileId: profile.id,
               sourceId: source.id,
               filters: null,
@@ -297,7 +297,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     }
   }
 
-  const playItem = useCallback((item: BrowseItem) => {
+  const playLegacyItem = useCallback((item: BrowseItem) => {
     setPlayingMedia({
       kind: item.kind === "live" ? "live" : "vod",
       id: item.id,
@@ -310,6 +310,34 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     });
   }, []);
 
+  const playItem = useCallback(
+    async (item: BrowseItem) => {
+      // Canonical movies: Rust picks the variant and returns a transient
+      // player locator; progress written against it lands on the entity.
+      if (item.kind === "movie" && item.entityId) {
+        try {
+          const target = await invoke<MoviePlaybackTarget>("resolve_movie_playback", {
+            profileId: profile.id,
+            entityId: item.entityId,
+            variantId: null,
+          });
+          setPlayingMedia({
+            kind: target.mediaKind,
+            id: target.mediaId,
+            title: item.title,
+            subtitle: item.subtitle,
+            posterUrl: item.posterUrl,
+          });
+        } catch (error: unknown) {
+          setSourceError(errorMessage(error));
+        }
+        return;
+      }
+      playLegacyItem(item);
+    },
+    [profile.id, playLegacyItem]
+  );
+
   const activate = useCallback(
     (item: BrowseItem) => {
       if (item.kind === "series" && item.series) {
@@ -318,11 +346,15 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
       }
       // Movies open an overview screen; live brand bundles open their channel
       // list; a single live channel plays immediately.
-      if (item.kind === "vod" || (item.kind === "live" && (item.memberCount ?? 1) > 1)) {
+      if (
+        item.kind === "movie" ||
+        item.kind === "vod" ||
+        (item.kind === "live" && (item.memberCount ?? 1) > 1)
+      ) {
         setSelectedContent(item);
         return;
       }
-      playItem(item);
+      void playItem(item);
     },
     [playItem]
   );
@@ -669,6 +701,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
 function invokeFavorite(item: BrowseItem, profileId: string, next: boolean): Promise<void> {
   if (item.kind === "live")
     return invoke("set_channel_favorite", { profileId, channelId: item.id, isFavorite: next });
+  if (item.kind === "movie")
+    return invoke("set_movie_favorite", { profileId, entityId: item.entityId, isFavorite: next });
   if (item.kind === "vod")
     return invoke("set_vod_favorite", { profileId, vodId: item.id, isFavorite: next });
   return invoke("set_series_favorite", {
@@ -682,6 +716,12 @@ function invokeFavorite(item: BrowseItem, profileId: string, next: boolean): Pro
 function invokeWatchlist(item: BrowseItem, profileId: string, next: boolean): Promise<void> {
   if (item.kind === "live")
     return invoke("set_channel_in_watchlist", { profileId, channelId: item.id, inWatchlist: next });
+  if (item.kind === "movie")
+    return invoke("set_movie_in_watchlist", {
+      profileId,
+      entityId: item.entityId,
+      inWatchlist: next,
+    });
   if (item.kind === "vod")
     return invoke("set_vod_in_watchlist", { profileId, vodId: item.id, inWatchlist: next });
   return invoke("set_series_in_watchlist", {
@@ -693,7 +733,7 @@ function invokeWatchlist(item: BrowseItem, profileId: string, next: boolean): Pr
 }
 
 function tabForKind(kind: BrowseItem["kind"]): BrowseTab {
-  return kind === "live" ? "live" : kind === "vod" ? "movies" : "series";
+  return kind === "live" ? "live" : kind === "vod" || kind === "movie" ? "movies" : "series";
 }
 
 function seriesItem(s: SeriesSummary): BrowseItem {

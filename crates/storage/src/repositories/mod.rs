@@ -1,3 +1,4 @@
+pub mod canonical;
 pub mod caption_style;
 pub mod channels;
 pub mod embeddings;
@@ -18,6 +19,7 @@ pub mod translations;
 pub mod vod;
 pub mod watch_history;
 
+pub use canonical::{CanonicalRepository, CompileStats, MovieFilters};
 pub use caption_style::CaptionStyleRepository;
 pub use channels::ChannelRepository;
 pub use embeddings::{from_blob, to_blob, EmbeddingRepository};

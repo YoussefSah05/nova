@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO stream_variants\n                       (id, entity_id, source_id, binding_key, vod_item_id, created_at)\n                   VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "4c2ded5f9915ca43dadcc1797acf924b34d899b194caf721fbc83626dcec0aaa"
+}

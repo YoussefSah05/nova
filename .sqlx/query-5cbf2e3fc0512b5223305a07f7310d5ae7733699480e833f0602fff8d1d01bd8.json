@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT media_kind as \"media_kind!: String\",\n                   media_id as \"media_id!: i64\",\n                   position_sec as \"position_sec!: f64\",\n                   duration_sec as \"duration_sec?: f64\",\n                   watched_at as \"watched_at!: i64\",\n                   source_id as \"source_id!: i64\",\n                   title as \"title!: String\",\n                   subtitle as \"subtitle?: String\",\n                   poster_url as \"poster_url?: String\"\n            FROM (\n                SELECT 'vod' AS media_kind, v.id AS media_id,\n                       ews.position_sec, ews.duration_sec, ews.watched_at,\n                       v.source_id, v.name AS title, NULL AS subtitle,\n                       v.logo_url AS poster_url\n                FROM entity_watch_state ews\n                JOIN vod_items v ON v.id = (\n                    SELECT MIN(s.vod_item_id) FROM stream_variants s\n                    WHERE s.entity_id = ews.entity_id AND s.vod_item_id IS NOT NULL)\n                WHERE ews.completed = 0\n                UNION ALL\n                SELECT 'episode', e.id, wh.position_sec, wh.duration_sec, wh.watched_at,\n                       e.source_id, e.series_title,\n                       'S' || printf('%02d', e.season) || 'E' || printf('%02d', e.episode),\n                       e.logo_url\n                FROM watch_history wh\n                JOIN series_episodes e ON e.id = wh.media_id\n                WHERE wh.media_kind = 'episode' AND wh.completed = 0\n            )\n            ORDER BY watched_at DESC\n            LIMIT ?\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "media_kind!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "media_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "position_sec!: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 3,
+        "type_info": "Float"
+      },
+      {
+        "name": "watched_at!: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_id!: i64",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "subtitle?: String",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster_url?: String",
+        "ordinal": 8,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "5cbf2e3fc0512b5223305a07f7310d5ae7733699480e833f0602fff8d1d01bd8"
+}

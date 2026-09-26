@@ -4,6 +4,8 @@
 //! a version picker when the catalog had quality/backup duplicates.
 
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, ChevronDown, Headphones, Languages, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -21,6 +23,7 @@ import { motion, useReducedMotion, EASE_ENTER } from "@/lib/motion";
 import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
 import { fetchChannelsInGroup, type BrowseItem } from "./queries";
+import type { CanonicalMediaDetail } from "@/types";
 
 /// Preferred audio language choices. `null` = keep the stream's original track.
 const AUDIO_LANGS: { value: string | null; label: string }[] = [
@@ -135,9 +138,18 @@ function LiveBundleDetail({
   );
 }
 
+/// `m:ss` / `h:mm:ss` for a resume hint.
+function formatClock(totalSec: number): string {
+  const s = Math.max(0, Math.floor(totalSec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
 /// Raw provider name for a variant (shows quality, e.g. "… FHD"), for the picker.
 function variantLabel(it: BrowseItem, index: number): string {
-  const raw = it.vod?.name ?? it.channel?.name ?? it.title;
+  const raw = it.movie?.sourceTitle ?? it.vod?.name ?? it.channel?.name ?? it.title;
   return raw || `Version ${index + 1}`;
 }
 
@@ -152,7 +164,17 @@ export function ContentDetail({
 }: ContentDetailProps) {
   const { settings, setSettings } = useProfileSettings(profileId);
   const reduce = useReducedMotion();
-  const ambient = useAmbientColor(item.vod?.backdropUrl ?? item.posterUrl);
+  // Canonical movie detail (entity-owned resume state); the card's summary
+  // renders immediately and the detail refines it when it arrives.
+  const { data: detail } = useQuery({
+    queryKey: ["canonical-movie", profileId, item.entityId],
+    queryFn: () =>
+      invoke<CanonicalMediaDetail>("get_movie", { profileId, entityId: item.entityId }),
+    enabled: item.kind === "movie" && !!item.entityId,
+    staleTime: 0,
+  });
+  const movie = detail ?? item.movie;
+  const ambient = useAmbientColor(movie?.backdropUrl ?? item.vod?.backdropUrl ?? item.posterUrl);
 
   // Live brand bundle → channel grid; movies → the overview hero below.
   if (item.kind === "live") {
@@ -167,8 +189,10 @@ export function ContentDetail({
     );
   }
 
-  const backdrop = item.vod?.backdropUrl ?? item.posterUrl;
-  const overview = item.vod?.overview ?? null;
+  const backdrop = movie?.backdropUrl ?? item.vod?.backdropUrl ?? item.posterUrl;
+  const overview = movie?.overview ?? item.vod?.overview ?? null;
+  const resume = detail?.resume && !detail.resume.completed ? detail.resume : null;
+  const playLabel = resume ? `Resume · ${formatClock(resume.positionSec)}` : "Play";
   const versions = [item, ...(item.variants ?? [])];
   const audioLabel =
     AUDIO_LANGS.find((l) => l.value === settings.preferredAudioLang)?.label ?? "Original";
@@ -244,7 +268,7 @@ export function ContentDetail({
           {versions.length > 1 ? (
             <div className="flex items-center overflow-hidden rounded-md">
               <Button onClick={() => onPlay(item)} className="gap-2 rounded-r-none">
-                <Play className="h-4 w-4 fill-current" /> Play
+                <Play className="h-4 w-4 fill-current" /> {playLabel}
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -264,7 +288,7 @@ export function ContentDetail({
             </div>
           ) : (
             <Button onClick={() => onPlay(item)} className="gap-2">
-              <Play className="h-4 w-4 fill-current" /> Play
+              <Play className="h-4 w-4 fill-current" /> {playLabel}
             </Button>
           )}
 

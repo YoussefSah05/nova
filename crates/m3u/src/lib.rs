@@ -399,6 +399,7 @@ fn classify(attrs: ExtinfAttrs, stream_url: &str) -> ParsedEntry {
         season,
         episode,
         category: Some(category),
+        upstream_id: None,
     }
 }
 

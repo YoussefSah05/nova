@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE vod_items SET is_in_watchlist = ?\n               WHERE id = ? OR id IN (SELECT vod_item_id FROM stream_variants WHERE entity_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "634fcdec01c88c488ea24e7f6cc17a96af412206aa01e984c9b1b48696795ada"
+}

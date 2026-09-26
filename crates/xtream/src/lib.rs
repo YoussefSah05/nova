@@ -606,6 +606,7 @@ fn to_live_entry(s: LiveStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
         season: None,
         episode: None,
         category: Some(category),
+        upstream_id: None,
     }
 }
 
@@ -634,6 +635,7 @@ fn to_vod_entry(s: VodStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
         season: None,
         episode: None,
         category: Some(category),
+        upstream_id: Some(format!("xtream:vod:{}", s.stream_id)),
     }
 }
 
@@ -665,6 +667,7 @@ fn to_series_entry(s: SeriesJson, _creds: &XtreamCredentials) -> ParsedEntry {
         season: Some(0),
         episode: Some(0),
         category: Some(category),
+        upstream_id: None,
     }
 }
 
@@ -931,6 +934,7 @@ mod tests {
                 season: None,
                 episode: None,
                 category: None,
+                upstream_id: None,
             },
             |entry| {
                 ids.push(entry.name.parse::<u32>().unwrap());

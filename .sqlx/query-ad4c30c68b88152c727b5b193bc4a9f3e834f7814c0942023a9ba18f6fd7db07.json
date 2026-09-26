@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT v.source_id as \"source_id!: i64\" FROM vod_items v\n               WHERE NOT EXISTS (\n                   SELECT 1 FROM stream_variants s\n                   WHERE s.source_id = v.source_id AND s.binding_key = v.binding_key\n                     AND s.vod_item_id IS NOT NULL)",
+  "describe": {
+    "columns": [
+      {
+        "name": "source_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ad4c30c68b88152c727b5b193bc4a9f3e834f7814c0942023a9ba18f6fd7db07"
+}

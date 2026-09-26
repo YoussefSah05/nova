@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE stream_variants\n               SET vod_item_id = (\n                   SELECT MIN(v.id) FROM vod_items v\n                   WHERE v.source_id = stream_variants.source_id\n                     AND v.binding_key = stream_variants.binding_key\n                     AND NOT EXISTS (SELECT 1 FROM stream_variants b WHERE b.vod_item_id = v.id)\n               )\n               WHERE source_id = ? AND vod_item_id IS NULL\n                 AND EXISTS (\n                   SELECT 1 FROM vod_items v\n                   WHERE v.source_id = stream_variants.source_id\n                     AND v.binding_key = stream_variants.binding_key\n                     AND NOT EXISTS (SELECT 1 FROM stream_variants b WHERE b.vod_item_id = v.id)\n                 )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e2b44fc5138f37a8806cd43d0c76f52cb5bec236ee1c6f5bda4576d4675bac1b"
+}

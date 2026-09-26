@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO canonical_entities\n                       (id, kind, title, year, is_favorite, is_in_watchlist, created_at)\n                   SELECT ?, 'movie', COALESCE(clean_title, name), year,\n                          is_favorite, is_in_watchlist, ?\n                   FROM vod_items WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "19dd291c6f118fe9fbcf31a19c942f08ae326904f8cf9dc4e3519a0bff3724a2"
+}

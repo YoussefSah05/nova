@@ -24,6 +24,11 @@ pub async fn init_profile_db(path: &str) -> Result<SqlitePool, StorageError> {
     let mut migrator = sqlx::migrate!("./migrations/profile");
     migrator.set_ignore_missing(true);
     migrator.run(&pool).await?;
+    // Data step of the additive canonical-catalog migration (0021): bind
+    // pre-existing movie rows to canonical entities, seeding user state.
+    crate::repositories::CanonicalRepository::new(&pool)
+        .backfill_movies()
+        .await?;
     Ok(pool)
 }
 

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.id as \"variant_id!: String\", s.vod_item_id as \"vod_item_id!: i64\"\n               FROM stream_variants s\n               WHERE s.entity_id = ? AND s.vod_item_id IS NOT NULL\n               ORDER BY (s.id = ?) DESC, s.vod_item_id ASC\n               LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "variant_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "vod_item_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "bdec28ba924d955fed23bb624fccfbed52dfda860424b5e27f9481f09da50f8b"
+}

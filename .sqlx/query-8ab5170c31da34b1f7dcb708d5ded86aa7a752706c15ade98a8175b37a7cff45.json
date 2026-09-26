@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO entity_watch_state\n                   (entity_id, position_sec, duration_sec, watched_at, completed, caption_mode)\n               VALUES (?, ?, ?, ?, ?, ?)\n               ON CONFLICT(entity_id) DO UPDATE SET\n                   position_sec = excluded.position_sec,\n                   duration_sec = COALESCE(excluded.duration_sec, entity_watch_state.duration_sec),\n                   watched_at   = excluded.watched_at,\n                   completed    = excluded.completed,\n                   caption_mode = COALESCE(excluded.caption_mode, entity_watch_state.caption_mode)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "8ab5170c31da34b1f7dcb708d5ded86aa7a752706c15ade98a8175b37a7cff45"
+}

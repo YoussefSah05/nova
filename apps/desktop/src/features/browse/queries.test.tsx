@@ -2,7 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { VodItem } from "@/types";
+import type { CanonicalMediaSummary } from "@/types";
 import {
   browseKeys,
   fetchBrowsePage,
@@ -12,24 +12,20 @@ import {
 } from "./queries";
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
-function movie(id: number): VodItem {
+function movie(id: number): CanonicalMediaSummary {
   return {
-    id,
-    sourceId: 1,
-    name: "Same Movie FHD",
-    cleanTitle: null,
+    entityId: `mov-${id}`,
+    kind: "movie",
+    title: "Same Movie",
+    sourceTitle: "Same Movie FHD",
     year: 2024,
-    logoUrl: null,
-    streamUrl: "http://127.0.0.1:9/fixture",
     category: "Movies",
-    isFavorite: false,
-    isInWatchlist: false,
-    addedAt: null,
-    dedupGroup: null,
-    canonicalTitle: null,
     posterUrl: null,
     backdropUrl: null,
     overview: null,
+    isFavorite: false,
+    isInWatchlist: false,
+    addedAt: null,
   };
 }
 beforeEach(() => mocks.invoke.mockReset());
@@ -43,7 +39,7 @@ it("advances past a full database page even when variants collapse to one card",
   const last = await fetchBrowsePage("movies", "p", 1, {}, page.nextOffset!);
   expect(last.nextOffset).toBeNull();
   expect(mocks.invoke).toHaveBeenLastCalledWith(
-    "list_vod",
+    "list_movies",
     expect.objectContaining({ limit: 200, offset: 200 })
   );
 });
@@ -72,9 +68,22 @@ it("favorite updates and rollback work with bounded page payloads", async () => 
   const client = new QueryClient();
   const key = [...browseKeys.grid("p", 1, "movies", {}), 0];
   client.setQueryData(key, page);
-  const undo = patchItemEverywhere(client, "p", 1, "vod-1", { isFavorite: true });
+  const undo = patchItemEverywhere(client, "p", 1, "movie-mov-1", { isFavorite: true });
   expect(client.getQueryData<BrowsePage>(key)?.items[0].isFavorite).toBe(true);
   undo();
   expect(client.getQueryData<BrowsePage>(key)?.items[0].isFavorite).toBe(false);
   client.clear();
+});
+it("movies are canonical entities addressed by entity id, not provider rows", async () => {
+  mocks.invoke.mockResolvedValueOnce([movie(1), { ...movie(2), sourceTitle: "Other Film" }]);
+  const page = await fetchBrowsePage("movies", "p", 1, {}, 0);
+  expect(mocks.invoke).toHaveBeenCalledWith(
+    "list_movies",
+    expect.objectContaining({ profileId: "p", sourceId: 1 })
+  );
+  expect(page.items.map((item) => [item.kind, item.key, item.entityId])).toEqual([
+    ["movie", "movie-mov-1", "mov-1"],
+    ["movie", "movie-mov-2", "mov-2"],
+  ]);
+  expect(JSON.stringify(page.items)).not.toMatch(/streamUrl|http/);
 });

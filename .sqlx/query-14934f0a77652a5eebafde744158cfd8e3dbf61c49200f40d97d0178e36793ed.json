@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.id as \"variant_id!: String\",\n                      MIN(v.id) as \"vod_item_id!: i64\",\n                      v.binding_key as \"binding_key!: String\"\n               FROM stream_variants s\n               JOIN vod_items v\n                 ON v.source_id = s.source_id\n                AND v.locator_key = s.binding_key\n                AND v.binding_key <> v.locator_key\n               WHERE s.source_id = ? AND s.vod_item_id IS NULL\n                 AND NOT EXISTS (SELECT 1 FROM stream_variants b WHERE b.vod_item_id = v.id)\n                 AND NOT EXISTS (\n                   SELECT 1 FROM stream_variants k\n                   WHERE k.source_id = s.source_id AND k.binding_key = v.binding_key\n                 )\n               GROUP BY s.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "variant_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "vod_item_id!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      },
+      {
+        "name": "binding_key!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      null,
+      true
+    ]
+  },
+  "hash": "14934f0a77652a5eebafde744158cfd8e3dbf61c49200f40d97d0178e36793ed"
+}

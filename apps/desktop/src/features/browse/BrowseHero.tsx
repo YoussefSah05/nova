@@ -36,7 +36,10 @@ export function BrowseHero({
   const live = tab === "live";
   // A wide TMDB backdrop suits the full-bleed hero better than a portrait poster.
   const heroImage = featured
-    ? (featured.vod?.backdropUrl ?? featured.series?.backdropUrl ?? featured.posterUrl)
+    ? (featured.movie?.backdropUrl ??
+      featured.vod?.backdropUrl ??
+      featured.series?.backdropUrl ??
+      featured.posterUrl)
     : null;
 
   const reduce = useReducedMotion();
