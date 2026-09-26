@@ -1320,3 +1320,40 @@ Candidates: user-facing "not the same" correction plus split (compensating
 lineage operations), narrowing the frontend title grouping, a bounded model job
 over persisted ambiguity cases, or extending canonical entities to series and
 episodes, where the episode-coordinate rules already apply.
+
+## Fix — refresh crash: translation engine removed
+
+**Symptom:** pressing Refresh crashed the app with `SIGBUS`.
+
+**Root cause:** after an import, the app auto-starts catalog enrichment, which
+loads the E5 embedding model through ONNX Runtime (`ort`). `ct2rs` (the NLLB
+translation engine) statically linked sentencepiece, which bundles its own
+protobuf-lite. Both `libonnxruntime.a` and `libsentencepiece.a` define
+`google::protobuf::MessageLite::ParseFromArray`, and the linker keeps one copy,
+so ONNX Runtime ran protobuf code from a different version.
+
+- Since `ct2rs` landed (2026-06-11), the file-path load failed with
+  "Protobuf parsing failed", so embeddings, semantic search and enrichment were
+  silently unavailable.
+- Since the model runtime switched to in-memory loading (`8d6da3b`, 2026-09-26),
+  the same fault crashed the process.
+
+The cached model was intact (its SHA-256 matched its content address).
+
+**Evidence:** the same model loaded fine in a binary with only ONNX Runtime and
+crashed with `SIGBUS` once sentencepiece was linked. After the fix it loads
+(384-dimension embedding) inside the desktop package.
+
+**Change:** translation is deferred to a later milestone, so the engine was
+removed rather than isolated:
+
+- Removed: `crates/translate`, `ct2rs`/sentencepiece, the translation session and
+  commands, the NLLB runtime adapter and registry entry, the player's
+  translated/dual modes and translation card, the translation model settings row,
+  and `useTranslatedCaptions`.
+- Kept: translation tables and cached rows. They remain readable and searchable.
+- Legacy `translation`/`dual` default caption modes open as source captions.
+- Runtime and registry tests now use the Whisper ID as the generic second model.
+
+**Not verified:** the running app (`just dev`) after the fix. The NLLB files
+(about 620 MB in `models/nllb`) remain on disk until the user deletes them.

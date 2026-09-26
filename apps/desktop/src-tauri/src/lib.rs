@@ -13,7 +13,6 @@ pub mod mpv_layer;
 pub mod native_player_view;
 pub mod resource_policy;
 pub mod state;
-pub mod translation_session;
 
 use std::sync::Arc;
 
@@ -169,13 +168,6 @@ pub fn run() {
             commands::transcription::start_caption_session,
             commands::transcription::set_caption_playhead,
             commands::transcription::stop_caption_session,
-            // Phase 7 — Translation (VOD), streaming translation sessions
-            commands::translation::get_nllb_model_status,
-            commands::translation::download_nllb_model,
-            commands::translation::list_target_languages,
-            commands::translation::start_translation_session,
-            commands::translation::set_translation_playhead,
-            commands::translation::stop_translation_session,
             // Phase 8 — Search (transcript companion panel + dialogue FTS)
             commands::search::get_transcript,
             commands::search::search_transcript,

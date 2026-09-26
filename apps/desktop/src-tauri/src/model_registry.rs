@@ -12,7 +12,6 @@ use nova_core::{
 };
 use nova_storage::{ExternalLibraryRecord, ModelRepository, RegisteredModel};
 use nova_transcribe::{default_model, is_installed as whisper_installed, model_paths};
-use nova_translate::model as nllb;
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 
@@ -88,27 +87,6 @@ fn whisper_availability(dir: &Path) -> ModelAvailability {
     }
 }
 
-fn nllb_availability(dir: &Path) -> ModelAvailability {
-    let paths = nllb::required_artifact_paths(dir);
-    if !paths.iter().any(|path| has_evidence(path)) {
-        return ModelAvailability::Missing;
-    }
-    if !nllb::is_installed(dir) || !paths.iter().all(|path| file_has_data(path)) {
-        return ModelAvailability::Unverified;
-    }
-    // The existing installer checks only existence. A broken config must not
-    // be presented as structurally available by this registry.
-    let config_ok = std::fs::read(&paths[1])
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .is_some_and(|json| json.is_object());
-    if config_ok {
-        ModelAvailability::Available
-    } else {
-        ModelAvailability::Unverified
-    }
-}
-
 fn embedding_availability(dir: &Path) -> ModelAvailability {
     if nova_enrich::FastEmbedder::local_files_present(dir) {
         return ModelAvailability::Available;
@@ -147,15 +125,6 @@ fn discover_library(
         )?,
         registration(
             &library,
-            nllb::MODEL_ID,
-            "translation",
-            "ctranslate2",
-            "nllb",
-            nllb_availability(&root.join("nllb")),
-            observed_at,
-        )?,
-        registration(
-            &library,
             nova_enrich::MODEL_ID,
             "embedding",
             "fastembed",
@@ -176,15 +145,6 @@ fn unavailable_models(library: &ModelLibrary) -> Result<Vec<RegisteredModel>, Mo
             "transcription",
             "whisper.cpp",
             "whisper",
-            ModelAvailability::Unavailable,
-            observed_at,
-        )?,
-        registration(
-            library,
-            nllb::MODEL_ID,
-            "translation",
-            "ctranslate2",
-            "nllb",
             ModelAvailability::Unavailable,
             observed_at,
         )?,
@@ -212,21 +172,15 @@ pub(crate) fn observe_external_at(
     let models_dir = library.relative_root.resolve(root);
     let whisper_dir = models_dir.join("whisper");
     let whisper_paths = model_paths(&whisper_dir, &default_model());
-    let nllb_dir = models_dir.join("nllb");
     let embedding_dir = models_dir.join("embeddings");
     let linked = [
         models_dir.as_path(),
         whisper_dir.as_path(),
         whisper_paths.ggml.as_path(),
         whisper_paths.coreml_dir.as_path(),
-        nllb_dir.as_path(),
         embedding_dir.as_path(),
     ];
-    if linked.iter().any(|path| is_symlink(path))
-        || nllb::required_artifact_paths(&nllb_dir)
-            .iter()
-            .any(|path| is_symlink(path))
-    {
+    if linked.iter().any(|path| is_symlink(path)) {
         return Ok((false, unavailable_models(library)?));
     }
     let (_, models) = discover_library(root, library.clone())?;
@@ -313,11 +267,20 @@ mod tests {
     use super::*;
     use nova_storage::init_app_db;
 
+    /// A structurally complete Whisper install (GGML weights + Core ML dir).
+    fn install_whisper(whisper_dir: &Path) {
+        std::fs::create_dir_all(whisper_dir).unwrap();
+        let paths = model_paths(whisper_dir, &default_model());
+        std::fs::write(&paths.ggml, b"fixture").unwrap();
+        std::fs::create_dir_all(&paths.coreml_dir).unwrap();
+        std::fs::write(paths.coreml_dir.join("fixture"), b"x").unwrap();
+    }
+
     #[test]
     fn discovery_is_offline_and_preserves_existing_internal_paths() {
         let dir = tempfile::tempdir().unwrap();
         let (library, missing) = discover_internal(dir.path()).unwrap();
-        assert_eq!(missing.len(), 3);
+        assert_eq!(missing.len(), 2);
         assert!(missing
             .iter()
             .all(|m| m.availability == ModelAvailability::Missing));
@@ -334,36 +297,6 @@ mod tests {
             whisper.location.resolve(dir.path(), &library),
             Some(dir.path().join("models/whisper"))
         );
-    }
-
-    #[test]
-    fn partial_and_corrupt_layouts_are_unverified() {
-        let dir = tempfile::tempdir().unwrap();
-        let nllb_dir = dir.path().join("models/nllb");
-        std::fs::create_dir_all(&nllb_dir).unwrap();
-        for path in nllb::required_artifact_paths(&nllb_dir) {
-            std::fs::write(path, b"x").unwrap();
-        }
-        let (_, models) = discover_internal(dir.path()).unwrap();
-        let nllb = models
-            .iter()
-            .find(|m| m.descriptor.id.as_str() == nllb::MODEL_ID)
-            .unwrap();
-        assert_eq!(nllb.availability, ModelAvailability::Unverified);
-        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
-        let (_, models) = discover_internal(dir.path()).unwrap();
-        let nllb = models
-            .iter()
-            .find(|m| m.descriptor.id.as_str() == nllb::MODEL_ID)
-            .unwrap();
-        assert_eq!(nllb.availability, ModelAvailability::Available);
-        std::fs::write(nllb_dir.join("model.bin"), b"").unwrap();
-        let (_, models) = discover_internal(dir.path()).unwrap();
-        let nllb = models
-            .iter()
-            .find(|m| m.descriptor.id.as_str() == nllb::MODEL_ID)
-            .unwrap();
-        assert_eq!(nllb.availability, ModelAvailability::Unverified);
     }
 
     #[test]
@@ -401,7 +334,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("app.db");
         let pool = init_app_db(db_path.to_str().unwrap()).await.unwrap();
-        let id = nllb::MODEL_ID;
+        let id = default_model().id;
 
         let missing = refresh_internal(dir.path().to_path_buf(), &pool)
             .await
@@ -413,15 +346,12 @@ mod tests {
         assert_eq!(first.availability, ModelAvailability::Missing);
         assert_eq!(
             first.location.resolve(dir.path(), &first.library),
-            Some(dir.path().join("models/nllb"))
+            Some(dir.path().join("models/whisper"))
         );
 
-        let nllb_dir = dir.path().join("models/nllb");
-        std::fs::create_dir_all(&nllb_dir).unwrap();
-        for path in nllb::required_artifact_paths(&nllb_dir) {
-            std::fs::write(path, b"fixture").unwrap();
-        }
-        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
+        let whisper_dir = dir.path().join("models/whisper");
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        install_whisper(&whisper_dir);
         let present = refresh_internal(dir.path().to_path_buf(), &pool)
             .await
             .unwrap();
@@ -432,7 +362,7 @@ mod tests {
         assert_eq!(second.availability, ModelAvailability::Available);
         assert_eq!(second.descriptor.id, first.descriptor.id);
 
-        std::fs::remove_dir_all(&nllb_dir).unwrap();
+        std::fs::remove_dir_all(&whisper_dir).unwrap();
         let unavailable = refresh_internal(dir.path().to_path_buf(), &pool)
             .await
             .unwrap();
@@ -454,17 +384,14 @@ mod tests {
             id: ModelLibraryId::new("external-fixture").unwrap(),
             relative_root: RelativeModelPath::new("models").unwrap(),
         };
-        std::fs::create_dir_all(root.join("models/nllb")).unwrap();
-        let nllb_dir = root.join("models/nllb");
-        for path in nllb::required_artifact_paths(&nllb_dir) {
-            std::fs::write(path, b"fixture").unwrap();
-        }
-        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
+        std::fs::create_dir_all(root.join("models/whisper")).unwrap();
+        let whisper_dir = root.join("models/whisper");
+        install_whisper(&whisper_dir);
         let (connected, first) = observe_external_at(&library, Some(&root)).unwrap();
         assert!(connected);
         let first_model = first
             .iter()
-            .find(|m| m.descriptor.id.as_str() == nllb::MODEL_ID)
+            .find(|m| m.descriptor.id.as_str() == default_model().id)
             .unwrap();
         assert_eq!(first_model.availability, ModelAvailability::Available);
 
@@ -473,21 +400,18 @@ mod tests {
         assert!(!connected);
         let offline_model = offline
             .iter()
-            .find(|m| m.descriptor.id.as_str() == nllb::MODEL_ID)
+            .find(|m| m.descriptor.id.as_str() == default_model().id)
             .unwrap();
         assert_eq!(offline_model.availability, ModelAvailability::Unavailable);
         assert_eq!(offline_model.descriptor.id, first_model.descriptor.id);
 
-        std::fs::create_dir_all(&nllb_dir).unwrap();
-        for path in nllb::required_artifact_paths(&nllb_dir) {
-            std::fs::write(path, b"fixture").unwrap();
-        }
-        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        install_whisper(&whisper_dir);
         let (connected, restored) = observe_external_at(&library, Some(&root)).unwrap();
         assert!(connected);
         let restored_model = restored
             .iter()
-            .find(|m| m.descriptor.id.as_str() == nllb::MODEL_ID)
+            .find(|m| m.descriptor.id.as_str() == default_model().id)
             .unwrap();
         assert_eq!(restored_model.availability, ModelAvailability::Available);
         assert_eq!(restored_model.descriptor.id, first_model.descriptor.id);
@@ -501,11 +425,11 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("selected");
-        let nllb_dir = root.join("models/nllb");
-        std::fs::create_dir_all(&nllb_dir).unwrap();
+        let whisper_dir = root.join("models/whisper");
+        std::fs::create_dir_all(&whisper_dir).unwrap();
         let outside = dir.path().join("outside-model");
         std::fs::write(&outside, b"fixture").unwrap();
-        symlink(&outside, nllb_dir.join("model.bin")).unwrap();
+        symlink(&outside, model_paths(&whisper_dir, &default_model()).ggml).unwrap();
         let library = ModelLibrary {
             id: ModelLibraryId::new("external-fixture").unwrap(),
             relative_root: RelativeModelPath::new("models").unwrap(),
@@ -524,12 +448,9 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("removable-library");
-        let nllb_dir = root.join("models/nllb");
-        std::fs::create_dir_all(&nllb_dir).unwrap();
-        for path in nllb::required_artifact_paths(&nllb_dir) {
-            std::fs::write(path, b"fixture").unwrap();
-        }
-        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
+        let whisper_dir = root.join("models/whisper");
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        install_whisper(&whisper_dir);
         let url =
             NSURL::fileURLWithPath_isDirectory(&NSString::from_str(root.to_str().unwrap()), true);
         let bookmark = url
@@ -565,7 +486,7 @@ mod tests {
         let first = repo.list_external_models().await.unwrap();
         let first_model = first
             .iter()
-            .find(|m| m.model.descriptor.id.as_str() == nllb::MODEL_ID)
+            .find(|m| m.model.descriptor.id.as_str() == default_model().id)
             .unwrap();
         assert_eq!(first_model.model.availability, ModelAvailability::Available);
 
@@ -574,7 +495,7 @@ mod tests {
         let offline = repo.list_external_models().await.unwrap();
         let offline_model = offline
             .iter()
-            .find(|m| m.model.descriptor.id.as_str() == nllb::MODEL_ID)
+            .find(|m| m.model.descriptor.id.as_str() == default_model().id)
             .unwrap();
         assert_eq!(
             offline_model.model.availability,
@@ -585,16 +506,13 @@ mod tests {
             first_model.model.descriptor.id
         );
 
-        std::fs::create_dir_all(&nllb_dir).unwrap();
-        for path in nllb::required_artifact_paths(&nllb_dir) {
-            std::fs::write(path, b"fixture").unwrap();
-        }
-        std::fs::write(nllb_dir.join("config.json"), b"{}").unwrap();
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        install_whisper(&whisper_dir);
         refresh_external(&pool).await.unwrap();
         let restored = repo.list_external_models().await.unwrap();
         let restored_model = restored
             .iter()
-            .find(|m| m.model.descriptor.id.as_str() == nllb::MODEL_ID)
+            .find(|m| m.model.descriptor.id.as_str() == default_model().id)
             .unwrap();
         assert_eq!(
             restored_model.model.availability,

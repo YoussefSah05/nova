@@ -10,7 +10,6 @@ use nova_core::models::{ModelAvailability, ModelId, ModelLibraryId};
 use nova_enrich::{Embedder, FastEmbedder};
 use nova_storage::{ModelRepository, RegisteredModel};
 use nova_transcribe::{default_model, model_paths};
-use nova_translate::NllbTranslator;
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, Notify, Semaphore};
 
@@ -85,7 +84,6 @@ impl RuntimeCancellation {
 
 enum Backend {
     Embedding(Box<dyn Embedder>),
-    Translation(NllbTranslator),
     Whisper(PathBuf),
 }
 
@@ -107,15 +105,6 @@ impl BackendAdapter for EmbeddingAdapter {
     fn load(&self, path: &Path) -> Result<Backend, RuntimeError> {
         FastEmbedder::load_local(path)
             .map(|model| Backend::Embedding(Box::new(model)))
-            .map_err(|_| RuntimeError::LoadFailed)
-    }
-}
-
-struct TranslationAdapter;
-impl BackendAdapter for TranslationAdapter {
-    fn load(&self, path: &Path) -> Result<Backend, RuntimeError> {
-        NllbTranslator::load(path)
-            .map(Backend::Translation)
             .map_err(|_| RuntimeError::LoadFailed)
     }
 }
@@ -412,13 +401,6 @@ impl ModelLease {
         }
     }
 
-    pub fn translator(&self) -> Option<&NllbTranslator> {
-        match &self.loaded.backend {
-            Backend::Translation(model) => Some(model),
-            _ => None,
-        }
-    }
-
     pub fn whisper_path(&self) -> Option<&Path> {
         match &self.loaded.backend {
             Backend::Whisper(path) => Some(path),
@@ -472,10 +454,6 @@ impl ModelRuntimeManager {
             (
                 default_model().id,
                 Arc::new(WhisperAdapter) as Arc<dyn BackendAdapter>,
-            ),
-            (
-                nova_translate::model::MODEL_ID,
-                Arc::new(TranslationAdapter),
             ),
             (nova_enrich::MODEL_ID, Arc::new(EmbeddingAdapter)),
         ] {

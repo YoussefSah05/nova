@@ -68,7 +68,6 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `list_external_model_libraries` | `{}` | `{ libraryId, displayName, availability: 'available'\|'unavailable', observedAt, models: { modelId, capability, availability: 'missing'\|'unverified'\|'available'\|'unavailable' }[] }[]`; no paths or bookmark data | M2.3 |
 | `unload_model` | `{ modelId: string }` | `boolean`: whether a loaded backend was released; `Conflict` while loading, mutating or leased; does not delete artifacts | M2.5 |
 | `model_runtime_status` | `{}` | `ModelRuntimeStatus`: `{ loadedModels, activeLeases, busyModels, transitioningModels, estimatedResidentBytes, unknownResidentModels, activePlaybackSessions, queuedWork, activeWorkClass, residentModels, residentModelBudget, queuedJobs, activeJobs, jobSlots, suspendedWork }`; counts/class only, no paths or grants | M2.5 / M2.6 / P06 |
-| `get_nllb_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | 7 / M2 |
 | `get_enrich_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | enrichment / M2 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
 | `start_caption_session` | `{ profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
@@ -253,7 +252,7 @@ type CaptionStyle = {
 // Per-profile viewing/behaviour settings (cleanup phase). Persisted in the profile DB.
 type ProfileSettings = {
   autoplayNext: boolean;
-  defaultCaptionMode: string; // "off" | "source" | "translation" | "dual"
+  defaultCaptionMode: string; // "off" | "source" (legacy "translation"/"dual" open as "source")
   preferredAudioLang: string | null;
   preferredSubtitleLang: string | null;
   defaultPlaybackRoute: "auto" | "remux_hls" | "transcode_hls";
@@ -402,9 +401,23 @@ content was imported. A non-null `error` means the import failed and should be s
 
 ### Caption session identity (P00 stability correction)
 
-`start_caption_session` and `start_translation_session` require a frontend-generated
-`sessionId` string, unique for each profile/media/audio-track/target activation.
-`transcription:cues`, `transcription:status`, `translation:cues`, and
-`translation:status` echo that `sessionId`. The player subscribes before starting
+`start_caption_session` requires a frontend-generated `sessionId` string, unique
+for each profile/media/audio-track activation. `transcription:cues` and
+`transcription:status` echo that `sessionId`. The player subscribes before starting
 and ignores events from other sessions. Starts and stops are serialized per engine;
 model-download completion cannot restart an inactive session.
+
+## Translation removed (2026-09-27)
+
+The early NLLB/CTranslate2 engine (`nova-translate`, `ct2rs`) was removed: its
+statically linked sentencepiece carried a second protobuf copy that crashed ONNX
+Runtime when the embedding model loaded. Removed commands: `get_nllb_model_status`,
+`download_nllb_model`, `list_target_languages`, `start_translation_session`,
+`set_translation_playhead`, `stop_translation_session`; removed events:
+`translation:cues`, `translation:status`, `nllb:download:progress`. The player offers
+Off / Source captions only. Translation tables and cached rows are kept;
+`get_transcript` still returns cached translations when `targetLang` is given, and
+transcript search still matches them. The `enqueue_translation` /
+`translation:progress` / `translation:complete` rows above describe the planned
+Phase 7 contract, not implemented commands. Translation returns in Phase 7/10 after
+an engine study (latency, footprint, no conflicting native dependencies).

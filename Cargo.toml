@@ -11,7 +11,6 @@ members = [
     "crates/epg",
     "crates/hls-proxy",
     "crates/transcribe",
-    "crates/translate",
     "crates/media",
     "crates/mpv-player",
     "crates/storage",
@@ -61,7 +60,6 @@ fastembed = "4"
 hf-hub = { version = "0.4", default-features = false }
 
 # Local translation (NLLB-200 via CTranslate2 + Metal, bundled tokenizers)
-ct2rs = "0.9"
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }

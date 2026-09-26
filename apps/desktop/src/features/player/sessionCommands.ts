@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 // cleanup runs while a preceding command is still resolving.
 const pending = new Map<string, Promise<unknown>>();
 export function invokeSession(
-  kind: "caption" | "translation" | "airplay",
+  kind: "caption" | "airplay",
   command: string,
   args?: Record<string, unknown>
 ) {

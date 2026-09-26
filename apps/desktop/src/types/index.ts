@@ -279,7 +279,7 @@ export type DefaultPlaybackRoute = "auto" | "remux_hls" | "transcode_hls";
 
 export interface ProfileSettings {
   autoplayNext: boolean;
-  /// "off" | "source" | "translation" | "dual"
+  /// "off" | "source" (legacy "translation"/"dual" values open as "source")
   defaultCaptionMode: string;
   preferredAudioLang: string | null;
   preferredSubtitleLang: string | null;

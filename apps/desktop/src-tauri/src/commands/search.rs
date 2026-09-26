@@ -148,6 +148,10 @@ async fn ensure_segments_embedded(
     Ok(())
 }
 
+/// Translations cached by the removed NLLB engine stay readable and searchable;
+/// nothing produces new ones until translation returns (roadmap Phase 7/10).
+const LEGACY_TRANSLATION_MODEL: &str = "nllb-200-distilled-600M";
+
 #[tauri::command]
 pub async fn get_transcript(
     profile_id: String,
@@ -167,7 +171,7 @@ pub async fn get_transcript(
         .transcript_with_translations(
             transcript_id,
             target_lang.as_deref().unwrap_or(""),
-            nova_translate::model::MODEL_ID,
+            LEGACY_TRANSLATION_MODEL,
         )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;

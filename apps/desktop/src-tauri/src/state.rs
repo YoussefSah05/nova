@@ -9,7 +9,6 @@ use crate::caption_session::CaptionSessionManager;
 use crate::desktop_jobs::DesktopJobs;
 use crate::model_runtime::ModelRuntimeManager;
 use crate::resource_policy::PlaybackActivityGuard;
-use crate::translation_session::TranslationSessionManager;
 
 pub struct AppState {
     /// Pool for app.db (profiles, app_settings).
@@ -35,9 +34,6 @@ pub struct AppState {
     /// Drives streaming caption transcription for the open player (one active
     /// session at a time).
     pub caption_sessions: Arc<CaptionSessionManager>,
-    /// Drives streaming translation of the source captions (one active session
-    /// at a time), parallel to `caption_sessions`.
-    pub translation_sessions: Arc<TranslationSessionManager>,
     /// Owns lazily loaded AI backends and prevents unload during active use.
     pub model_runtime: Arc<ModelRuntimeManager>,
     /// Native mpv has one replaceable session; this guard tracks its lifetime.
@@ -62,7 +58,6 @@ impl AppState {
             mpv_engine: MpvEngine::new(),
             airplay: AirPlayEngine::new(),
             caption_sessions: Arc::new(CaptionSessionManager::new()),
-            translation_sessions: Arc::new(TranslationSessionManager::new()),
             model_runtime: Arc::new(ModelRuntimeManager::new(pool)),
             mpv_activity: Mutex::new(None),
             stream_activity: Mutex::new(HashMap::new()),

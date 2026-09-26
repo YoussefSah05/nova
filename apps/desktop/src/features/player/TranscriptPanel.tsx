@@ -1,9 +1,9 @@
 //! Transcript companion panel (Phase 8).
 //!
-//! A right-side drawer synced to playback: shows the transcript (source + the
-//! active translation when one exists), highlights and auto-scrolls the current
-//! line, and lets you click a line to seek there. The search box runs an FTS5
-//! search over the title's dialogue (source AND translation) and lists matches;
+//! A right-side drawer synced to playback: shows the source transcript,
+//! highlights and auto-scrolls the current line, and lets you click a line to
+//! seek there. The search box runs an FTS5 search over the title's dialogue
+//! (including translations cached before translation was removed) and lists matches;
 //! clicking a match seeks to it. Renders over the video — no mpv rect math, the
 //! React UI already paints above the libmpv layer.
 
@@ -19,7 +19,6 @@ interface TranscriptLine {
   startSec: number;
   endSec: number;
   text: string;
-  translation: string | null;
 }
 interface SearchHit {
   segmentId: number;
@@ -31,13 +30,9 @@ interface SearchHit {
 
 const MERGE_EPS = 0.05;
 
-/// Prefer the persisted lines (they carry cached translations); append the live
-/// cue tail that hasn't been queried back yet so the newest dialogue shows.
-function mergeLive(
-  lines: TranscriptLine[],
-  sourceCues: Cue[],
-  translatedCues: Cue[]
-): TranscriptLine[] {
+/// Prefer the persisted lines; append the live cue tail that hasn't been
+/// queried back yet so the newest dialogue shows.
+function mergeLive(lines: TranscriptLine[], sourceCues: Cue[]): TranscriptLine[] {
   const lastStart = lines.length ? lines[lines.length - 1].startSec : -Infinity;
   const tail = sourceCues
     .filter((c) => c.start > lastStart + MERGE_EPS)
@@ -46,8 +41,6 @@ function mergeLive(
       startSec: c.start,
       endSec: c.end,
       text: c.text,
-      translation:
-        translatedCues.find((t) => Math.abs(t.start - c.start) < MERGE_EPS)?.text ?? null,
     }));
   return [...lines, ...tail];
 }
@@ -82,20 +75,16 @@ export function TranscriptPanel({
   profileId,
   media,
   audioTrackIndex,
-  targetLang,
   currentTime,
   sourceCues,
-  translatedCues,
   onSeek,
   onClose,
 }: {
   profileId: string;
   media: { kind: string; id: number };
   audioTrackIndex: number;
-  targetLang: string;
   currentTime: number;
   sourceCues: Cue[];
-  translatedCues: Cue[];
   onSeek: (sec: number) => void;
   onClose: () => void;
 }) {
@@ -105,7 +94,7 @@ export function TranscriptPanel({
   const [hits, setHits] = useState<SearchHit[]>([]);
   const activeRef = useRef<HTMLButtonElement | null>(null);
 
-  // Fetch the persisted transcript (re-fetch on track / target change).
+  // Fetch the persisted transcript (re-fetch on track change).
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -114,7 +103,6 @@ export function TranscriptPanel({
       mediaKind: media.kind,
       mediaId: media.id,
       audioTrackIndex,
-      targetLang: targetLang || null,
     })
       .then((l) => !cancelled && setLines(l))
       .catch(() => !cancelled && setLines([]))
@@ -122,7 +110,7 @@ export function TranscriptPanel({
     return () => {
       cancelled = true;
     };
-  }, [profileId, media.kind, media.id, audioTrackIndex, targetLang]);
+  }, [profileId, media.kind, media.id, audioTrackIndex]);
 
   // Debounced FTS search over the title's dialogue.
   useEffect(() => {
@@ -145,10 +133,7 @@ export function TranscriptPanel({
     return () => window.clearTimeout(t);
   }, [query, profileId, media.kind, media.id, audioTrackIndex]);
 
-  const merged = useMemo(
-    () => mergeLive(lines, sourceCues, translatedCues),
-    [lines, sourceCues, translatedCues]
-  );
+  const merged = useMemo(() => mergeLive(lines, sourceCues), [lines, sourceCues]);
   const searching = query.trim().length > 0;
 
   // The line under the playhead (or the most recent one).
@@ -244,11 +229,6 @@ export function TranscriptPanel({
                 >
                   {l.text}
                 </span>
-                {l.translation && (
-                  <span className="text-xs leading-snug text-[var(--color-accent-hover)]">
-                    {l.translation}
-                  </span>
-                )}
               </button>
             );
           })

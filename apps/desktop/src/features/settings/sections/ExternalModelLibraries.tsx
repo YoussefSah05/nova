@@ -62,7 +62,7 @@ export function ExternalModelLibraries() {
     <SettingsCard title="External model libraries">
       <SettingRow
         title="Add a model folder"
-        description="Choose a folder containing models/whisper, models/nllb, or models/embeddings. Nova only reads it."
+        description="Choose a folder containing models/whisper or models/embeddings. Nova only reads it."
       >
         <SettingsButton onClick={add} disabled={busy}>
           {busy ? "Opening…" : "Choose folder"}

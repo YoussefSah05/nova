@@ -46,13 +46,12 @@ import { fetchChannelsInGroup, type BrowseItem } from "@/features/browse/queries
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
 
 import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
-import { CaptionButton, type TargetLanguage } from "./CaptionPicker";
+import { CaptionButton } from "./CaptionPicker";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { CaptionStyleButton } from "./CaptionStylePanel";
 import { CinemaEpisodeBrowser } from "./CinemaEpisodeBrowser";
 import { episodeToMedia } from "./episodeMedia";
 import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
-import { translatedCaptionNote, useTranslatedCaptions } from "./useTranslatedCaptions";
 import { useCaptionStyle } from "./useCaptionStyle";
 import { useAirPlay } from "./useAirPlay";
 import { AirPlayButton, AirPlayOverlay } from "./AirPlay";
@@ -293,9 +292,8 @@ export function PlayerModal({
     return { index: i, lang: audioTracks[i]?.lang ?? null };
   }, [audioTracks, audioTrackId]);
 
-  // Source captions run for translation/dual too — the translation session
-  // consumes the source segments — so the session is active whenever captions
-  // are on (the hook ignores live).
+  // The source-caption session is active whenever captions are on (the hook
+  // ignores live).
   const sourceCaptions = useSourceCaptions(
     profileId,
     { kind: media.kind, id: media.id },
@@ -312,31 +310,6 @@ export function PlayerModal({
 
   // -- per-profile settings + autoplay-next-episode -----------------------
   const profileSettings = useProfileSettings(profileId);
-
-  // Translated captions (Phase 7): reading language is the persisted profile
-  // preference (default English). A translation session translates the source
-  // segments at the playhead and emits `translation:cues`.
-  const targetLang = profileSettings.settings.preferredSubtitleLang || "en";
-  const setTargetLang = useCallback(
-    (code: string) => profileSettings.setSettings({ preferredSubtitleLang: code }),
-    [profileSettings]
-  );
-  const [targetLanguages, setTargetLanguages] = useState<TargetLanguage[]>([]);
-  useEffect(() => {
-    void invoke<TargetLanguage[]>("list_target_languages")
-      .then(setTargetLanguages)
-      .catch(() => undefined);
-  }, []);
-  const translatedCaptions = useTranslatedCaptions(
-    profileId,
-    { kind: media.kind, id: media.id },
-    captionMode === "translation" || captionMode === "dual",
-    () => latestPlaybackRef.current.currentTime,
-    () => latestPlaybackRef.current.duration,
-    selectedAudioTrack,
-    targetLang
-  );
-  const translatedCues: Cue[] = translatedCaptions.cues;
 
   // The next episode to roll into when this one ends (autoplay). Resolved from
   // the sibling list, ordered by (season, episode).
@@ -387,8 +360,10 @@ export function PlayerModal({
   useEffect(() => {
     if (!profileSettings.loaded || defaultCaptionApplied.current) return;
     defaultCaptionApplied.current = true;
-    const def = profileSettings.settings.defaultCaptionMode as CaptionMode;
-    if (def !== "off" && media.kind !== "live") setCaptionMode(def);
+    // Any non-off default (including legacy "translation"/"dual" values saved
+    // before translation was removed) opens source captions.
+    if (profileSettings.settings.defaultCaptionMode !== "off" && media.kind !== "live")
+      setCaptionMode("source");
   }, [profileSettings.loaded, profileSettings.settings.defaultCaptionMode, media.kind]);
 
   // -- AirPlay (parallel AVPlayer route) ----------------------------------
@@ -1581,14 +1556,11 @@ export function PlayerModal({
           />
         )}
 
-        {/* Caption overlay - Phase 6 source captions; Phase 7 adds translation. */}
+        {/* Caption overlay - Phase 6 source captions. */}
         <CaptionOverlay
           mode={captionMode}
           sourceCues={sourceCues}
-          translatedCues={translatedCues}
           currentTime={currentTime}
-          sourceLang={sourceCaptions.language ?? resolved?.sourceLang}
-          targetLang={targetLang}
           captionStyle={captionStyleState.style}
         />
 
@@ -1633,51 +1605,6 @@ export function PlayerModal({
                   <span>
                     Preparing captions — {sourceCaptionNote(sourceCaptions) ?? "working…"}
                   </span>
-                )}
-              </div>
-            </div>
-          )}
-
-        {/* Translation model banner: the NLLB model needs a one-time download, or
-            translation failed. Sits above the caption banner so both can show. */}
-        {(captionMode === "translation" || captionMode === "dual") &&
-          (translatedCaptions.status === "needsModel" ||
-            translatedCaptions.status === "downloadingModel" ||
-            translatedCaptions.status === "failed") && (
-            <div className="absolute inset-x-0 bottom-[28%] z-10 flex justify-center px-6">
-              <div
-                className={cn(
-                  "flex items-center gap-3 rounded-full bg-black/75 px-4 py-1.5 text-sm text-white/90",
-                  "border border-white/10 shadow-lg backdrop-blur-md"
-                )}
-              >
-                {translatedCaptions.status === "needsModel" ? (
-                  <>
-                    <span>Translation needs a one-time model download (~1GB)</span>
-                    <button
-                      type="button"
-                      onClick={translatedCaptions.downloadModel}
-                      className="rounded-full bg-[var(--color-accent)] px-3 py-0.5 text-xs font-semibold text-white hover:brightness-110"
-                    >
-                      Download
-                    </button>
-                  </>
-                ) : translatedCaptions.status === "failed" ? (
-                  <>
-                    <span className="text-rose-300">
-                      Translation failed
-                      {translatedCaptions.error ? `: ${translatedCaptions.error}` : ""}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={translatedCaptions.downloadModel}
-                      className="rounded-full bg-white/15 px-3 py-0.5 text-xs font-semibold hover:bg-white/25"
-                    >
-                      Retry
-                    </button>
-                  </>
-                ) : (
-                  <span>{translatedCaptionNote(translatedCaptions) ?? "Loading translation…"}</span>
                 )}
               </div>
             </div>
@@ -1900,10 +1827,6 @@ export function PlayerModal({
               onToggle={() => setCaptionMenuOpen((v) => !v)}
               onClose={() => setCaptionMenuOpen(false)}
               sourceNote={sourceCaptionNote(sourceCaptions)}
-              translatedNote={translatedCaptionNote(translatedCaptions)}
-              targetLang={targetLang}
-              onTargetChange={setTargetLang}
-              languages={targetLanguages}
             />
 
             {/* Caption-style ("Aa") controls — only while captions are showing. */}
@@ -1967,10 +1890,8 @@ export function PlayerModal({
           profileId={profileId}
           media={{ kind: media.kind, id: media.id }}
           audioTrackIndex={selectedAudioTrack.index}
-          targetLang={targetLang}
           currentTime={currentTime}
           sourceCues={sourceCues}
-          translatedCues={translatedCues}
           onSeek={seekTo}
           onClose={() => setTranscriptOpen(false)}
         />
