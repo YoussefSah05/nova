@@ -89,6 +89,7 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
 
   const runLabel = (() => {
     if (!progress || progress.done) return "Running…";
+    if (progress.stage === "queued") return "Waiting for available resources…";
     if (progress.stage === "loading-model") return "Loading model…";
     const stageWord =
       progress.stage === "embedding"

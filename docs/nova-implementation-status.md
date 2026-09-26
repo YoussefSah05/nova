@@ -827,3 +827,183 @@ Validation commands/results:
 
 M2.6 is complete at the model-runtime/playback priority boundary. Full durable
 job scheduling remains in M7; no subsequent milestone has been started.
+
+## P06 — Resource governor
+
+Updated: 2026-09-26. Branch `m2-model-runtime-manager`, uncommitted on top of
+`17c9f63`. P00–P05 were not revisited. The worktree already held unrecorded,
+in-progress work that routed imports, EPG refresh and enrichment through the
+persisted `JobQueue` and had each job take (and immediately drop) an
+admission permit before claiming. P06 preserved and evolved that work rather
+than adding a second scheduler. Code search located the `AdmissionController` ↔ `ModelRuntimeManager` ↔
+`DesktopJobs` paths; three read-only investigations (jobs, model runtime,
+playback/failure) mapped them; conclusions were verified against source.
+
+### Findings that shaped the slice
+
+- A permit taken and dropped before `claim_next` ordered only job *starts*:
+  a job admitted before playback ran unthrottled to completion.
+- Heavyweight residency was unbounded: E5 and NLLB could stay resident
+  indefinitely; nothing evicted idle models. `unload` already refused leased
+  models.
+- Selection had no aging, so lower classes could starve behind a continuous
+  higher-class stream.
+- Jobs left `running` by a crash were never requeued; repeated requests
+  enqueued duplicate rows; queued jobs could not be cancelled.
+- `mpv_close` leaked its playback guard on any engine error, which would
+  suspend background work until the next open.
+- The investigations reported that holding the model lane while waiting on the per-model
+  semaphore could cause inversion. Rejected: with one model-lane slot, whoever
+  holds the per-model semaphore already holds admission.
+
+### Implemented contract
+
+- **One governor, two bounded lanes** (`resource_policy.rs`). The existing
+  `AdmissionController` keeps its single model lane and gains a job lane
+  (`ResourceBudget::DEFAULT`: 1 model operation, 2 job slots shared across
+  every profile and job kind, 2 resident models; `LOW_RESOURCE`: 1/1/1).
+  `WorkClass` is the explicit 7-tier order (`tier()` 2–7; tier 1 is playback,
+  represented by `PlaybackActivityGuard`s). Selection per lane is
+  deterministic: realtime first, then any waiter bypassed `AGING_LIMIT` (8)
+  times by higher-class grants, then class rank, then FIFO.
+- **Playback pressure.** Active playback suspends Metadata, Background and
+  Maintenance on both lanes. Realtime, Interactive and Explicit continue.
+  Explicit import/refresh is admissible during playback because it never uses
+  the model lane; it still ranks below realtime and interactive work.
+- **Held job slots and cooperative preemption.** `JobHandler::ready` now returns
+  a `JobPermit` that `handle(job, permit)` owns for the whole run (drop on
+  completion, failure or panic unwind). Resource-blocked jobs stay durably
+  `queued`. `JobSlot::checkpoint` releases the slot when playback suspends the
+  class or a higher-priority job waits while the lane is full, then reacquires
+  it cancellably. Enrichment checkpoints between 256-document embedding units
+  (catalog and series), before each stage, and per TMDB item. It drops its E5
+  lease while paused so the idle model stays evictable, and reports
+  `stage: "queued"` while waiting. Checkpoints are never taken inside a
+  database transaction.
+- **Model residency budget** (`model_runtime.rs`). Only in-process backends
+  count (E5, NLLB); Whisper weights live in its subprocess. A
+  `ResidencyToken` reserved before a cold load is owned by the loaded backend
+  and released only after the backend drops, so failed loads, cancellation,
+  unload, mutation and replacement cannot leak or double-count. Before
+  loading, the least-recently-used idle, unleased model is evicted under the
+  same lifecycle-lock + zero-lease exclusion as `unload`; a leased model is
+  never evicted or unloaded. When nothing is evictable, Realtime and
+  Interactive may exceed the budget, so a suspended low-priority lease holder
+  cannot block them (priority inversion). Lower classes wait cancellably for a
+  lease release. No caller holds one lease while acquiring another, so the
+  wait cannot self-deadlock.
+- **Cancellation.** Per-(kind, source) cancellation handles for running jobs.
+  `delete_source` removes the source's queued import/EPG/enrichment jobs and
+  cancels running enrichment (next checkpoint; model waits also observe it)
+  and EPG (between feeds). A running import is not interrupted: its single
+  catalog transaction commits or rolls back as a unit, and SQLite's
+  serialized writers plus enforced foreign keys prevent orphaned rows.
+- **Backpressure and recovery.** `enqueue_unique` coalesces requests for work
+  that is already queued, so queue depth is bounded by distinct work. A
+  running job does not suppress one follow-up request, which may see newer
+  provider state. `recover_interrupted` requeues stale `running` rows once, when
+  a profile's workers are first created, before any drain. Append imports stay
+  idempotent through the source's commit stamp.
+- **Typed state.** `model_runtime_status` adds `residentModels`,
+  `residentModelBudget`, `queuedJobs`, `activeJobs`, `jobSlots` and
+  `suspendedWork`, mirrored by the `ModelRuntimeStatus`/`WorkClass` TS types.
+  React only reads; scheduling truth stays in Rust. `docs/ipc-contract.md`
+  documents the policy, the new progress stages and dedup behavior.
+- `mpv_close` now releases the playback guard unless the token is stale, in
+  which case a replaced session's live guard is kept.
+
+No language model participates in any scheduling decision. No schema
+migration was needed: the existing `jobs` columns cover dedup, recovery and
+cancellation. Four new SQLx offline query files were generated.
+
+### Regression coverage
+
+24 new or rewritten tests, all deterministic, with synthetic adapters and jobs:
+
+- Governor (9): master-plan tier order and playback/residency eligibility;
+  strict priority ordering across all six classes; aging bounds starvation
+  without overtaking realtime; job lane bounded and independent of the model
+  lane; low-resource budget with cancelled waiters leaving no state; checkpoint
+  yields only to higher priority or playback, then resumes; checkpoint
+  cancellation, including while suspended; panicking holders release permits
+  and slots; a 240-task multi-threaded contention run with playback toggling
+  completes (no deadlock) and leaves zero residual state.
+- Residency (6): idle-model eviction under the low-resource budget; default
+  budget keeps both resident; a leased model is never evicted and explicit
+  unload is refused while lower classes wait for release; realtime is not
+  blocked by a suspended background lease holder (inversion) and the budget
+  is restored afterwards; cancelled waiters and failed loads leave no
+  reservation; subprocess backends consume no budget.
+- Desktop jobs (6): playback suspends queued metadata jobs but not explicit
+  import, and they resume afterwards; a running job yields its slot during
+  playback and resumes; a bounded lane where only higher-priority waiters
+  preempt at checkpoints; failed or panicking jobs release their slots;
+  cancellation of an unadmitted job keeps it queued; source cancellation stops
+  only that source's running job.
+- Jobs crate (3): duplicate requests coalesce; interrupted jobs are requeued
+  per kind and cancelled queued jobs are removed; the admission permit is
+  owned for the whole job.
+
+### Independent review
+
+A fresh reviewer that did not author the code inspected the diff, the
+governor/runtime/lease interactions, playback signaling, the tests and the
+call paths. It found nothing Critical. Each finding was verified
+independently:
+
+- High: the series-embedding stage ran as one unbounded call without
+  checkpoints, holding a job slot during playback. **Confirmed and fixed**:
+  both embedding stages now share the checkpointed `embed_checkpointed` loop.
+- Medium: `delete_source` does not interrupt a running import. **Not a
+  defect**: import atomicity plus SQLite writer serialization and enforced
+  foreign keys prevent orphaned commits. This behavior predates P06 and is
+  documented above.
+- Low: no dedup against a *running* job. **Intentional**; see backpressure.
+
+While re-validating, one desktop-jobs test showed a timing race in its own
+design (a legitimate preemption sometimes happened before its observation
+point). It was restructured to assert the same property deterministically.
+Afterwards the concurrency modules passed 25 consecutive runs.
+
+### Validation commands/results
+
+- `SQLX_OFFLINE=true cargo test -p nova-desktop --lib`: 64 passed, 1
+  pre-existing ignored; `resource_policy`, `desktop_jobs` and `model_runtime`
+  passed 25 consecutive runs. `cargo test -p nova-jobs`: 7 passed.
+- `just test`: pass: 328 Rust tests/doctests, 0 failed, 3 pre-existing
+  ignored; 29 frontend tests.
+- `just lint` (Clippy all targets `-D warnings` + ESLint), `just check`,
+  `just typecheck`: pass.
+- `pnpm -C apps/desktop build`: pass, with the existing large-chunk warning.
+  `pnpm verify-environment --manifest-only`: pass; it lists its standing
+  UNVERIFIED native/packaging gates.
+- `cargo fmt --all -- --check`, `git diff --check`: pass.
+
+### Remaining known gaps
+
+- No OS memory-pressure, thermal or battery signal exists. `LOW_RESOURCE` is a
+  deterministic construction-time profile; production uses `DEFAULT`, and
+  budgets remain unmeasured estimates (resident sizes are still unknown).
+- A paused player counts as active playback, so suspended classes wait until
+  the session closes. There is no paused/playing distinction or long-suspension
+  aging.
+- Guards leak if the webview dies without calling `stop_playback` for a
+  resolved proxy stream. There is no heartbeat or expiry.
+- Native ONNX/CTranslate2 calls finish their current bounded unit; they are not
+  forcibly preempted. Realtime/interactive over-budget residency is temporary
+  and is restored by the next constrained load.
+- The job lane governs persisted desktop jobs only. Captions, translation and
+  search remain session-driven on the model lane (by design). The periodic
+  external-library refresh and AirPlay status loops are not governed.
+- Import cannot be cancelled mid-transaction. Queue-level backpressure is per
+  distinct payload, not a numeric depth limit. `set_source_auto_refresh` has no
+  scheduler yet. Profile workers persist for the process lifetime.
+- No frontend consumer reads `model_runtime_status` yet. There is no
+  on-device qualification of playback under concurrent enrichment/inference.
+
+### Next milestone
+
+**P07 — canonical catalog vertical slice**: evolve the catalog toward
+`SourceRecord != CanonicalEntity != StreamVariant` (master-plan M3.1/M3.2
+with the minimum M9 secret-free DTO contract), using an additive migration.
+P06 did not start it.

@@ -58,12 +58,14 @@ pub async fn mpv_open_stream(
 
 #[tauri::command]
 pub async fn mpv_close(token: String, state: State<'_, AppState>) -> Result<(), ApiError> {
-    state
-        .mpv_engine
-        .close(&token)
-        .map_err(|e| ApiError::Internal(format!("native player close failed: {e}")))?;
-    state.mpv_activity.lock().await.take();
-    Ok(())
+    let closed = state.mpv_engine.close(&token);
+    // A stale token belongs to a replaced session: the live session keeps its
+    // playback guard. Any other outcome ends native playback for resource
+    // purposes, so an engine error cannot suspend background work forever.
+    if !matches!(closed, Err(nova_mpv_player::MpvError::TokenMismatch)) {
+        state.mpv_activity.lock().await.take();
+    }
+    closed.map_err(|e| ApiError::Internal(format!("native player close failed: {e}")))
 }
 
 #[tauri::command]

@@ -76,8 +76,10 @@ pub async fn select_profile(
     let profile = repo.get(&id).await.map_err(ApiError::from)?;
 
     ensure_profile_pool(&id, &state, &app).await?;
-
+    let pool = require_profile_pool(&id, &state).await?;
+    let jobs = state.jobs_for_profile(&id, pool, app.clone()).await;
     *state.active_profile_id.write().await = Some(id);
+    jobs.kick_all();
     Ok(profile)
 }
 
@@ -196,13 +198,18 @@ pub async fn add_source(
         .map_err(ApiError::from)?;
 
     let source_id = source.id;
-    start_import(pool, app, source, ImportMode::Append).await;
+    state
+        .jobs_for_profile(&profile_id, pool, app)
+        .await
+        .import(source_id, ImportMode::Append)
+        .await
+        .map_err(ApiError::Internal)?;
     Ok(source_id)
 }
 
 /// How `run_import` treats existing rows for the source.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ImportMode {
+pub(crate) enum ImportMode {
     /// Fresh add: only insert (the source has no rows yet).
     Append,
     /// Refresh: snapshot user state, clear the source's rows, re-import, then
@@ -221,22 +228,27 @@ pub async fn refresh_source(
     app: AppHandle,
 ) -> Result<(), ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
-    let source = SourceRepository::new(&pool)
+    SourceRepository::new(&pool)
         .get(source_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("source {source_id} not found")))?;
-    start_import(pool, app, source, ImportMode::Replace).await;
+    state
+        .jobs_for_profile(&profile_id, pool, app)
+        .await
+        .import(source_id, ImportMode::Replace)
+        .await
+        .map_err(ApiError::Internal)?;
     Ok(())
 }
 
-/// Shared kickoff for add + refresh: detect Xtream vs M3U, register the EPG
-/// feed, and spawn the streaming import task (returns once streaming has begun).
-async fn start_import(
+/// Worker for add + refresh: detect Xtream vs M3U, register the EPG feed,
+/// stream the provider data, and commit or roll back atomically.
+pub(crate) async fn run_source_import(
     pool: std::sync::Arc<sqlx::SqlitePool>,
     app: AppHandle,
     source: Source,
     mode: ImportMode,
-) {
+) -> bool {
     let source_id = source.id;
     let url = source.url;
     let xtream_creds = nova_xtream::detect(&url)
@@ -283,19 +295,16 @@ async fn start_import(
         });
     }
 
-    // Spawn import task — returns immediately, streams progress events.
-    tokio::spawn(async move {
-        run_import(
-            source_id,
-            rx,
-            pool,
-            |progress| {
-                let _ = app.emit("playlist:import:progress", progress);
-            },
-            mode,
-        )
-        .await;
-    });
+    run_import(
+        source_id,
+        rx,
+        pool,
+        |progress| {
+            let _ = app.emit("playlist:import:progress", progress);
+        },
+        mode,
+    )
+    .await
 }
 
 // ── Browse commands (Phase 2) ─────────────────────────────────────────────────
@@ -820,7 +829,7 @@ async fn run_import(
     pool: std::sync::Arc<sqlx::SqlitePool>,
     emit: impl Fn(ImportProgress),
     mode: ImportMode,
-) {
+) -> bool {
     let started_at = Instant::now();
     let mut stats = ImportStats::default();
     let mut errors: Vec<String> = Vec::new();
@@ -853,7 +862,7 @@ async fn run_import(
                 None,
                 true,
             );
-            return;
+            return false;
         }
     };
 
@@ -873,7 +882,7 @@ async fn run_import(
                     None,
                     true,
                 );
-                return;
+                return false;
             }
         }
     } else {
@@ -957,7 +966,7 @@ async fn run_import(
                 None,
                 true,
             );
-            return;
+            return false;
         }
 
         // Emit progress every 500 entries for responsive feedback without
@@ -989,7 +998,7 @@ async fn run_import(
             warning_from_errors(&errors),
             true,
         );
-        return;
+        return false;
     }
 
     if stats.parsed == 0 {
@@ -1008,7 +1017,7 @@ async fn run_import(
             None,
             true,
         );
-        return;
+        return false;
     }
 
     stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
@@ -1041,7 +1050,7 @@ async fn run_import(
             None,
             true,
         );
-        return;
+        return false;
     }
 
     // Refresh: re-apply the snapshotted user state onto the new rows.
@@ -1057,7 +1066,7 @@ async fn run_import(
                 None,
                 true,
             );
-            return;
+            return false;
         }
     }
 
@@ -1072,7 +1081,7 @@ async fn run_import(
             None,
             true,
         );
-        return;
+        return false;
     }
 
     let commit_started = Instant::now();
@@ -1087,7 +1096,7 @@ async fn run_import(
             None,
             true,
         );
-        return;
+        return false;
     }
     stats.persist_ms += commit_started.elapsed().as_millis() as u64;
     stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
@@ -1117,6 +1126,7 @@ async fn run_import(
         warning_from_errors(&errors),
         true,
     );
+    true
 }
 
 #[derive(Default)]

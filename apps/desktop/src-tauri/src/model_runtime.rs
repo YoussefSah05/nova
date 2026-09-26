@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use nova_core::models::{ModelAvailability, ModelId, ModelLibraryId};
@@ -15,7 +15,9 @@ use sqlx::SqlitePool;
 use tokio::sync::{Mutex, Notify, Semaphore};
 
 use crate::model_registry;
-use crate::resource_policy::{AdmissionController, PlaybackActivityGuard, WorkClass};
+use crate::resource_policy::{
+    AdmissionController, PlaybackActivityGuard, ResourceBudget, WorkClass,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeError {
@@ -93,6 +95,11 @@ trait BackendAdapter: Send + Sync {
     fn estimated_resident_bytes(&self) -> Option<u64> {
         None
     }
+    /// Whether a loaded backend keeps heavyweight weights in this process and
+    /// therefore counts against the resident-model budget.
+    fn resident(&self) -> bool {
+        true
+    }
 }
 
 struct EmbeddingAdapter;
@@ -123,6 +130,10 @@ impl BackendAdapter for WhisperAdapter {
         }
         Ok(Backend::Whisper(paths.ggml))
     }
+    /// Whisper weights live in the per-window subprocess, not in Nova.
+    fn resident(&self) -> bool {
+        false
+    }
 }
 
 struct Loaded {
@@ -133,6 +144,62 @@ struct Loaded {
     bookmark_data: Option<Vec<u8>>,
     #[cfg(target_os = "macos")]
     _external_grant: Option<crate::mac_model_library::ScopedModelFolder>,
+    /// Declared last so the budget is released only after the backend drops.
+    residency: Option<ResidencyToken>,
+}
+
+/// Counts resident heavyweight backends, including loads in progress.
+struct Residency {
+    budget: usize,
+    count: std::sync::Mutex<usize>,
+    /// Signals lease release or residency release: either may make room.
+    released: Notify,
+}
+
+/// One reserved resident position, owned by the loaded backend.
+struct ResidencyToken(Arc<Residency>);
+
+impl Drop for ResidencyToken {
+    fn drop(&mut self) {
+        let mut count = lock_count(&self.0.count);
+        *count = count.saturating_sub(1);
+        drop(count);
+        self.0.released.notify_waiters();
+    }
+}
+
+impl Residency {
+    fn new(budget: usize) -> Arc<Self> {
+        Arc::new(Self {
+            budget: budget.max(1),
+            count: std::sync::Mutex::new(0),
+            released: Notify::new(),
+        })
+    }
+
+    fn try_reserve(self: &Arc<Self>) -> Option<ResidencyToken> {
+        let mut count = lock_count(&self.count);
+        if *count >= self.budget {
+            return None;
+        }
+        *count += 1;
+        Some(ResidencyToken(Arc::clone(self)))
+    }
+
+    fn force_reserve(self: &Arc<Self>) -> ResidencyToken {
+        *lock_count(&self.count) += 1;
+        ResidencyToken(Arc::clone(self))
+    }
+
+    fn resident(&self) -> usize {
+        *lock_count(&self.count)
+    }
+}
+
+fn lock_count(mutex: &std::sync::Mutex<usize>) -> std::sync::MutexGuard<'_, usize> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[derive(Default)]
@@ -145,15 +212,23 @@ struct Entry {
     leases: AtomicUsize,
     operations: Arc<Semaphore>,
     resources: Arc<AdmissionController>,
+    residency: Arc<Residency>,
+    /// Counts against the resident budget and may be evicted when idle.
+    resident: bool,
+    /// Logical clock of the last lease, for least-recently-used eviction.
+    last_used: AtomicU64,
 }
 
 impl Entry {
-    fn new(resources: Arc<AdmissionController>) -> Self {
+    fn new(resources: Arc<AdmissionController>, residency: Arc<Residency>, resident: bool) -> Self {
         Self {
             state: Arc::new(Mutex::new(Slot::default())),
             leases: AtomicUsize::new(0),
             operations: Arc::new(Semaphore::new(1)),
             resources,
+            residency,
+            resident,
+            last_used: AtomicU64::new(0),
         }
     }
 }
@@ -188,6 +263,8 @@ impl Drop for ModelLease {
 impl Entry {
     fn release(&self) {
         self.leases.fetch_sub(1, Ordering::AcqRel);
+        // An unleased model may now be evicted for a waiting load.
+        self.residency.released.notify_waiters();
     }
 }
 
@@ -361,6 +438,12 @@ pub struct RuntimeSnapshot {
     pub active_playback_sessions: usize,
     pub queued_work: usize,
     pub active_work_class: Option<WorkClass>,
+    pub resident_models: usize,
+    pub resident_model_budget: usize,
+    pub queued_jobs: usize,
+    pub active_jobs: usize,
+    pub job_slots: usize,
+    pub suspended_work: usize,
 }
 
 struct Resolved {
@@ -374,10 +457,16 @@ pub struct ModelRuntimeManager {
     entries: Mutex<HashMap<ModelId, Arc<Entry>>>,
     adapters: HashMap<ModelId, Arc<dyn BackendAdapter>>,
     resources: Arc<AdmissionController>,
+    residency: Arc<Residency>,
+    clock: AtomicU64,
 }
 
 impl ModelRuntimeManager {
     pub fn new(registry_pool: Arc<SqlitePool>) -> Self {
+        Self::with_budget(registry_pool, ResourceBudget::DEFAULT)
+    }
+
+    pub fn with_budget(registry_pool: Arc<SqlitePool>, budget: ResourceBudget) -> Self {
         let mut adapters: HashMap<ModelId, Arc<dyn BackendAdapter>> = HashMap::new();
         for (id, adapter) in [
             (
@@ -398,8 +487,90 @@ impl ModelRuntimeManager {
             registry_pool,
             entries: Mutex::new(HashMap::new()),
             adapters,
-            resources: Arc::new(AdmissionController::default()),
+            resources: Arc::new(AdmissionController::new(budget)),
+            residency: Residency::new(budget.resident_models),
+            clock: AtomicU64::new(0),
         }
+    }
+
+    fn entry_for(&self, entries: &mut HashMap<ModelId, Arc<Entry>>, id: &ModelId) -> Arc<Entry> {
+        let resident = self.adapters.get(id).is_none_or(|a| a.resident());
+        entries
+            .entry(id.clone())
+            .or_insert_with(|| {
+                Arc::new(Entry::new(
+                    Arc::clone(&self.resources),
+                    Arc::clone(&self.residency),
+                    resident,
+                ))
+            })
+            .clone()
+    }
+
+    /// Reserve a resident position before a cold load. Evicts the least
+    /// recently used idle, unleased model first; never touches a leased one.
+    /// Realtime/interactive work may exceed the budget when nothing is
+    /// evictable; lower classes wait cancellably for a lease to end. Callers
+    /// must not hold another lease while acquiring (none do).
+    async fn reserve_residency(
+        &self,
+        id: &ModelId,
+        class: WorkClass,
+        cancellation: &RuntimeCancellation,
+    ) -> Result<ResidencyToken, RuntimeError> {
+        loop {
+            let notified = self.residency.released.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if cancellation.is_cancelled() {
+                return Err(RuntimeError::Cancelled);
+            }
+            if let Some(token) = self.residency.try_reserve() {
+                return Ok(token);
+            }
+            if self.evict_idle(id).await {
+                continue;
+            }
+            if class.may_exceed_residency() {
+                return Ok(self.residency.force_reserve());
+            }
+            tokio::select! {
+                _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
+                _ = notified => {}
+            }
+        }
+    }
+
+    async fn evict_idle(&self, except: &ModelId) -> bool {
+        let mut candidates: Vec<Arc<Entry>> = self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .filter(|(id, e)| *id != except && e.resident && e.leases.load(Ordering::Acquire) == 0)
+            .map(|(_, e)| Arc::clone(e))
+            .collect();
+        candidates.sort_by_key(|e| e.last_used.load(Ordering::Acquire));
+        for entry in candidates {
+            // Same exclusion as `unload`: the lifecycle lock plus a zero lease
+            // count proves no lease can be created or is outstanding.
+            let Ok(mut slot) = entry.state.clone().try_lock_owned() else {
+                continue;
+            };
+            if entry.leases.load(Ordering::Acquire) > 0 {
+                continue;
+            }
+            let Some(old) = slot.loaded.take() else {
+                continue;
+            };
+            let _ = tokio::task::spawn_blocking(move || {
+                drop(old);
+                drop(slot);
+            })
+            .await;
+            return true;
+        }
+        false
     }
 }
 
@@ -530,10 +701,7 @@ impl ModelRuntimeManager {
             .clone();
         let entry = {
             let mut entries = self.entries.lock().await;
-            entries
-                .entry(id)
-                .or_insert_with(|| Arc::new(Entry::new(Arc::clone(&self.resources))))
-                .clone()
+            self.entry_for(&mut entries, &id)
         };
         let mut slot = tokio::select! {
             _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
@@ -555,6 +723,16 @@ impl ModelRuntimeManager {
             if entry.leases.load(Ordering::Acquire) > 0 {
                 return Err(RuntimeError::Busy);
             }
+            // Release a replaced generation before reserving residency so it
+            // cannot count against its own successor.
+            if let Some(old) = slot.loaded.take() {
+                let _ = tokio::task::spawn_blocking(move || drop(old)).await;
+            }
+            let reservation = if entry.resident {
+                Some(self.reserve_residency(&id, class, cancellation).await?)
+            } else {
+                None
+            };
             // The native loader owns the mutex guard. Dropping/aborting the
             // requesting future cannot allow another loader or unload to race
             // the native call. A cancelled initiating caller gets no lease;
@@ -566,8 +744,10 @@ impl ModelRuntimeManager {
                 .map_err(|_| RuntimeError::Cancelled)?;
             let worker = tokio::task::spawn_blocking(move || {
                 let _admission = admission;
-                slot.loaded = None;
-                slot.loaded = Some(Arc::new(load_resolved(resolved, adapter)?));
+                // A failed load drops the reservation with its error.
+                let mut loaded = load_resolved(resolved, adapter)?;
+                loaded.residency = reservation;
+                slot.loaded = Some(Arc::new(loaded));
                 Ok::<_, RuntimeError>(slot)
             });
             slot = tokio::select! {
@@ -585,6 +765,10 @@ impl ModelRuntimeManager {
             .ok_or(RuntimeError::LoadFailed)?
             .clone();
         entry.leases.fetch_add(1, Ordering::AcqRel);
+        entry.last_used.store(
+            self.clock.fetch_add(1, Ordering::AcqRel) + 1,
+            Ordering::Release,
+        );
         drop(slot);
         Ok(ModelLease { entry, loaded })
     }
@@ -626,13 +810,10 @@ impl ModelRuntimeManager {
         if !self.adapters.contains_key(&id) {
             return Err(RuntimeError::InvalidModel);
         }
-        let entry = self
-            .entries
-            .lock()
-            .await
-            .entry(id)
-            .or_insert_with(|| Arc::new(Entry::new(Arc::clone(&self.resources))))
-            .clone();
+        let entry = {
+            let mut entries = self.entries.lock().await;
+            self.entry_for(&mut entries, &id)
+        };
         let mut slot = entry
             .state
             .clone()
@@ -675,6 +856,12 @@ impl ModelRuntimeManager {
         snapshot.active_playback_sessions = admission.playback_sessions;
         snapshot.queued_work = admission.queued_work;
         snapshot.active_work_class = admission.active_work_class;
+        snapshot.resident_models = self.residency.resident();
+        snapshot.resident_model_budget = self.residency.budget;
+        snapshot.queued_jobs = admission.queued_jobs;
+        snapshot.active_jobs = admission.active_jobs;
+        snapshot.job_slots = admission.budget.job_slots;
+        snapshot.suspended_work = admission.suspended_work;
         snapshot
     }
 
@@ -682,6 +869,11 @@ impl ModelRuntimeManager {
     /// inference remains queued until every active player session releases it.
     pub fn playback_activity(&self) -> PlaybackActivityGuard {
         self.resources.playback_started()
+    }
+
+    /// Share the deterministic admission lane with persisted desktop jobs.
+    pub fn resource_admission(&self) -> Arc<AdmissionController> {
+        Arc::clone(&self.resources)
     }
 }
 
@@ -752,5 +944,6 @@ fn load_resolved(
         bookmark_data,
         #[cfg(target_os = "macos")]
         _external_grant: grant,
+        residency: None,
     })
 }

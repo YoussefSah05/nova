@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO jobs (kind, payload, state, priority, created_at)\n               SELECT ?, ?, 'queued', ?, ?\n               WHERE NOT EXISTS (\n                   SELECT 1 FROM jobs WHERE state = 'queued' AND kind = ? AND payload = ?\n               )\n               RETURNING id as \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "40f2467b5c86d9e4032c1aef1069cafb0942662c3a83b8c27173337cc85ade39"
+}

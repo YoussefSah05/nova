@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\" FROM jobs\n               WHERE state = 'queued' AND kind = ? AND payload = ?\n               ORDER BY id ASC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c64a0c1dad7f53e3509c48403907970a00969bf84e98ce0b0561358108d50922"
+}

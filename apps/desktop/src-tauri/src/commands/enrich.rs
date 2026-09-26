@@ -22,8 +22,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::transcription::app_data_dir;
 use crate::ipc::ApiError;
-use crate::model_runtime::{ModelRuntimeManager, RuntimeCancellation};
-use crate::resource_policy::WorkClass;
+use crate::model_runtime::{ModelLease, ModelRuntimeManager, RuntimeCancellation};
+use crate::resource_policy::{JobSlot, WorkClass};
 use crate::state::AppState;
 
 use super::require_profile_pool;
@@ -49,13 +49,13 @@ pub struct EnrichModelStatus {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct EnrichProgress {
-    source_id: i64,
-    stage: String,
-    processed: usize,
-    total: usize,
-    done: bool,
-    error: Option<String>,
+pub(crate) struct EnrichProgress {
+    pub(crate) source_id: i64,
+    pub(crate) stage: String,
+    pub(crate) processed: usize,
+    pub(crate) total: usize,
+    pub(crate) done: bool,
+    pub(crate) error: Option<String>,
 }
 
 pub(crate) fn embeddings_dir(app: &AppHandle) -> Result<PathBuf, ApiError> {
@@ -150,31 +150,87 @@ pub async fn start_enrichment(
         return Ok(());
     }
     let pool = require_profile_pool(&profile_id, &state).await?;
-    let runtime = state.model_runtime.clone();
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = run_enrichment(pool, source_id, runtime, &app2).await {
-            let _ = app2.emit(
-                "catalog:enrich:progress",
-                EnrichProgress {
-                    source_id,
-                    stage: "failed".into(),
-                    processed: 0,
-                    total: 0,
-                    done: true,
-                    error: Some(format!("{e:?}")),
-                },
-            );
-        }
-    });
-    Ok(())
+    state
+        .jobs_for_profile(&profile_id, pool, app)
+        .await
+        .enrich(source_id)
+        .await
+        .map_err(ApiError::Internal)
 }
 
-async fn run_enrichment(
+/// Cooperative resource checkpoint for the enrichment job. Releases the job
+/// slot while playback suspends metadata work or higher-priority jobs wait,
+/// and fails once the job is cancelled (for example, its source was deleted).
+/// Never called while a database transaction is open.
+async fn yield_point(
+    slot: &mut JobSlot,
+    cancellation: &RuntimeCancellation,
+    on_wait: impl FnOnce(),
+) -> Result<(), ApiError> {
+    if slot.must_yield() && !cancellation.is_cancelled() {
+        on_wait();
+    }
+    slot.checkpoint(cancellation)
+        .await
+        .map_err(|_| ApiError::Internal("enrichment cancelled".into()))
+}
+
+async fn acquire_embedder(
+    runtime: &ModelRuntimeManager,
+    model_root: &Path,
+    cancellation: &RuntimeCancellation,
+) -> Result<ModelLease, ApiError> {
+    runtime
+        .acquire_at(model_root, MODEL_ID, WorkClass::Background, cancellation)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
+/// Embed in bounded 256-document units with a job checkpoint between them. A
+/// paused job drops its lease so the idle model stays evictable, then
+/// reacquires it (cheaply, if still resident) when resumed.
+#[allow(clippy::too_many_arguments)]
+async fn embed_checkpointed(
+    runtime: &ModelRuntimeManager,
+    model_root: &Path,
+    lease: &mut Option<ModelLease>,
+    texts: &[String],
+    slot: &mut JobSlot,
+    cancellation: &RuntimeCancellation,
+    on_wait: impl Fn(usize),
+    on_progress: impl Fn(usize),
+) -> Result<Vec<Vec<f32>>, ApiError> {
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    for chunk in texts.chunks(256) {
+        if slot.must_yield() {
+            *lease = None;
+            let processed = vectors.len();
+            yield_point(slot, cancellation, || on_wait(processed)).await?;
+        }
+        let current = match lease.take() {
+            Some(lease) => lease,
+            None => acquire_embedder(runtime, model_root, cancellation).await?,
+        };
+        let offset = vectors.len();
+        let chunk_vectors = current
+            .embed_documents_at(chunk, WorkClass::Background, cancellation, |processed| {
+                on_progress(offset + processed)
+            })
+            .await
+            .map_err(super::models::runtime_api_error)?;
+        vectors.extend(chunk_vectors);
+        *lease = Some(current);
+    }
+    Ok(vectors)
+}
+
+pub(crate) async fn run_enrichment(
     pool: Arc<sqlx::SqlitePool>,
     source_id: i64,
     runtime: Arc<ModelRuntimeManager>,
     app: &AppHandle,
+    slot: &mut JobSlot,
+    cancellation: &RuntimeCancellation,
 ) -> Result<(), ApiError> {
     let ch_rows = ChannelRepository::new(&pool)
         .list_unenriched(source_id)
@@ -202,29 +258,19 @@ async fn run_enrichment(
     // embeddings are already done (`total == 0`), otherwise an opt-in TMDB pass
     // could never catch up on rows it hasn't matched yet.
     if total > 0 {
+        yield_point(slot, cancellation, || emit("queued", 0, false)).await?;
         // The first model load is slow (cold ONNX init); tell the UI before we block.
         emit("loading-model", 0, false);
-        let lease = runtime
-            .acquire_at(
-                &model_root,
-                MODEL_ID,
-                WorkClass::Background,
-                &RuntimeCancellation::default(),
-            )
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        let mut lease = Some(acquire_embedder(&runtime, &model_root, cancellation).await?);
 
         let genres: Vec<String> = nova_core::classify::genres()
             .iter()
             .map(|g| g.to_string())
             .collect();
         let label_vectors = lease
-            .embed_documents_at(
-                &genres,
-                WorkClass::Background,
-                &RuntimeCancellation::default(),
-                |_| {},
-            )
+            .as_ref()
+            .ok_or(ApiError::Internal("model lease missing".into()))?
+            .embed_documents_at(&genres, WorkClass::Background, cancellation, |_| {})
             .await
             .map_err(super::models::runtime_api_error)?;
         let classifier = GenreClassifier::new(genres.into_iter().zip(label_vectors).collect());
@@ -233,15 +279,17 @@ async fn run_enrichment(
             .chain(&vod_rows)
             .map(|row| row.text.clone())
             .collect();
-        let vectors = lease
-            .embed_documents_at(
-                &texts,
-                WorkClass::Background,
-                &RuntimeCancellation::default(),
-                |processed| emit("embedding", processed, false),
-            )
-            .await
-            .map_err(super::models::runtime_api_error)?;
+        let vectors = embed_checkpointed(
+            &runtime,
+            &model_root,
+            &mut lease,
+            &texts,
+            slot,
+            cancellation,
+            |processed| emit("queued", processed, false),
+            |processed| emit("embedding", processed, false),
+        )
+        .await?;
         drop(lease);
 
         // Clustering is CPU work, but does not own the model admission permit.
@@ -290,6 +338,7 @@ async fn run_enrichment(
     let series_repo = SeriesRepository::new(&pool);
     let series_work = series_repo.list_for_embedding(source_id, MODEL_ID).await?;
     if !series_work.is_empty() {
+        yield_point(slot, cancellation, || emit("queued", total, false)).await?;
         let texts: Vec<String> = series_work
             .iter()
             .map(|(title, overview)| match overview {
@@ -298,24 +347,19 @@ async fn run_enrichment(
             })
             .collect();
         let titles: Vec<String> = series_work.iter().map(|(t, _)| t.clone()).collect();
-        let lease = runtime
-            .acquire_at(
-                &model_root,
-                MODEL_ID,
-                WorkClass::Background,
-                &RuntimeCancellation::default(),
-            )
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-        let vectors = lease
-            .embed_documents_at(
-                &texts,
-                WorkClass::Background,
-                &RuntimeCancellation::default(),
-                |_| {},
-            )
-            .await
-            .map_err(super::models::runtime_api_error)?;
+        let mut lease = None;
+        let vectors = embed_checkpointed(
+            &runtime,
+            &model_root,
+            &mut lease,
+            &texts,
+            slot,
+            cancellation,
+            |_| emit("queued", total, false),
+            |_| {},
+        )
+        .await?;
+        drop(lease);
         let rows: Vec<(String, Vec<f32>)> = titles.into_iter().zip(vectors).collect();
         series_repo
             .apply_embeddings(source_id, MODEL_ID, &rows)
@@ -328,7 +372,8 @@ async fn run_enrichment(
     let settings = ProfileSettingsRepository::new(&pool).get().await?;
     if settings.tmdb_enabled {
         if let Some(key) = settings.tmdb_api_key.filter(|k| !k.trim().is_empty()) {
-            run_tmdb(&pool, source_id, key, app).await?;
+            yield_point(slot, cancellation, || emit("queued", total, false)).await?;
+            run_tmdb(&pool, source_id, key, app, slot, cancellation).await?;
         }
     }
 
@@ -345,6 +390,8 @@ async fn run_tmdb(
     source_id: i64,
     api_key: String,
     app: &AppHandle,
+    slot: &mut JobSlot,
+    cancellation: &RuntimeCancellation,
 ) -> Result<(), ApiError> {
     let client = TmdbClient::new(api_key).map_err(|e| ApiError::Internal(e.to_string()))?;
     let cache = TmdbCacheRepository::new(pool);
@@ -363,12 +410,12 @@ async fn run_tmdb(
     let series = SeriesRepository::new(pool).list_for_tmdb(source_id).await?;
     let tmdb_total = movies.len() + series.len();
     let mut done = 0usize;
-    let emit = |processed: usize| {
+    let emit_stage = |stage: &str, processed: usize| {
         let _ = app.emit(
             "catalog:enrich:progress",
             EnrichProgress {
                 source_id,
-                stage: "matching".into(),
+                stage: stage.into(),
                 processed,
                 total: tmdb_total,
                 done: false,
@@ -376,6 +423,7 @@ async fn run_tmdb(
             },
         );
     };
+    let emit = |processed: usize| emit_stage("matching", processed);
     emit(0);
 
     // Per-item errors (a transient TMDB hiccup / rate-limit on one of thousands
@@ -384,6 +432,7 @@ async fn run_tmdb(
     // progress persists and a re-run resumes via `tmdb_status IS NULL`.
     let mut movie_writes: Vec<TmdbWrite> = Vec::new();
     for q in &movies {
+        yield_point(slot, cancellation, || emit_stage("queued", done)).await?;
         match match_movie(&client, &cache, q, &movie_genres).await {
             Ok(best) => movie_writes.push(to_movie_write(q.id, best)),
             Err(e) => {
@@ -406,6 +455,7 @@ async fn run_tmdb(
     // ── Series (search by title only; no year column) ──
     let mut series_writes: Vec<SeriesTmdbWrite> = Vec::new();
     for q in &series {
+        yield_point(slot, cancellation, || emit_stage("queued", done)).await?;
         match match_series(&client, &cache, q, &tv_genres).await {
             Ok(best) => series_writes.push(to_series_write(q.series_title.clone(), best)),
             Err(e) => {

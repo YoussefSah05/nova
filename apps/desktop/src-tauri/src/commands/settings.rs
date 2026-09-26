@@ -41,6 +41,10 @@ pub async fn delete_source(
     state: State<'_, AppState>,
 ) -> Result<(), ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    // Stop queued/running work for the source before its rows disappear.
+    if let Some(jobs) = state.existing_jobs(&profile_id).await {
+        jobs.cancel_source(source_id).await;
+    }
     SourceRepository::new(&pool)
         .delete(source_id)
         .await

@@ -61,7 +61,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `add_external_model_library` | `{}` | `libraryId \| null` (`null` if the native folder picker is cancelled); accepts no path from the webview | M2.3 |
 | `list_external_model_libraries` | `{}` | `{ libraryId, displayName, availability: 'available'\|'unavailable', observedAt, models: { modelId, capability, availability: 'missing'\|'unverified'\|'available'\|'unavailable' }[] }[]`; no paths or bookmark data | M2.3 |
 | `unload_model` | `{ modelId: string }` | `boolean`: whether a loaded backend was released; `Conflict` while loading, mutating or leased; does not delete artifacts | M2.5 |
-| `model_runtime_status` | `{}` | `{ loadedModels, activeLeases, busyModels, transitioningModels, estimatedResidentBytes, unknownResidentModels, activePlaybackSessions, queuedWork, activeWorkClass }`; counts/class only, no paths or grants | M2.5 / M2.6 |
+| `model_runtime_status` | `{}` | `ModelRuntimeStatus`: `{ loadedModels, activeLeases, busyModels, transitioningModels, estimatedResidentBytes, unknownResidentModels, activePlaybackSessions, queuedWork, activeWorkClass, residentModels, residentModelBudget, queuedJobs, activeJobs, jobSlots, suspendedWork }`; counts/class only, no paths or grants | M2.5 / M2.6 / P06 |
 | `get_nllb_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | 7 / M2 |
 | `get_enrich_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | enrichment / M2 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
@@ -108,16 +108,29 @@ entry represents a prepared adapter and authorized path; native weights belong
 to its per-window subprocess. These commands introduce no frontend model path
 or bookmark contract.
 
-M2.6 admits model initialization and inference through one process-wide lane
-while adapter memory costs remain unknown. Realtime caption/translation work
-ranks above interactive search, which ranks above foreground, metadata,
-background and maintenance work. Active mpv, proxy-stream or AirPlay sessions
-hold playback activity guards: realtime and interactive model work can run,
-while lower-priority work waits cancellably and resumes when the last player
-session closes. An already-running native call is allowed to finish its current
-bounded unit; playback does not forcibly interrupt CTranslate2/ONNX. Persisted
-`jobs.priority` remains a per-kind queue field; desktop commands do not yet use
-`JobQueue`, so durable cross-subsystem job scheduling remains in M7.
+The P06 resource governor (`resource_policy.rs`) applies the fixed priority
+order: playback, realtime caption/translation, interactive search, explicit
+import/refresh, metadata enrichment, background AI/indexing, maintenance
+(`activeWorkClass` uses the lowercase class names). Model initialization and
+inference use one process-wide model lane while adapter memory costs remain
+unknown. Persisted desktop jobs (`add_source`/`refresh_source` imports,
+`epg_refresh`, `start_enrichment`) are queued durably and each running job holds
+one slot of a bounded job lane (`jobSlots`, shared by all profiles). Selection
+is realtime first, then any waiter bypassed eight times (aging), then class,
+then FIFO. Active mpv, proxy-stream or AirPlay sessions suspend metadata,
+background and maintenance work (`suspendedWork`); realtime, interactive and
+explicit work continue. Running jobs yield their slot at cooperative
+checkpoints and resume when playback ends. An already-running native call
+finishes its bounded unit; CTranslate2/ONNX is never forcibly interrupted.
+In-process heavyweight backends are bounded by `residentModelBudget`; idle,
+unleased models are evicted least-recently-used first, and a leased model is
+never evicted or unloaded. Realtime/interactive work may exceed the budget when
+every resident model is leased, so `residentModels` can briefly exceed it.
+
+Import progress may report `stage: "queued"` and enrichment progress
+`stage: "queued"` while work waits for resources; enrichment reports
+`stage: "cancelled"` when `delete_source` cancels it. Repeated requests for the
+same queued work coalesce into one job.
 
 Browse filter payloads use camelCase keys from the frontend:
 

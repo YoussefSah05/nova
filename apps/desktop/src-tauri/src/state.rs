@@ -6,6 +6,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::airplay::AirPlayEngine;
 use crate::caption_session::CaptionSessionManager;
+use crate::desktop_jobs::DesktopJobs;
 use crate::model_runtime::ModelRuntimeManager;
 use crate::resource_policy::PlaybackActivityGuard;
 use crate::translation_session::TranslationSessionManager;
@@ -16,6 +17,8 @@ pub struct AppState {
     pub active_profile_id: Arc<RwLock<Option<String>>>,
     /// Per-profile SQLite pools, keyed by profile UUID.
     pub profile_pools: Arc<RwLock<HashMap<String, Arc<SqlitePool>>>>,
+    /// One set of bounded persisted workers per opened profile.
+    pub desktop_jobs: Mutex<HashMap<String, Arc<DesktopJobs>>>,
     /// Port the local HLS proxy bound to.
     pub hls_proxy_port: u16,
     /// Shared session registry on the proxy. `resolve_stream` calls
@@ -49,6 +52,7 @@ impl AppState {
             pool: pool.clone(),
             active_profile_id: Arc::new(RwLock::new(None)),
             profile_pools: Arc::new(RwLock::new(HashMap::new())),
+            desktop_jobs: Mutex::new(HashMap::new()),
             hls_proxy_port,
             hls_sessions,
             mpv_engine: MpvEngine::new(),
@@ -72,6 +76,30 @@ impl AppState {
             .write()
             .await
             .insert(profile_id, Arc::new(pool));
+    }
+
+    pub async fn jobs_for_profile(
+        &self,
+        profile_id: &str,
+        pool: Arc<SqlitePool>,
+        app: tauri::AppHandle,
+    ) -> Arc<DesktopJobs> {
+        let mut jobs = self.desktop_jobs.lock().await;
+        if let Some(existing) = jobs.get(profile_id) {
+            return Arc::clone(existing);
+        }
+        let worker = Arc::new(DesktopJobs::new(pool, app, Arc::clone(&self.model_runtime)));
+        // First creation in this process: no worker for this profile has run
+        // yet, so any `running` row was interrupted by a previous process.
+        worker.recover_interrupted().await;
+        worker.kick_all();
+        jobs.insert(profile_id.to_string(), Arc::clone(&worker));
+        worker
+    }
+
+    /// Existing workers only; never creates or recovers a profile's queues.
+    pub async fn existing_jobs(&self, profile_id: &str) -> Option<Arc<DesktopJobs>> {
+        self.desktop_jobs.lock().await.get(profile_id).cloned()
     }
 
     pub async fn track_stream_activity(&self, token: String) {

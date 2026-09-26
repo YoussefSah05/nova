@@ -145,7 +145,13 @@ export interface ContinueWatchingItem {
 
 // ── Import progress event ─────────────────────────────────────────────────────
 
-export type ImportStage = "connecting" | "receiving" | "persisting" | "complete" | "failed";
+export type ImportStage =
+  | "queued"
+  | "connecting"
+  | "receiving"
+  | "persisting"
+  | "complete"
+  | "failed";
 
 export interface ImportProgress {
   sourceId: number;
@@ -245,6 +251,37 @@ export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
   tmdbApiKey: null,
   accentColor: "amber",
 };
+
+// ── Resource governor (P06) ───────────────────────────────────────────────────
+
+/** Deterministic work classes, highest priority first. Playback (tier 1) is
+ * represented by `activePlaybackSessions`, not a class. */
+export type WorkClass =
+  | "realtime"
+  | "interactive"
+  | "explicit"
+  | "metadata"
+  | "background"
+  | "maintenance";
+
+/** `model_runtime_status` response. Read-only: scheduling truth stays in Rust. */
+export interface ModelRuntimeStatus {
+  loadedModels: number;
+  activeLeases: number;
+  estimatedResidentBytes: number;
+  unknownResidentModels: number;
+  busyModels: number;
+  transitioningModels: number;
+  activePlaybackSessions: number;
+  queuedWork: number;
+  activeWorkClass: WorkClass | null;
+  residentModels: number;
+  residentModelBudget: number;
+  queuedJobs: number;
+  activeJobs: number;
+  jobSlots: number;
+  suspendedWork: number;
+}
 
 // ── IPC errors ────────────────────────────────────────────────────────────────
 

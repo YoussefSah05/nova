@@ -141,7 +141,8 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
         ) {
           return;
         }
-        armWatchdog();
+        if (event.payload.stage === "queued") clearWatchdog();
+        else armWatchdog();
         setProgress(event.payload);
         if (event.payload.done) {
           clearWatchdog();
@@ -193,8 +194,8 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
   const stages = [
     {
       title: "Connect to provider",
-      complete: stage !== "connecting",
-      active: stage === "connecting",
+      complete: stage !== "connecting" && stage !== "queued",
+      active: stage === "connecting" || stage === "queued",
     },
     {
       title: "Read library entries",
@@ -211,11 +212,13 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
   // Connecting sub-message: explain the wait after 10s so users know the
   // server is generating the playlist, not that the app is broken.
   const connectingDetail =
-    elapsedSecs === 0
-      ? "Fetching playlist…"
-      : elapsedSecs < 10
-        ? `Waiting for server… ${elapsedSecs}s`
-        : `Server is generating your playlist… ${elapsedSecs}s`;
+    stage === "queued"
+      ? "Waiting for available resources…"
+      : elapsedSecs === 0
+        ? "Fetching playlist…"
+        : elapsedSecs < 10
+          ? `Waiting for server… ${elapsedSecs}s`
+          : `Server is generating your playlist… ${elapsedSecs}s`;
 
   return (
     <motion.div

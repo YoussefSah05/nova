@@ -220,6 +220,7 @@ pub struct ContinueWatchingItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ImportStage {
+    Queued,
     Connecting,
     Receiving,
     Persisting,

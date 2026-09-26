@@ -116,39 +116,49 @@ pub async fn epg_refresh(
     app: AppHandle,
 ) -> Result<(), ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
-    let pool = Arc::clone(&pool);
-    tokio::spawn(async move {
-        let epg_sources = match EpgSourcesRepository::new(&pool)
-            .list_for_source(source_id)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(source_id, error = %e, "epg_refresh: failed to list epg_sources");
-                return;
-            }
-        };
-
-        if epg_sources.is_empty() {
-            tracing::info!(source_id, "epg_refresh: no EPG URLs registered for source");
-            return;
-        }
-
-        for es in epg_sources {
-            run_refresh(source_id, es.id, &es.url, &pool, app.clone()).await;
-        }
-
-        // Drop programmes that ended more than a day ago — keep some history
-        // so the user can still see "what was on" briefly after a programme ends.
-        let cutoff = now_ts() - 86_400;
-        if let Err(e) = ProgramsRepository::new(&pool).prune_before(cutoff).await {
-            tracing::warn!(error = %e, "epg_refresh: prune failed");
-        }
-    });
-    Ok(())
+    state
+        .jobs_for_profile(&profile_id, pool, app)
+        .await
+        .epg_refresh(source_id)
+        .await
+        .map_err(ApiError::Internal)
 }
 
 // ── Refresh worker ────────────────────────────────────────────────────────────
+
+pub(crate) async fn run_epg_refresh_job(
+    source_id: i64,
+    pool: Arc<SqlitePool>,
+    app: AppHandle,
+    cancellation: &crate::model_runtime::RuntimeCancellation,
+) -> Result<(), String> {
+    let epg_sources = EpgSourcesRepository::new(&pool)
+        .list_for_source(source_id)
+        .await
+        .map_err(|_| "could not list EPG sources".to_string())?;
+    if epg_sources.is_empty() {
+        return Ok(());
+    }
+    let mut complete = true;
+    for es in epg_sources {
+        // Each feed commits on its own; stop between feeds once cancelled.
+        if cancellation.is_cancelled() {
+            return Err("EPG refresh cancelled".into());
+        }
+        complete &= run_refresh(source_id, es.id, &es.url, &pool, app.clone()).await;
+    }
+    // Keep one day of history after all source transactions complete.
+    let cutoff = now_ts() - 86_400;
+    ProgramsRepository::new(&pool)
+        .prune_before(cutoff)
+        .await
+        .map_err(|_| "EPG prune failed".to_string())?;
+    if complete {
+        Ok(())
+    } else {
+        Err("EPG refresh failed".into())
+    }
+}
 
 async fn run_refresh(
     source_id: i64,
@@ -156,7 +166,7 @@ async fn run_refresh(
     url: &str,
     pool: &Arc<SqlitePool>,
     app: AppHandle,
-) {
+) -> bool {
     let started_at = std::time::Instant::now();
     emit(
         &app,
@@ -332,6 +342,7 @@ async fn run_refresh(
                 elapsed_ms = started_at.elapsed().as_millis() as u64,
                 "EPG refresh complete"
             );
+            true
         }
         Err(e) => fail(&app, source_id, epg_source_id, started_at, e, pool).await,
     }
@@ -344,7 +355,7 @@ async fn fail(
     started_at: std::time::Instant,
     error: String,
     pool: &Arc<SqlitePool>,
-) {
+) -> bool {
     tracing::warn!(source_id, epg_source_id, error = %error, "EPG refresh failed");
     if let Err(e) = EpgSourcesRepository::new(pool)
         .touch_failure(epg_source_id, &error)
@@ -363,4 +374,5 @@ async fn fail(
             error: Some(error),
         },
     );
+    false
 }

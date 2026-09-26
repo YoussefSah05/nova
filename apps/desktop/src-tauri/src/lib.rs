@@ -1,6 +1,7 @@
 pub mod airplay;
 pub mod caption_session;
 pub mod commands;
+pub mod desktop_jobs;
 pub mod ipc;
 #[cfg(target_os = "macos")]
 pub mod mac_model_library;

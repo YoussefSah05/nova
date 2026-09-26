@@ -1,5 +1,5 @@
 use super::*;
-use crate::resource_policy::WorkClass;
+use crate::resource_policy::{ResourceBudget, WorkClass};
 use nova_enrich::EnrichError;
 use std::sync::Mutex as SyncMutex;
 use std::time::Duration;
@@ -29,8 +29,14 @@ struct FakeAdapter {
     fail: AtomicBool,
     gate: SyncMutex<Option<std::sync::mpsc::Receiver<()>>>,
     started: Notify,
+    /// Models a subprocess backend (Whisper) that keeps no weights resident.
+    transient: bool,
 }
 impl BackendAdapter for FakeAdapter {
+    fn resident(&self) -> bool {
+        !self.transient
+    }
+
     fn load(&self, _: &Path) -> Result<Backend, RuntimeError> {
         self.loads.fetch_add(1, Ordering::SeqCst);
         let gate = self.gate.lock().unwrap().take();
@@ -670,4 +676,340 @@ async fn external_grant_survives_use_and_disconnect_preserves_logical_identity()
         .unwrap();
     assert_eq!(restored.loaded.library_id.as_str(), "external-fixture");
     assert_eq!(adapter.loads.load(Ordering::SeqCst), 2);
+}
+
+/// Two in-process models (E5 + NLLB ids) behind fake adapters.
+struct TwoModels {
+    dir: tempfile::TempDir,
+    runtime: Arc<ModelRuntimeManager>,
+    embed: Arc<FakeAdapter>,
+    translate: Arc<FakeAdapter>,
+}
+
+impl TwoModels {
+    fn new(budget: ResourceBudget) -> Self {
+        Self::with_translate(budget, FakeAdapter::default())
+    }
+
+    fn with_translate(budget: ResourceBudget, translate: FakeAdapter) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("models/embeddings")).unwrap();
+        nllb_fixture(dir.path());
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_lazy("sqlite::memory:")
+            .unwrap();
+        let embed = Arc::new(FakeAdapter::default());
+        let translate = Arc::new(translate);
+        let mut runtime = ModelRuntimeManager::with_budget(Arc::new(pool), budget);
+        runtime.adapters.insert(Self::embed_id(), embed.clone());
+        runtime
+            .adapters
+            .insert(Self::translate_id(), translate.clone());
+        Self {
+            dir,
+            runtime: Arc::new(runtime),
+            embed,
+            translate,
+        }
+    }
+
+    fn embed_id() -> ModelId {
+        ModelId::new(nova_enrich::MODEL_ID).unwrap()
+    }
+
+    fn translate_id() -> ModelId {
+        ModelId::new(nova_translate::model::MODEL_ID).unwrap()
+    }
+
+    fn resolved(&self, id: &ModelId) -> Resolved {
+        let (_, models) = model_registry::discover_internal(self.dir.path()).unwrap();
+        Resolved {
+            model: models.into_iter().find(|m| m.descriptor.id == *id).unwrap(),
+            app_data_dir: self.dir.path().into(),
+            external_bookmark: None,
+        }
+    }
+
+    async fn acquire(
+        &self,
+        id: ModelId,
+        class: WorkClass,
+        cancellation: &RuntimeCancellation,
+    ) -> Result<ModelLease, RuntimeError> {
+        let resolved = self.resolved(&id);
+        self.runtime
+            .acquire_resolved_at(id, resolved, class, cancellation)
+            .await
+    }
+
+    fn spawn_acquire(
+        &self,
+        id: ModelId,
+        class: WorkClass,
+        cancellation: RuntimeCancellation,
+    ) -> tokio::task::JoinHandle<Result<ModelLease, RuntimeError>> {
+        let runtime = self.runtime.clone();
+        let resolved = self.resolved(&id);
+        tokio::spawn(async move {
+            runtime
+                .acquire_resolved_at(id, resolved, class, &cancellation)
+                .await
+        })
+    }
+}
+
+#[tokio::test]
+async fn low_resource_budget_evicts_the_idle_model_before_loading_another() {
+    let models = TwoModels::new(ResourceBudget::LOW_RESOURCE);
+    let cancel = RuntimeCancellation::default();
+    let lease = models
+        .acquire(TwoModels::embed_id(), WorkClass::Background, &cancel)
+        .await
+        .unwrap();
+    drop(lease);
+    let snapshot = models.runtime.snapshot().await;
+    assert_eq!(
+        (snapshot.resident_models, snapshot.resident_model_budget),
+        (1, 1)
+    );
+
+    let lease = models
+        .acquire(TwoModels::translate_id(), WorkClass::Background, &cancel)
+        .await
+        .unwrap();
+    assert_eq!(
+        models.embed.drops.load(Ordering::SeqCst),
+        1,
+        "idle E5 evicted"
+    );
+    let snapshot = models.runtime.snapshot().await;
+    assert_eq!(snapshot.loaded_models, 1);
+    assert_eq!(snapshot.resident_models, 1);
+    drop(lease);
+}
+
+#[tokio::test]
+async fn default_budget_keeps_both_in_process_models_resident() {
+    let models = TwoModels::new(ResourceBudget::DEFAULT);
+    let cancel = RuntimeCancellation::default();
+    drop(
+        models
+            .acquire(TwoModels::embed_id(), WorkClass::Background, &cancel)
+            .await
+            .unwrap(),
+    );
+    drop(
+        models
+            .acquire(TwoModels::translate_id(), WorkClass::Background, &cancel)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(models.embed.drops.load(Ordering::SeqCst), 0);
+    assert_eq!(models.runtime.snapshot().await.resident_models, 2);
+}
+
+#[tokio::test]
+async fn leased_model_is_never_evicted_and_lower_classes_wait_for_its_release() {
+    let models = TwoModels::new(ResourceBudget::LOW_RESOURCE);
+    let held = models
+        .acquire(
+            TwoModels::embed_id(),
+            WorkClass::Background,
+            &RuntimeCancellation::default(),
+        )
+        .await
+        .unwrap();
+    let waiting = models.spawn_acquire(
+        TwoModels::translate_id(),
+        WorkClass::Metadata,
+        RuntimeCancellation::default(),
+    );
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!waiting.is_finished(), "must not exceed the budget");
+    assert_eq!(models.translate.loads.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        models.embed.drops.load(Ordering::SeqCst),
+        0,
+        "leased model kept"
+    );
+    assert_eq!(
+        models.runtime.unload(nova_enrich::MODEL_ID).await,
+        Err(RuntimeError::Busy),
+        "explicit unload also refuses a leased model"
+    );
+
+    drop(held);
+    let lease = tokio::time::timeout(DEADLINE, waiting)
+        .await
+        .expect("released lease wakes the residency waiter")
+        .unwrap()
+        .unwrap();
+    assert_eq!(models.embed.drops.load(Ordering::SeqCst), 1);
+    assert_eq!(models.translate.loads.load(Ordering::SeqCst), 1);
+    assert_eq!(models.runtime.snapshot().await.resident_models, 1);
+    drop(lease);
+}
+
+#[tokio::test]
+async fn realtime_work_is_not_blocked_by_a_suspended_low_priority_lease_holder() {
+    let models = TwoModels::new(ResourceBudget::LOW_RESOURCE);
+    // A background job holds E5 and is suspended by playback.
+    let background = models
+        .acquire(
+            TwoModels::embed_id(),
+            WorkClass::Background,
+            &RuntimeCancellation::default(),
+        )
+        .await
+        .unwrap();
+    let playback = models.runtime.playback_activity();
+    let suspended_lease = background.clone();
+    let suspended = tokio::spawn(async move {
+        suspended_lease
+            .run_blocking_at(
+                WorkClass::Background,
+                &RuntimeCancellation::default(),
+                |_| (),
+            )
+            .await
+    });
+    tokio::time::timeout(DEADLINE, async {
+        while models.runtime.snapshot().await.suspended_work != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // Realtime translation loads NLLB over budget instead of inverting.
+    let realtime = tokio::time::timeout(
+        DEADLINE,
+        models.acquire(
+            TwoModels::translate_id(),
+            WorkClass::Realtime,
+            &RuntimeCancellation::default(),
+        ),
+    )
+    .await
+    .expect("realtime must not wait on a suspended lower-priority lease")
+    .unwrap();
+    realtime
+        .clone()
+        .run_blocking_at(WorkClass::Realtime, &RuntimeCancellation::default(), |_| ())
+        .await
+        .unwrap();
+    let snapshot = models.runtime.snapshot().await;
+    assert_eq!(snapshot.resident_models, 2, "temporarily over budget");
+    assert_eq!(snapshot.resident_model_budget, 1);
+    assert!(!suspended.is_finished());
+
+    drop(playback);
+    tokio::time::timeout(DEADLINE, suspended)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(background);
+    drop(realtime);
+    no_leases(&models.runtime).await;
+    // The next constrained load restores the budget by evicting idle models.
+    let lease = models
+        .acquire(
+            TwoModels::embed_id(),
+            WorkClass::Background,
+            &RuntimeCancellation::default(),
+        )
+        .await
+        .unwrap();
+    drop(lease);
+    assert!(models
+        .runtime
+        .unload(nova_translate::model::MODEL_ID)
+        .await
+        .unwrap());
+    assert_eq!(models.runtime.snapshot().await.resident_models, 1);
+}
+
+#[tokio::test]
+async fn cancelled_residency_waiter_and_failed_loads_leave_no_reservation() {
+    let translate = FakeAdapter::default();
+    translate.fail.store(true, Ordering::SeqCst);
+    let models = TwoModels::with_translate(ResourceBudget::LOW_RESOURCE, translate);
+    let held = models
+        .acquire(
+            TwoModels::embed_id(),
+            WorkClass::Background,
+            &RuntimeCancellation::default(),
+        )
+        .await
+        .unwrap();
+    let cancel = RuntimeCancellation::default();
+    let waiting = models.spawn_acquire(
+        TwoModels::translate_id(),
+        WorkClass::Background,
+        cancel.clone(),
+    );
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    cancel.cancel();
+    assert!(matches!(
+        tokio::time::timeout(DEADLINE, waiting)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(RuntimeError::Cancelled)
+    ));
+    assert_eq!(models.runtime.snapshot().await.resident_models, 1);
+    drop(held);
+
+    // A failed load releases the reservation it made (after evicting E5).
+    assert!(matches!(
+        models
+            .acquire(
+                TwoModels::translate_id(),
+                WorkClass::Background,
+                &RuntimeCancellation::default()
+            )
+            .await,
+        Err(RuntimeError::LoadFailed)
+    ));
+    assert_eq!(models.runtime.snapshot().await.resident_models, 0);
+    let lease = models
+        .acquire(
+            TwoModels::embed_id(),
+            WorkClass::Background,
+            &RuntimeCancellation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(models.runtime.snapshot().await.resident_models, 1);
+    drop(lease);
+}
+
+#[tokio::test]
+async fn subprocess_backends_do_not_consume_the_resident_budget() {
+    let translate = FakeAdapter {
+        transient: true,
+        ..FakeAdapter::default()
+    };
+    let models = TwoModels::with_translate(ResourceBudget::LOW_RESOURCE, translate);
+    let cancel = RuntimeCancellation::default();
+    let embed = models
+        .acquire(TwoModels::embed_id(), WorkClass::Background, &cancel)
+        .await
+        .unwrap();
+    let transient = tokio::time::timeout(
+        DEADLINE,
+        models.acquire(TwoModels::translate_id(), WorkClass::Background, &cancel),
+    )
+    .await
+    .expect("a non-resident backend never waits for residency")
+    .unwrap();
+    let snapshot = models.runtime.snapshot().await;
+    assert_eq!(snapshot.loaded_models, 2);
+    assert_eq!(snapshot.resident_models, 1);
+    drop((embed, transient));
 }

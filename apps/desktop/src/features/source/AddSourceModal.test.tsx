@@ -131,4 +131,20 @@ describe("AddSourceModal", () => {
       ).toBeInTheDocument();
     }
   });
+
+  it("clears the provider stall watchdog while an import waits for resources", async () => {
+    mocks.invoke.mockResolvedValue(42);
+    render(<AddSourceModal profileId="profile-1" onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("M3U URL"), "http://example.com/list.m3u");
+    await userEvent.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledOnce());
+
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    clearTimeoutSpy.mockClear();
+    act(() => progressHandler?.({ payload: progress({ stage: "queued" }) }));
+    expect(screen.getByText("Waiting for available resources…")).toBeInTheDocument();
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    clearTimeoutSpy.mockRestore();
+  });
 });

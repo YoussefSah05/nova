@@ -57,6 +57,16 @@ pub struct ModelRuntimeStatus {
     pub active_playback_sessions: usize,
     pub queued_work: usize,
     pub active_work_class: Option<String>,
+    /// In-process heavyweight backends resident (or loading) and their budget.
+    /// Realtime/interactive work may exceed the budget while every resident
+    /// model is leased, so `residentModels` can briefly exceed it.
+    pub resident_models: usize,
+    pub resident_model_budget: usize,
+    pub queued_jobs: usize,
+    pub active_jobs: usize,
+    pub job_slots: usize,
+    /// Model or job work held back by active playback.
+    pub suspended_work: usize,
 }
 
 /// Request explicit unload. Active inference leases always win over eviction.
@@ -95,6 +105,12 @@ pub async fn model_runtime_status(
             .active_work_class
             .map(WorkClass::as_str)
             .map(str::to_string),
+        resident_models: snapshot.resident_models,
+        resident_model_budget: snapshot.resident_model_budget,
+        queued_jobs: snapshot.queued_jobs,
+        active_jobs: snapshot.active_jobs,
+        job_slots: snapshot.job_slots,
+        suspended_work: snapshot.suspended_work,
     })
 }
 

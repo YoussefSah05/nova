@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM jobs WHERE state = 'queued' AND kind = ? AND payload = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "23b218f8d354114f20c054d3b853251796d468bae45b5fea4b4c26e6d13d212a"
+}
