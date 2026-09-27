@@ -34,6 +34,10 @@ pub struct SeriesTmdbQuery {
 pub struct SeriesTmdbWrite {
     pub series_title: String,
     pub canonical_title: Option<String>,
+    /// Original-language title, kept apart from the (localized) display title.
+    pub original_title: Option<String>,
+    /// BCP-47 tag of `canonical_title`; `None` when unmatched.
+    pub title_language: Option<String>,
     pub poster_url: Option<String>,
     pub backdrop_url: Option<String>,
     pub overview: Option<String>,

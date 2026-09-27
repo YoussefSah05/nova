@@ -471,6 +471,7 @@ impl<'a> SeriesRepository<'a> {
         source_id: i64,
         matcher_version: u32,
         retry_unresolved_before: i64,
+        language: &str,
     ) -> Result<Vec<SeriesTmdbQuery>, StorageError> {
         let version = i64::from(matcher_version);
         let rows = sqlx::query!(
@@ -482,10 +483,13 @@ impl<'a> SeriesRepository<'a> {
                  AND (sm.tmdb_status IS NULL
                       OR sm.matcher_version IS NULL
                       OR sm.matcher_version < ?
-                      OR (sm.tmdb_status = 'unmatched' AND sm.checked_at < ?))"#,
+                      OR (sm.tmdb_status = 'unmatched' AND sm.checked_at < ?)
+                      OR (sm.tmdb_status = 'matched'
+                          AND COALESCE(sm.title_language, 'en-US') <> ?))"#,
             source_id,
             version,
             retry_unresolved_before,
+            language,
         )
         .fetch_all(self.pool)
         .await?;
@@ -513,8 +517,8 @@ impl<'a> SeriesRepository<'a> {
                 "INSERT INTO series_meta
                    (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,
                     tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,
-                    evidence_json, checked_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    evidence_json, checked_at, original_title, title_language)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(source_id, series_title) DO UPDATE SET
                    canonical_title = excluded.canonical_title,
                    poster_url = excluded.poster_url,
@@ -526,7 +530,9 @@ impl<'a> SeriesRepository<'a> {
                    confidence_bp = excluded.confidence_bp,
                    matcher_version = excluded.matcher_version,
                    evidence_json = excluded.evidence_json,
-                   checked_at = excluded.checked_at",
+                   checked_at = excluded.checked_at,
+                   original_title = excluded.original_title,
+                   title_language = excluded.title_language",
                 source_id,
                 u.series_title,
                 u.canonical_title,
@@ -540,6 +546,8 @@ impl<'a> SeriesRepository<'a> {
                 version,
                 u.evidence_json,
                 now,
+                u.original_title,
+                u.title_language,
             )
             .execute(&mut *tx)
             .await?;

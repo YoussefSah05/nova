@@ -65,7 +65,12 @@ impl MatchMethod {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MatchedMetadata {
     pub external_id: String,
+    /// TMDB title in `title_language`.
     pub canonical_title: String,
+    /// Title in the work's original language, kept apart from the display title.
+    pub original_title: Option<String>,
+    /// BCP-47 tag of `canonical_title` (the metadata language requested).
+    pub title_language: String,
     pub poster_url: Option<String>,
     pub backdrop_url: Option<String>,
     pub overview: Option<String>,
@@ -110,13 +115,15 @@ impl<'a> ExternalMatchRepository<'a> {
     }
 
     /// Active movie entities with an available variant in `source_id` that
-    /// need a decision: never matched, matched by an older matcher, or left
-    /// unresolved before `retry_unresolved_before`. Most important first.
+    /// need a decision: never matched, matched by an older matcher or in
+    /// another metadata language, or left unresolved before
+    /// `retry_unresolved_before`. Most important first.
     pub async fn movie_work(
         &self,
         source_id: i64,
         matcher_version: u32,
         retry_unresolved_before: i64,
+        language: &str,
     ) -> Result<Vec<MovieMatchWork>, StorageError> {
         let version = i64::from(matcher_version);
         let rows = sqlx::query!(
@@ -146,12 +153,14 @@ impl<'a> ExternalMatchRepository<'a> {
                                AND s.vod_item_id IS NOT NULL)
                  AND (m.entity_id IS NULL
                       OR m.matcher_version < ?
-                      OR (m.status = 'unresolved' AND m.checked_at < ?))
+                      OR (m.status = 'unresolved' AND m.checked_at < ?)
+                      OR (m.status = 'matched' AND COALESCE(m.title_language, 'en-US') <> ?))
                ORDER BY 6, 7 DESC, e.id"#,
             source_id,
             source_id,
             version,
             retry_unresolved_before,
+            language,
         )
         .fetch_all(self.pool)
         .await?;
@@ -199,6 +208,8 @@ impl<'a> ExternalMatchRepository<'a> {
             let status = if m.is_some() { "matched" } else { "unresolved" };
             let external_id = m.map(|m| m.external_id.as_str());
             let title = m.map(|m| m.canonical_title.as_str());
+            let original_title = m.and_then(|m| m.original_title.as_deref());
+            let title_language = m.map(|m| m.title_language.as_str());
             let poster = m.and_then(|m| m.poster_url.as_deref());
             let backdrop = m.and_then(|m| m.backdrop_url.as_deref());
             let overview = m.and_then(|m| m.overview.as_deref());
@@ -210,8 +221,9 @@ impl<'a> ExternalMatchRepository<'a> {
                 r#"INSERT INTO entity_external_matches
                        (entity_id, namespace, status, external_id, method, confidence_bp,
                         matcher_version, evidence_json, canonical_title, poster_url,
-                        backdrop_url, overview, genres, primary_genre, checked_at)
-                   VALUES (?, 'tmdb:movie', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        backdrop_url, overview, genres, primary_genre, checked_at,
+                        original_title, title_language)
+                   VALUES (?, 'tmdb:movie', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(entity_id, namespace) DO UPDATE SET
                        status = excluded.status,
                        external_id = excluded.external_id,
@@ -225,7 +237,9 @@ impl<'a> ExternalMatchRepository<'a> {
                        overview = excluded.overview,
                        genres = excluded.genres,
                        primary_genre = excluded.primary_genre,
-                       checked_at = excluded.checked_at"#,
+                       checked_at = excluded.checked_at,
+                       original_title = excluded.original_title,
+                       title_language = excluded.title_language"#,
                 entity,
                 status,
                 external_id,
@@ -240,6 +254,8 @@ impl<'a> ExternalMatchRepository<'a> {
                 genres,
                 primary,
                 now,
+                original_title,
+                title_language,
             )
             .execute(&mut *tx)
             .await?;
@@ -466,6 +482,8 @@ mod tests {
                 backdrop_url: None,
                 overview: Some("Overview".into()),
                 genres: vec!["Drama".into(), "Crime".into()],
+                original_title: Some(title.into()),
+                title_language: "en-US".into(),
             }),
             method: MatchMethod::Search,
             confidence_bp: Some(9_000),
@@ -487,7 +505,7 @@ mod tests {
 
     async fn work_ids(db: &Db, version: u32, retry_before: i64) -> Vec<EntityId> {
         ExternalMatchRepository::new(&db.pool)
-            .movie_work(db.source, version, retry_before)
+            .movie_work(db.source, version, retry_before, "en-US")
             .await
             .unwrap()
             .into_iter()
@@ -520,7 +538,7 @@ mod tests {
             .await
             .unwrap();
         let work = ExternalMatchRepository::new(&db.pool)
-            .movie_work(db.source, 2, 0)
+            .movie_work(db.source, 2, 0, "en-US")
             .await
             .unwrap();
         let order: Vec<_> = work.iter().map(|w| (&w.entity_id, w.priority)).collect();
@@ -562,6 +580,52 @@ mod tests {
         let mut expected = vec![a.clone(), b.clone()];
         expected.sort();
         assert_eq!(all, expected);
+    }
+
+    #[tokio::test]
+    async fn a_metadata_language_change_requeues_matched_titles_only() {
+        let db = db().await;
+        import(
+            &db,
+            &[
+                movie(db.source, "Alpha", 1, Some(2001)),
+                movie(db.source, "Bravo", 2, Some(2002)),
+            ],
+            false,
+        )
+        .await;
+        let (a, b) = (entity_of(&db, "Alpha").await, entity_of(&db, "Bravo").await);
+        let repo = ExternalMatchRepository::new(&db.pool);
+        repo.apply_movie_matches(&[matched(&a, "603", "The Alpha"), unresolved(&b)])
+            .await
+            .unwrap();
+        let queued = |lang: &'static str| {
+            let pool = db.pool.clone();
+            let source = db.source;
+            async move {
+                ExternalMatchRepository::new(&pool)
+                    .movie_work(source, 2, 0, lang)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|w| w.entity_id)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert!(queued("en-US").await.is_empty());
+        assert_eq!(
+            queued("fr-FR").await,
+            vec![a.clone()],
+            "only the localized title is refetched"
+        );
+        let original: Option<String> = sqlx::query_scalar(
+            "SELECT original_title FROM entity_external_matches WHERE entity_id = ?",
+        )
+        .bind(a.as_str())
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(original.as_deref(), Some("The Alpha"));
     }
 
     #[tokio::test]

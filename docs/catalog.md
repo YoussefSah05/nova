@@ -319,3 +319,22 @@ Existing rows keep their old `category` as the collection with no genre claimed.
 A refresh recomputes all three. Known limit: when a TMDB genre is removed at
 runtime, the provider genre it replaced comes back on the next refresh (the
 facet shows the collection meanwhile).
+
+### TMDB naming data (naming v1, step 4)
+
+- **Metadata language:** `ProfileSettings.metadata_language` (BCP-47, default
+  `en-US`, set under Settings → Catalog Enrichment → *Title language*). It is
+  validated by `nova_core::metadata_language` and sent as TMDB's `language`
+  parameter on details and search requests. It affects presentation only, never
+  identity.
+- **Genres stay in English:** the genre list is always fetched in `en-US`
+  (genre IDs are language-independent), so Nova's taxonomy doesn't split into
+  "Drama"/"Drame".
+- **Stored with each match:** migration 0028 adds `original_title` and
+  `title_language` to `entity_external_matches` and `series_meta`. The
+  localized display title never replaces the original, and `MatchEvidence`
+  records the language.
+- **Language change:** titles matched in another language are re-queued (movie
+  and series work queues). Unresolved titles are not.
+- **Cache keys** carry the language, except for `en-US`, which keeps the Phase C
+  keys so existing cached bodies are reused.

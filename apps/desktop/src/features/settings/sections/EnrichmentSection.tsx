@@ -8,7 +8,27 @@ import { listen } from "@tauri-apps/api/event";
 
 import type { ProfileSettings, Source } from "@/types";
 import { DEFAULT_PROFILE_SETTINGS } from "@/types";
-import { SettingRow, SettingsCard, SettingsButton, TextInput, Toggle } from "../SettingsUI";
+import {
+  SelectInput,
+  SettingRow,
+  SettingsCard,
+  SettingsButton,
+  TextInput,
+  Toggle,
+} from "../SettingsUI";
+
+/// Languages offered for TMDB titles/overviews (BCP-47 tags TMDB accepts).
+const METADATA_LANGUAGES = [
+  { value: "en-US", label: "English" },
+  { value: "fr-FR", label: "Français" },
+  { value: "ar", label: "العربية" },
+  { value: "es-ES", label: "Español" },
+  { value: "de-DE", label: "Deutsch" },
+  { value: "it-IT", label: "Italiano" },
+  { value: "pt-BR", label: "Português (Brasil)" },
+  { value: "tr-TR", label: "Türkçe" },
+  { value: "nl-NL", label: "Nederlands" },
+];
 
 interface EnrichModelStatus {
   installed: boolean;
@@ -155,6 +175,17 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
             checked={settings.tmdbEnabled}
             onChange={(v) => void persist({ ...settings, tmdbEnabled: v })}
             label="Use TMDB"
+          />
+        </SettingRow>
+        <SettingRow
+          title="Title language"
+          description="Language of TMDB titles and overviews. Original titles stay searchable; changing this refetches titles on the next run."
+        >
+          <SelectInput
+            value={settings.metadataLanguage}
+            options={METADATA_LANGUAGES}
+            onChange={(v) => void persist({ ...settings, metadataLanguage: v })}
+            ariaLabel="TMDB title language"
           />
         </SettingRow>
         <div className="py-3">

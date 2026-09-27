@@ -120,7 +120,10 @@ impl TmdbItem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TmdbMatch {
     pub tmdb_id: i64,
+    /// Title in the client's metadata language.
     pub canonical_title: String,
+    /// Title in the work's original language, when TMDB reports one.
+    pub original_title: Option<String>,
     pub poster_url: Option<String>,
     pub backdrop_url: Option<String>,
     pub overview: Option<String>,
@@ -141,6 +144,7 @@ impl TmdbMatch {
         Self {
             tmdb_id: item.id,
             canonical_title: item.display_title().unwrap_or(fallback_title).to_string(),
+            original_title: item.original().map(str::to_string),
             poster_url: image_url(&item.poster_path, "w500"),
             backdrop_url: image_url(&item.backdrop_path, "w1280"),
             overview: item.overview.clone().filter(|o| !o.trim().is_empty()),
@@ -186,12 +190,15 @@ impl std::fmt::Debug for TmdbAuth {
 pub struct TmdbClient {
     http: reqwest::Client,
     auth: TmdbAuth,
+    /// BCP-47 language for titles/overviews (`language` query parameter).
+    language: String,
 }
 
 impl TmdbClient {
     /// `credential` is a Read Access Token (preferred) or a legacy API key;
-    /// the kind is detected from its shape.
-    pub fn new(credential: String) -> Result<Self, EnrichError> {
+    /// the kind is detected from its shape. `language` (BCP-47, e.g. `fr-FR`)
+    /// localizes titles and overviews.
+    pub fn new(credential: String, language: &str) -> Result<Self, EnrichError> {
         let http = reqwest::Client::builder()
             .user_agent("Nova/0.1")
             .connect_timeout(Duration::from_secs(10))
@@ -201,6 +208,7 @@ impl TmdbClient {
         Ok(Self {
             http,
             auth: TmdbAuth::detect(&credential),
+            language: language.to_string(),
         })
     }
 
@@ -209,9 +217,14 @@ impl TmdbClient {
         &self,
         path: &str,
         params: &[(&str, String)],
+        language: &str,
     ) -> Result<Option<String>, EnrichError> {
         tokio::time::sleep(REQUEST_SPACING).await;
-        let mut request = self.http.get(format!("{API_BASE}{path}")).query(params);
+        let mut request = self
+            .http
+            .get(format!("{API_BASE}{path}"))
+            .query(params)
+            .query(&[("language", language)]);
         request = match &self.auth {
             TmdbAuth::ReadAccessToken(token) => request.bearer_auth(token),
             TmdbAuth::ApiKey(key) => request.query(&[("api_key", key.as_str())]),
@@ -235,14 +248,15 @@ impl TmdbClient {
     }
 
     async fn get(&self, path: &str, params: &[(&str, String)]) -> Result<String, EnrichError> {
-        self.get_optional(path, params)
+        self.get_optional(path, params, &self.language)
             .await?
             .ok_or_else(|| EnrichError::Http("TMDB 404 Not Found".into()))
     }
 
     /// `/movie/{id}` details; `None` when TMDB doesn't know the ID.
     pub async fn movie_details(&self, id: i64) -> Result<Option<String>, EnrichError> {
-        self.get_optional(&format!("/movie/{id}"), &[]).await
+        self.get_optional(&format!("/movie/{id}"), &[], &self.language)
+            .await
     }
 
     /// `/search/movie`.
@@ -270,9 +284,18 @@ impl TmdbClient {
             .await
     }
 
-    /// `/genre/{movie,tv}/list`. `kind` is `movie` or `tv`.
+    /// `/genre/{movie,tv}/list`. `kind` is `movie` or `tv`. Always English:
+    /// genre IDs are language-independent, and English names map onto Nova's
+    /// taxonomy without splitting it by language ("Drama" vs "Drame").
     pub async fn genre_list(&self, kind: &str) -> Result<String, EnrichError> {
-        self.get(&format!("/genre/{kind}/list"), &[]).await
+        self.get_optional(&format!("/genre/{kind}/list"), &[], "en-US")
+            .await?
+            .ok_or_else(|| EnrichError::Http("TMDB 404 Not Found".into()))
+    }
+
+    /// The metadata language this client requests.
+    pub fn language(&self) -> &str {
+        &self.language
     }
 }
 
@@ -517,6 +540,8 @@ pub struct MatchEvidence {
     /// Cleaned query sent to TMDB and the year evidence it was scored with.
     pub query: String,
     pub year: Option<i32>,
+    /// Metadata language the titles were requested in (BCP-47).
+    pub language: String,
     /// Response-cache keys consulted, in order.
     pub requests: Vec<String>,
     pub trusted_id: Option<TrustedIdEvidence>,
@@ -529,11 +554,12 @@ pub struct MatchEvidence {
 }
 
 impl MatchEvidence {
-    pub fn new(query: String, year: Option<i32>) -> Self {
+    pub fn new(query: String, year: Option<i32>, language: &str) -> Self {
         Self {
             matcher_version: MATCHER_VERSION,
             query,
             year,
+            language: language.to_string(),
             requests: Vec::new(),
             trusted_id: None,
             candidates: Vec::new(),
@@ -732,6 +758,7 @@ mod tests {
             vec!["Drama", "Crime"],
             "details carry genre objects"
         );
+        assert_eq!(m.original_title.as_deref(), Some("The Godfather"));
     }
 
     #[test]
@@ -752,7 +779,7 @@ mod tests {
     #[test]
     fn evidence_serializes_without_secrets() {
         let ranked = rank("The Matrix", Some(1999), parse_search(MOVIE_BODY).unwrap());
-        let mut evidence = MatchEvidence::new("The Matrix".into(), Some(1999));
+        let mut evidence = MatchEvidence::new("The Matrix".into(), Some(1999), "en-US");
         evidence.requests.push("movie::the matrix::1999".into());
         evidence.candidates = ranked.iter().map(CandidateEvidence::of).collect();
         evidence.outcome = "matched".into();

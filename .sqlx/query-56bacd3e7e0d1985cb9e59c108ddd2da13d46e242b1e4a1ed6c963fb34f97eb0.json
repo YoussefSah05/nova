@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO entity_external_matches\n                       (entity_id, namespace, status, external_id, method, confidence_bp,\n                        matcher_version, evidence_json, canonical_title, poster_url,\n                        backdrop_url, overview, genres, primary_genre, checked_at,\n                        original_title, title_language)\n                   VALUES (?, 'tmdb:movie', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n                   ON CONFLICT(entity_id, namespace) DO UPDATE SET\n                       status = excluded.status,\n                       external_id = excluded.external_id,\n                       method = excluded.method,\n                       confidence_bp = excluded.confidence_bp,\n                       matcher_version = excluded.matcher_version,\n                       evidence_json = excluded.evidence_json,\n                       canonical_title = excluded.canonical_title,\n                       poster_url = excluded.poster_url,\n                       backdrop_url = excluded.backdrop_url,\n                       overview = excluded.overview,\n                       genres = excluded.genres,\n                       primary_genre = excluded.primary_genre,\n                       checked_at = excluded.checked_at,\n                       original_title = excluded.original_title,\n                       title_language = excluded.title_language",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 16
+    },
+    "nullable": []
+  },
+  "hash": "56bacd3e7e0d1985cb9e59c108ddd2da13d46e242b1e4a1ed6c963fb34f97eb0"
+}

@@ -440,3 +440,10 @@ The credential is **write-only** from the webview:
 - `clear_tmdb_credential { profileId }` removes it. Enrichment progress
 now also emits `catalog:enrich:progress` with `stage: "matching"` after each
 committed batch of matches, and clients may refresh on it.
+
+## Metadata language (naming v1)
+
+`ProfileSettings.metadataLanguage` (BCP-47, default `"en-US"`) selects the
+language of TMDB titles and overviews. It is read and written through
+`get_profile_settings` / `set_profile_settings` like other settings, and
+invalid tags fall back to `en-US`.

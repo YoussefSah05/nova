@@ -480,6 +480,9 @@ pub struct ProfileSettings {
     /// towards the webview (see desktop `ProfileSettingsView`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tmdb_api_key: Option<String>,
+    /// Language of TMDB titles and overviews (BCP-47, e.g. `en-US`, `fr-FR`).
+    /// Presentation only: identity never depends on it.
+    pub metadata_language: String,
     /// UI accent theme id: `amber` | `teal` | `rose` | `violet` | `blue`.
     /// `#[serde(default)]` on the container → old blobs without it load fine.
     pub accent_color: String,
@@ -495,8 +498,29 @@ impl Default for ProfileSettings {
             default_playback_route: "auto".to_string(),
             tmdb_enabled: false,
             tmdb_api_key: None,
+            metadata_language: DEFAULT_METADATA_LANGUAGE.to_string(),
             accent_color: "amber".to_string(),
         }
+    }
+}
+
+/// TMDB metadata language used when none (or an invalid one) is configured.
+pub const DEFAULT_METADATA_LANGUAGE: &str = "en-US";
+
+/// A metadata language tag Nova sends to TMDB: `ll` or `ll-CC` (ISO 639-1 +
+/// ISO 3166-1). Anything else falls back to [`DEFAULT_METADATA_LANGUAGE`].
+pub fn metadata_language(tag: &str) -> &str {
+    let b = tag.as_bytes();
+    let lang_ok = |s: &[u8]| s.len() == 2 && s.iter().all(u8::is_ascii_lowercase);
+    let valid = match b.len() {
+        2 => lang_ok(b),
+        5 => lang_ok(&b[..2]) && b[2] == b'-' && b[3..].iter().all(u8::is_ascii_uppercase),
+        _ => false,
+    };
+    if valid {
+        tag
+    } else {
+        DEFAULT_METADATA_LANGUAGE
     }
 }
 
@@ -562,5 +586,32 @@ mod tests {
         assert!(json.get("skippedCount").is_some());
         assert!(json.get("elapsedMs").is_some());
         assert!(json.get("warning").is_some());
+    }
+}
+
+#[cfg(test)]
+mod metadata_language_tests {
+    use super::*;
+
+    #[test]
+    fn only_well_formed_language_tags_reach_tmdb() {
+        for ok in ["en-US", "fr-FR", "ar", "pt-BR", "de"] {
+            assert_eq!(metadata_language(ok), ok);
+        }
+        for bad in [
+            "",
+            "EN-us",
+            "english",
+            "fr_FR",
+            "fr-FRA",
+            "x",
+            "en-US; DROP",
+        ] {
+            assert_eq!(metadata_language(bad), DEFAULT_METADATA_LANGUAGE, "{bad:?}");
+        }
+        assert_eq!(ProfileSettings::default().metadata_language, "en-US");
+        // Older settings blobs without the field load with the default.
+        let old: ProfileSettings = serde_json::from_str(r#"{"tmdbEnabled":true}"#).unwrap();
+        assert_eq!(old.metadata_language, "en-US");
     }
 }

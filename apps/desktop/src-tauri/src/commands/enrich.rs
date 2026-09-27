@@ -374,7 +374,8 @@ pub(crate) async fn run_enrichment(
     if settings.tmdb_enabled {
         if let Some(key) = settings.tmdb_api_key.filter(|k| !k.trim().is_empty()) {
             yield_point(slot, cancellation, || emit("queued", total, false)).await?;
-            run_tmdb(&pool, source_id, key, app, slot, cancellation).await?;
+            let language = nova_core::metadata_language(&settings.metadata_language).to_string();
+            run_tmdb(&pool, source_id, key, &language, app, slot, cancellation).await?;
         }
     }
 
@@ -398,9 +399,19 @@ enum TmdbRequest {
 }
 
 impl TmdbRequest {
-    /// Stable cache key (unchanged from the Phase C keys for searches, so
-    /// existing cached bodies are reused).
-    fn cache_key(&self) -> String {
+    /// Stable cache key. TMDB bodies differ by metadata language, so the key
+    /// carries it, except for `en-US`, whose keys are unchanged from Phase C
+    /// so existing cached bodies are reused.
+    fn cache_key(&self, language: &str) -> String {
+        let key = self.base_key();
+        if language == nova_core::DEFAULT_METADATA_LANGUAGE {
+            key
+        } else {
+            format!("{key}::{language}")
+        }
+    }
+
+    fn base_key(&self) -> String {
         match self {
             Self::MovieDetails(id) => format!("movie-details::{id}"),
             Self::SearchMovie { query, year } => match year {
@@ -417,6 +428,8 @@ impl TmdbRequest {
 /// map in tests. `Ok(None)` means TMDB answered 404.
 trait TmdbFetch {
     async fn fetch(&self, request: &TmdbRequest) -> Result<Option<String>, ApiError>;
+    /// Metadata language of the fetched bodies (BCP-47).
+    fn language(&self) -> &str;
 }
 
 struct CachedTmdb<'a> {
@@ -425,8 +438,12 @@ struct CachedTmdb<'a> {
 }
 
 impl TmdbFetch for CachedTmdb<'_> {
+    fn language(&self) -> &str {
+        self.client.language()
+    }
+
     async fn fetch(&self, request: &TmdbRequest) -> Result<Option<String>, ApiError> {
-        let key = request.cache_key();
+        let key = request.cache_key(self.language());
         if let Some(body) = self.cache.get(&key).await? {
             // An empty cached body records a 404.
             return Ok((!body.is_empty()).then_some(body));
@@ -455,15 +472,18 @@ impl TmdbFetch for CachedTmdb<'_> {
 /// so the most relevant posters appear first and a restart resumes. A transient
 /// error on one title skips it (it is retried on the next run) without failing
 /// the pass.
+#[allow(clippy::too_many_arguments)]
 async fn run_tmdb(
     pool: &Arc<sqlx::SqlitePool>,
     source_id: i64,
     credential: String,
+    language: &str,
     app: &AppHandle,
     slot: &mut JobSlot,
     cancellation: &RuntimeCancellation,
 ) -> Result<(), ApiError> {
-    let client = TmdbClient::new(credential).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let client =
+        TmdbClient::new(credential, language).map_err(|e| ApiError::Internal(e.to_string()))?;
     let cache = TmdbCacheRepository::new(pool);
     let tmdb = CachedTmdb {
         client: &client,
@@ -482,10 +502,10 @@ async fn run_tmdb(
     let retry_before = nova_core::now_ts() - RETRY_UNRESOLVED_SECS;
     let matches = ExternalMatchRepository::new(pool);
     let movies = matches
-        .movie_work(source_id, MATCHER_VERSION, retry_before)
+        .movie_work(source_id, MATCHER_VERSION, retry_before, language)
         .await?;
     let series = SeriesRepository::new(pool)
-        .list_for_tmdb(source_id, MATCHER_VERSION, retry_before)
+        .list_for_tmdb(source_id, MATCHER_VERSION, retry_before, language)
         .await?;
     let tmdb_total = movies.len() + series.len();
     let mut done = 0usize;
@@ -557,10 +577,12 @@ fn outcome_name(reason: UnresolvedReason) -> &'static str {
     }
 }
 
-fn matched_metadata(m: TmdbMatch) -> MatchedMetadata {
+fn matched_metadata(m: TmdbMatch, language: &str) -> MatchedMetadata {
     MatchedMetadata {
         external_id: m.tmdb_id.to_string(),
         canonical_title: m.canonical_title,
+        original_title: m.original_title,
+        title_language: language.to_string(),
         poster_url: m.poster_url,
         backdrop_url: m.backdrop_url,
         overview: m.overview,
@@ -580,7 +602,7 @@ async fn search_cascade(
     let mut items = Vec::new();
     let mut ranked = Vec::new();
     for step in steps {
-        evidence.requests.push(step.cache_key());
+        evidence.requests.push(step.cache_key(tmdb.language()));
         if let Some(body) = tmdb.fetch(&step).await? {
             items.extend(retain_kind(parse_search(&body).map_err(parse_err)?, kind));
         }
@@ -608,13 +630,14 @@ async fn match_movie(
     let raw = work.source_title.as_deref().unwrap_or(&work.title);
     let query = nova_core::clean::search_title(raw);
     let titles = vec![work.title.clone(), raw.to_string()];
-    let mut evidence = MatchEvidence::new(query.clone(), work.year);
+    let language = tmdb.language().to_string();
+    let mut evidence = MatchEvidence::new(query.clone(), work.year, &language);
     let write = |matched: Option<TmdbMatch>,
                  method: MatchMethod,
                  confidence_bp: Option<u16>,
                  evidence: &MatchEvidence| ExternalMatchWrite {
         entity_id: work.entity_id.clone(),
-        matched: matched.map(matched_metadata),
+        matched: matched.map(|m| matched_metadata(m, &language)),
         method,
         confidence_bp,
         matcher_version: MATCHER_VERSION,
@@ -625,7 +648,7 @@ async fn match_movie(
     //    rely on search instead.
     if let [tmdb_id] = work.trusted_tmdb_ids[..] {
         let request = TmdbRequest::MovieDetails(tmdb_id);
-        evidence.requests.push(request.cache_key());
+        evidence.requests.push(request.cache_key(tmdb.language()));
         let check = match tmdb.fetch(&request).await? {
             None => None,
             Some(body) => {
@@ -695,7 +718,7 @@ async fn match_series(
     genres: &HashMap<i64, String>,
 ) -> Result<SeriesTmdbWrite, ApiError> {
     let query = nova_core::clean::search_series_title(&q.series_title);
-    let mut evidence = MatchEvidence::new(query.clone(), None);
+    let mut evidence = MatchEvidence::new(query.clone(), None, tmdb.language());
     let steps = vec![
         TmdbRequest::SearchTv(query.clone()),
         TmdbRequest::SearchMulti(query.clone()),
@@ -710,6 +733,8 @@ async fn match_series(
             SeriesTmdbWrite {
                 series_title: q.series_title.clone(),
                 canonical_title: Some(m.canonical_title),
+                original_title: m.original_title,
+                title_language: Some(tmdb.language().to_string()),
                 poster_url: m.poster_url,
                 backdrop_url: m.backdrop_url,
                 overview: m.overview,
@@ -727,6 +752,8 @@ async fn match_series(
             SeriesTmdbWrite {
                 series_title: q.series_title.clone(),
                 canonical_title: None,
+                original_title: None,
+                title_language: None,
                 poster_url: None,
                 backdrop_url: None,
                 overview: None,
@@ -855,6 +882,7 @@ mod tmdb_matching_tests {
     struct Fixture {
         bodies: HashMap<String, String>,
         requested: Mutex<Vec<String>>,
+        language: String,
     }
 
     impl Fixture {
@@ -868,8 +896,16 @@ mod tmdb_matching_tests {
     }
 
     impl TmdbFetch for Fixture {
+        fn language(&self) -> &str {
+            if self.language.is_empty() {
+                nova_core::DEFAULT_METADATA_LANGUAGE
+            } else {
+                &self.language
+            }
+        }
+
         async fn fetch(&self, request: &TmdbRequest) -> Result<Option<String>, ApiError> {
-            let key = request.cache_key();
+            let key = request.cache_key(self.language());
             self.requested.lock().unwrap().push(key.clone());
             Ok(self.bodies.get(&key).cloned())
         }
@@ -956,6 +992,38 @@ mod tmdb_matching_tests {
             tmdb.requested(),
             vec!["movie-details::999", "movie::the godfather::1972"],
             "the cascade stops at the first decisive search"
+        );
+    }
+
+    #[tokio::test]
+    async fn titles_are_localized_while_the_original_title_is_kept() {
+        let search = r#"{"results": [{"id": 238, "title": "Le Parrain",
+            "original_title": "The Godfather", "release_date": "1972-03-14"}]}"#;
+        let tmdb = Fixture {
+            language: "fr-FR".into(),
+            ..Fixture::default()
+        }
+        .with("movie::le parrain::1972::fr-FR", search);
+        let w = match_movie(&tmdb, &work("Le Parrain", Some(1972), &[]), &HashMap::new())
+            .await
+            .unwrap();
+        let m = w.matched.as_ref().unwrap();
+        assert_eq!(
+            m.canonical_title, "Le Parrain",
+            "display title in the metadata language"
+        );
+        assert_eq!(m.original_title.as_deref(), Some("The Godfather"));
+        assert_eq!(m.title_language, "fr-FR");
+        assert_eq!(evidence(&w)["language"], "fr-FR");
+        assert_eq!(
+            tmdb.requested(),
+            vec!["movie::le parrain::1972::fr-FR"],
+            "non-default languages get their own cache keys"
+        );
+        assert_eq!(
+            w.entity_id.as_str(),
+            "mov-1",
+            "identity never depends on language"
         );
     }
 

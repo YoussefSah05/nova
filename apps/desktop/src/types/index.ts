@@ -289,6 +289,9 @@ export interface ProfileSettings {
   defaultPlaybackRoute: DefaultPlaybackRoute;
   // Catalog enrichment (Phase C) — opt-in TMDB, user-supplied key.
   tmdbEnabled: boolean;
+  /// TMDB title/overview language (BCP-47, e.g. "en-US", "fr-FR"). Display
+  /// only; changing it refetches localized titles, never changes identity.
+  metadataLanguage: string;
   /// Read-only: the credential itself never reaches the webview. Change it
   /// with `set_tmdb_credential` / `clear_tmdb_credential`.
   tmdbCredentialConfigured: boolean;
@@ -305,6 +308,7 @@ export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
   preferredSubtitleLang: null,
   defaultPlaybackRoute: "auto",
   tmdbEnabled: false,
+  metadataLanguage: "en-US",
   tmdbCredentialConfigured: false,
   tmdbCredentialHint: null,
   accentColor: "amber",
