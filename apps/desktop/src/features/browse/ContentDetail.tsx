@@ -28,6 +28,7 @@ import { Artwork } from "@/components/Artwork";
 import { useArtworkSrc } from "@/lib/artwork";
 import { TitleLogo } from "./TitleLogo";
 import { useTitleArt } from "./titleArt";
+import { ChannelTile } from "./ChannelTile";
 
 /// Preferred audio language choices. `null` = keep the stream's original track.
 const AUDIO_LANGS: { value: string | null; label: string }[] = [
@@ -93,12 +94,9 @@ function LiveBundleDetail({
         <ArrowLeft className="h-4 w-4" /> Back
       </Button>
       <div className="mt-4 flex items-center gap-4">
-        <Artwork
-          src={item.posterUrl}
-          alt=""
-          decoding="async"
-          className="h-16 w-28 rounded-lg object-contain bg-neutral-900 p-2"
-        />
+        <div className="h-16 w-28 shrink-0 overflow-hidden rounded-xl shadow-lg shadow-black/40">
+          <ChannelTile logoUrl={item.posterUrl} title={item.title} />
+        </div>
         <div>
           <h1 className="font-display text-2xl font-semibold">{item.title}</h1>
           <p className="mt-1 text-sm text-white/55">
@@ -116,17 +114,10 @@ function LiveBundleDetail({
             <button
               key={c.key}
               onClick={() => onPlay(c)}
-              className="flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-center transition-colors hover:bg-white/10"
+              className="group flex flex-col gap-2 text-left focus:outline-none"
             >
-              <div className="flex h-16 w-full items-center justify-center">
-                <Artwork
-                  src={c.posterUrl}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  className="max-h-16 max-w-full object-contain"
-                  fallback={<Play className="h-6 w-6 text-white/40" />}
-                />
+              <div className="aspect-video w-full overflow-hidden rounded-xl shadow-lg shadow-black/30 transition-transform duration-200 group-hover:-translate-y-1 group-hover:ring-1 group-hover:ring-white/25 group-focus-visible:ring-2 group-focus-visible:ring-ring">
+                <ChannelTile logoUrl={c.posterUrl} title={c.title} />
               </div>
               <span className="line-clamp-2 text-xs font-medium text-white/85">{c.title}</span>
             </button>

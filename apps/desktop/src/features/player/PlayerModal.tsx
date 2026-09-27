@@ -56,6 +56,7 @@ import { useCaptionStyle } from "./useCaptionStyle";
 import { useAirPlay } from "./useAirPlay";
 import { AirPlayButton, AirPlayOverlay } from "./AirPlay";
 import { Artwork } from "@/components/Artwork";
+import { ChannelTile as BrandTile } from "@/features/browse/ChannelTile";
 
 export type PlayMediaKind = "live" | "vod" | "episode";
 
@@ -2028,14 +2029,8 @@ function ChannelTile({
         active ? "bg-white/15" : "hover:bg-white/10"
       )}
     >
-      <div className="flex h-16 w-full items-center justify-center overflow-hidden rounded bg-neutral-800">
-        <Artwork
-          src={logoUrl}
-          alt=""
-          loading="lazy"
-          className="max-h-full max-w-full object-contain"
-          fallback={<Radio className="h-5 w-5 text-white/40" />}
-        />
+      <div className="aspect-video w-full overflow-hidden rounded-lg shadow-md shadow-black/40">
+        <BrandTile logoUrl={logoUrl} title={title} />
       </div>
       <span className="line-clamp-2 text-[11px] font-medium text-white/85">{title}</span>
     </button>

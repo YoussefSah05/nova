@@ -28,6 +28,7 @@ import {
   type RailSpec,
 } from "./queries";
 import { Artwork } from "@/components/Artwork";
+import { ChannelTile } from "./ChannelTile";
 
 const MAX_GENRE_RAILS = 25;
 /// How many genre rails fetch immediately; the rest lazy-load on scroll.
@@ -229,15 +230,24 @@ function ContinueWatchingCard({
         "hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       )}
     >
-      <div className="relative aspect-video w-48 overflow-hidden rounded-xl border border-border bg-muted">
-        <Artwork
-          src={item.posterUrl}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          className="h-full w-full object-cover"
-          fallback={<PosterFallback title={item.title} live={item.mediaKind === "live"} />}
-        />
+      <div
+        className={cn(
+          "relative aspect-video w-48 overflow-hidden rounded-xl",
+          item.mediaKind === "live" ? "shadow-lg shadow-black/30" : "border border-border bg-muted"
+        )}
+      >
+        {item.mediaKind === "live" ? (
+          <ChannelTile logoUrl={item.posterUrl} title={item.title} />
+        ) : (
+          <Artwork
+            src={item.posterUrl}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover"
+            fallback={<PosterFallback title={item.title} />}
+          />
+        )}
         <div className="absolute inset-x-0 bottom-0 h-1 bg-black/40">
           <div className="h-full bg-primary" style={{ width: `${progress}%` }} />
         </div>

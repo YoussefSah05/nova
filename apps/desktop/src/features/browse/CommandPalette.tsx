@@ -38,6 +38,7 @@ import {
 } from "./queries";
 import { PosterFallback } from "./PosterFallback";
 import { Artwork } from "@/components/Artwork";
+import { ChannelTile } from "./ChannelTile";
 
 export interface CommandPaletteProps {
   open: boolean;
@@ -293,14 +294,22 @@ function Thumb({ item }: { item: BrowseItem }) {
     <span
       className={cn("flex h-9 shrink-0 overflow-hidden rounded-md bg-muted", live ? "w-14" : "w-6")}
     >
-      <Artwork
-        src={item.posterUrl}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        className={cn("h-full w-full", live ? "object-contain p-0.5" : "object-cover")}
-        fallback={<PosterFallback title={item.title} live={live} />}
-      />
+      {live ? (
+        <ChannelTile
+          logoUrl={item.posterUrl}
+          title={item.title}
+          logoClassName="max-h-[72%] max-w-[80%]"
+        />
+      ) : (
+        <Artwork
+          src={item.posterUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className="h-full w-full object-cover"
+          fallback={<PosterFallback title={item.title} />}
+        />
+      )}
     </span>
   );
 }

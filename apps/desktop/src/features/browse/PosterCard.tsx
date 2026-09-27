@@ -20,6 +20,7 @@ import { WatchlistButton } from "./WatchlistButton";
 import { PosterFallback } from "./PosterFallback";
 import type { BrowseItem } from "./queries";
 import { Artwork } from "@/components/Artwork";
+import { ChannelTile } from "./ChannelTile";
 
 export interface PosterCardHandlers {
   onActivate: (item: BrowseItem) => void;
@@ -65,20 +66,26 @@ export const PosterCard = memo(function PosterCard({
             type="button"
             onClick={() => onActivate(item)}
             className={cn(
-              "relative w-full overflow-hidden rounded-xl border border-border bg-muted ring-0 ring-ring transition-[transform,box-shadow,border-color] duration-200",
-              "hover:-translate-y-1 hover:border-primary/40 hover:shadow-2xl hover:shadow-black/50 focus:outline-none focus-visible:ring-2",
-              live ? "aspect-video" : "aspect-[2/3]"
+              "relative w-full overflow-hidden ring-ring transition-[transform,box-shadow,border-color] duration-200",
+              "hover:-translate-y-1 hover:shadow-2xl hover:shadow-black/50 focus:outline-none focus-visible:ring-2",
+              live
+                ? "aspect-video rounded-2xl shadow-lg shadow-black/30 ring-0 hover:ring-1 hover:ring-white/25"
+                : "aspect-[2/3] rounded-xl border border-border bg-muted ring-0 hover:border-primary/40"
             )}
             aria-label={item.title}
           >
-            <Artwork
-              src={item.posterUrl}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className={cn("h-full w-full", live ? "object-contain p-3" : "object-cover")}
-              fallback={<PosterFallback title={item.title} live={live} />}
-            />
+            {live ? (
+              <ChannelTile logoUrl={item.posterUrl} title={item.title} />
+            ) : (
+              <Artwork
+                src={item.posterUrl}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                className="h-full w-full object-cover"
+                fallback={<PosterFallback title={item.title} />}
+              />
+            )}
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
             {item.memberCount && item.memberCount > 1 ? (
               <span className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm">
