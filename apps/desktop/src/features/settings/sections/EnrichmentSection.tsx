@@ -137,13 +137,13 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
           />
         </SettingRow>
         <div className="py-3">
-          <p className="mb-1.5 text-sm font-medium text-white">API key</p>
+          <p className="mb-1.5 text-sm font-medium text-white">API Read Access Token</p>
           <div className="flex items-center gap-2">
             <TextInput
               value={keyDraft}
               onChange={setKeyDraft}
-              placeholder="TMDB API key (v3 auth)"
-              ariaLabel="TMDB API key"
+              placeholder="Read Access Token (or legacy API key)"
+              ariaLabel="TMDB API Read Access Token"
             />
             <SettingsButton
               variant="primary"
@@ -153,8 +153,9 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
             </SettingsButton>
           </div>
           <p className="mt-1.5 text-xs text-white/40">
-            Get a free key at themoviedb.org → Settings → API. Stored locally; nothing is sent to
-            TMDB unless this is enabled and a key is set.
+            Free at themoviedb.org → Settings → API: copy the “API Read Access Token” (a legacy “API
+            Key” also works). Stored locally; nothing is sent to TMDB unless this is enabled and a
+            token is set.
           </p>
         </div>
       </SettingsCard>

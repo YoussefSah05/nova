@@ -216,14 +216,26 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
 
   // Enrichment runs in the background; refresh the browse caches when it finishes
   // so de-duplicated cards + filled-in genres appear without a manual reload.
+  // TMDB matching commits in small, priority-ordered batches, so also refresh
+  // (at most every few seconds) while it runs: posters for favourites and
+  // in-progress titles appear first.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listen<{ sourceId: number; done: boolean }>("catalog:enrich:progress", (event) => {
-      if (event.payload.done && event.payload.sourceId === activeSourceId) {
-        invalidateSource(qc, profile.id, activeSourceId);
+    let lastRefresh = 0;
+    void listen<{ sourceId: number; done: boolean; stage: string; processed: number }>(
+      "catalog:enrich:progress",
+      (event) => {
+        const p = event.payload;
+        if (p.sourceId !== activeSourceId) return;
+        const now = Date.now();
+        const progressive = p.stage === "matching" && p.processed > 0 && now - lastRefresh > 4000;
+        if (p.done || progressive) {
+          lastRefresh = now;
+          invalidateSource(qc, profile.id, activeSourceId);
+        }
       }
-    }).then((un) => {
+    ).then((un) => {
       if (cancelled) un();
       else unlisten = un;
     });

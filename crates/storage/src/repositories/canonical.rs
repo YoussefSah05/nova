@@ -62,7 +62,7 @@ fn new_variant_id() -> VariantId {
         .expect("generated variant id is valid")
 }
 
-fn parse_entity(id: String) -> Result<EntityId, StorageError> {
+pub(crate) fn parse_entity(id: String) -> Result<EntityId, StorageError> {
     EntityId::new(id).map_err(|_| StorageError::InvalidCanonicalRecord)
 }
 

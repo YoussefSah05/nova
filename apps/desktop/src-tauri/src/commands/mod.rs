@@ -4,10 +4,10 @@ use nova_core::{
     ParsedEntry, Profile, SeriesEpisode, SeriesSummary, Source, VodItem,
 };
 use nova_storage::{
-    init_profile_db, CanonicalRepository, ChannelRepository, EpgSourcesRepository, FailedAttempt,
-    FailureStatus, ProfileRepository, ProfileSettingsRepository, PublicationMode,
-    PublicationRepository, SeriesRepository, SourceRepository, VodRepository,
-    WatchHistoryRepository, WatchSnapshot,
+    init_profile_db, CanonicalRepository, ChannelRepository, EpgSourcesRepository,
+    ExternalMatchRepository, FailedAttempt, FailureStatus, ProfileRepository,
+    ProfileSettingsRepository, PublicationMode, PublicationRepository, SeriesRepository,
+    SourceRepository, VodRepository, WatchHistoryRepository, WatchSnapshot,
 };
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, State};
@@ -1179,6 +1179,11 @@ async fn build_candidate(
         .await
         .map_err(ImportFailure::storage)?;
     CanonicalRepository::resolve_movies_tx(tx)
+        .await
+        .map_err(ImportFailure::storage)?;
+    // Entity-owned TMDB matches survive the refresh: re-mirror them onto the
+    // new rows instead of re-matching.
+    ExternalMatchRepository::mirror_movies_for_source_tx(tx, source_id)
         .await
         .map_err(ImportFailure::storage)?;
 

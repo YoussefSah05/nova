@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.id as \"id!: String\",\n                      e.title as \"title!: String\",\n                      e.year as \"year?: i64\",\n                      (SELECT v.name FROM stream_variants s\n                       JOIN vod_items v ON v.id = s.vod_item_id\n                       WHERE s.entity_id = e.id AND s.source_id = ?\n                       ORDER BY v.id LIMIT 1) as \"source_title?: String\",\n                      (SELECT group_concat(a.value, ' ') FROM entity_aliases a\n                       WHERE a.entity_id = e.id AND a.alias_kind = 'external'\n                         AND a.value LIKE 'tmdb:movie:%') as \"trusted?: String\",\n                      CASE WHEN e.is_favorite = 1 OR e.is_in_watchlist = 1 THEN 0\n                           WHEN w.entity_id IS NOT NULL AND w.completed = 0 THEN 1\n                           ELSE 2 END as \"tier!: i64\",\n                      (SELECT MAX(v.added_at) FROM stream_variants s\n                       JOIN vod_items v ON v.id = s.vod_item_id\n                       WHERE s.entity_id = e.id) as \"added?: i64\"\n               FROM canonical_entities e\n               LEFT JOIN entity_watch_state w ON w.entity_id = e.id\n               LEFT JOIN entity_external_matches m\n                 ON m.entity_id = e.id AND m.namespace = 'tmdb:movie'\n               WHERE e.kind = 'movie' AND e.state = 'active'\n                 AND EXISTS (SELECT 1 FROM stream_variants s\n                             WHERE s.entity_id = e.id AND s.source_id = ?\n                               AND s.vod_item_id IS NOT NULL)\n                 AND (m.entity_id IS NULL\n                      OR m.matcher_version < ?\n                      OR (m.status = 'unresolved' AND m.checked_at < ?))\n               ORDER BY 6, 7 DESC, e.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "year?: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_title?: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "trusted?: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "tier!: i64",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "added?: i64",
+        "ordinal": 6,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "f7d283b4355e28d9cb42a5aee0e3b821271109d3658c3d3197b960ab044e3382"
+}

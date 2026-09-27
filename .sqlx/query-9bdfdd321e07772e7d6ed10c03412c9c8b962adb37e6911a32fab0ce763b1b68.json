@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO series_meta\n                   (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,\n                    tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,\n                    evidence_json, checked_at)\n                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n                 ON CONFLICT(source_id, series_title) DO UPDATE SET\n                   canonical_title = excluded.canonical_title,\n                   poster_url = excluded.poster_url,\n                   backdrop_url = excluded.backdrop_url,\n                   overview = excluded.overview,\n                   tmdb_genres = excluded.tmdb_genres,\n                   tmdb_status = excluded.tmdb_status,\n                   match_method = excluded.match_method,\n                   confidence_bp = excluded.confidence_bp,\n                   matcher_version = excluded.matcher_version,\n                   evidence_json = excluded.evidence_json,\n                   checked_at = excluded.checked_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 13
+    },
+    "nullable": []
+  },
+  "hash": "9bdfdd321e07772e7d6ed10c03412c9c8b962adb37e6911a32fab0ce763b1b68"
+}

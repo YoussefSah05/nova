@@ -4,6 +4,7 @@ pub mod channels;
 pub mod embeddings;
 pub mod enrich;
 pub mod epg_sources;
+pub mod external_matches;
 pub mod jobs;
 pub mod models;
 pub mod playback;
@@ -27,10 +28,12 @@ pub use canonical::{
 pub use caption_style::CaptionStyleRepository;
 pub use channels::ChannelRepository;
 pub use embeddings::{from_blob, to_blob, EmbeddingRepository};
-pub use enrich::{
-    EnrichUpdate, SeriesTmdbQuery, SeriesTmdbWrite, TmdbQuery, TmdbWrite, UnenrichedRow,
-};
+pub use enrich::{EnrichUpdate, SeriesTmdbQuery, SeriesTmdbWrite, UnenrichedRow};
 pub use epg_sources::{EpgSource, EpgSourcesRepository};
+pub use external_matches::{
+    ExternalMatch, ExternalMatchRepository, ExternalMatchWrite, MatchMethod, MatchPriority,
+    MatchedMetadata, MovieMatchWork, TMDB_MOVIE,
+};
 pub use jobs::{Job, JobRepository};
 pub use models::{
     ExternalLibraryRecord, ExternalRegisteredModel, ModelRepository, RegisteredModel,

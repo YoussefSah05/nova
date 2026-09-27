@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT entity_id as \"entity_id!: String\", status as \"status!: String\",\n                      external_id, method as \"method!: String\", confidence_bp,\n                      matcher_version as \"matcher_version!: i64\",\n                      evidence_json as \"evidence_json!: String\",\n                      canonical_title, poster_url, checked_at as \"checked_at!: i64\"\n               FROM entity_external_matches\n               WHERE entity_id = ? AND namespace = 'tmdb:movie'",
+  "describe": {
+    "columns": [
+      {
+        "name": "entity_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "status!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "external_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "method!: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "confidence_bp",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "matcher_version!: i64",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "evidence_json!: String",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "canonical_title",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster_url",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "checked_at!: i64",
+        "ordinal": 9,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "9e5cbdf34c00ca02de94d7dcda1f1b3f96e7a39994c8853b494c17c21193a568"
+}

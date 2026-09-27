@@ -205,3 +205,42 @@ rejected candidate) rolls the transaction back explicitly. After that, it is
 logged as a `failed`/`rejected` row with a secret-free `reason_code` and summary.
 Failures never change the active generation or `last_refreshed_at`. A candidate
 abandoned mid-build (app killed during refresh) is discarded by SQLite on reopen.
+
+### TMDB matching (P11)
+
+TMDB metadata is **external evidence on a Nova entity, not its identity**. A
+match stores the TMDB ID as `external_id` in `entity_external_matches` (migration
+0025), keyed by the canonical entity and a per-kind namespace (`tmdb:movie`),
+together with its provenance. Matches never create, merge or rename entities. A
+search-derived TMDB ID is not written as an identity alias, so P09's resolver
+never merges on it; only provider-supplied IDs are identity evidence.
+
+- **Trusted ID first:** when the entity has exactly one provider-supplied TMDB ID
+  (a P09 `external` alias), `/3/movie/{id}` is looked up. It is accepted only if
+  corroborated: a known year within ±1, or, when undated, a similar title
+  (localized or original). A contradicted, uncorroborated or unknown (404) ID
+  falls back to search. Several distinct provider IDs are not used at all.
+- **Search otherwise:** movie+year → movie → multi (filtered to movies, so a TV
+  ID is never recorded as a movie), stopping at the first decisive step. The top
+  candidate must score ≥ 0.6 and beat any different title by ≥ 0.05. Otherwise
+  the title is **unresolved** (`low_confidence` / `ambiguous` / `no_candidates`),
+  with no metadata. The former "weak match attaches art only" band is gone.
+- **Provenance** (`evidence_json`, secret-free): matcher version, query and year,
+  response-cache keys consulted, trusted-ID check, top-5 candidates with scores,
+  thresholds and outcome. Also stored: `method`, `confidence_bp`,
+  `matcher_version` and `checked_at`.
+- **Progressive:** work is ordered favourites/watchlist → in progress →
+  recently added and committed every 25 titles. Home refreshes as batches land.
+  Decided titles leave the queue. Unresolved ones are retried after 7 days, and
+  everything is re-matched when `MATCHER_VERSION` changes. Matches survive
+  refreshes: the importer mirrors them onto the new rows after resolution, with
+  no new TMDB calls.
+- **Legacy mirror:** matched metadata is also copied to `vod_items` TMDB columns for
+  surfaces that still read rows. An unresolved decision clears them.
+- **Series** have no canonical entity yet: the same rules apply, with provenance
+  in new `series_meta` columns.
+
+Auth: TMDB v3 is still the current API for movie/TV data. The credential field
+accepts TMDB's default **API Read Access Token** (sent as `Authorization: Bearer`)
+or a legacy v3 API key, detected by shape. Request errors no longer include URLs,
+so a legacy key can't leak into logs.

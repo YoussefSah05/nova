@@ -12,8 +12,9 @@ pub use dedup::{cluster, Cluster, DedupItem};
 pub use embed::{Embedder, FastEmbedder, MODEL_ID};
 pub use taxonomy::GenreClassifier;
 pub use tmdb::{
-    best_match, best_scored, parse_genres, parse_search, TmdbClient, TmdbMatch, MIN_CONFIDENCE,
-    WEAK_CONFIDENCE,
+    decide, parse_details, parse_genres, parse_search, rank, retain_kind, verify_trusted,
+    CandidateEvidence, Decision, MatchEvidence, MediaKind as TmdbMediaKind, Scored, TmdbClient,
+    TmdbMatch, TrustedCheck, TrustedIdEvidence, UnresolvedReason, MATCHER_VERSION, MIN_CONFIDENCE,
 };
 
 #[derive(thiserror::Error, Debug)]

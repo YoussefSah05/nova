@@ -421,3 +421,11 @@ transcript search still matches them. The `enqueue_translation` /
 `translation:progress` / `translation:complete` rows above describe the planned
 Phase 7 contract, not implemented commands. Translation returns in Phase 7/10 after
 an engine study (latency, footprint, no conflicting native dependencies).
+
+## TMDB credential (P11)
+
+`ProfileSettings.tmdbApiKey` holds either TMDB's **API Read Access Token**
+(preferred; a JWT sent as a Bearer header) or a legacy v3 API key. The backend
+detects which. The field name is unchanged for compatibility. Enrichment progress
+now also emits `catalog:enrich:progress` with `stage: "matching"` after each
+committed batch of matches, and clients may refresh on it.

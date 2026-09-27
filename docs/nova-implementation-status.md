@@ -1426,3 +1426,65 @@ regenerated.
 - The UI shows the failure message but not publication history. No command
   exposes `catalog_publications` yet.
 - Not verified in the running app (`just dev`).
+
+## P11 — TMDB matching: trusted IDs, provenance, progressive
+
+Branch `feat/p11-tmdb-evolution` off `main`.
+
+### Gaps closed
+
+- **Weak matches published:** a 0.3–0.6 score attached a poster. Now anything
+  below 0.6, or ambiguous (two different titles within 0.05), stays unresolved
+  with no metadata.
+- **No use of trusted IDs:** provider TMDB IDs (P09 aliases) are now looked up
+  directly via `/3/movie/{id}`, and accepted only when year or title corroborates.
+- **No provenance:** each decision now stores method, confidence, matcher
+  version, request keys, top candidates and outcome.
+- **Nova ID vs TMDB ID:** matches live on the entity in
+  `entity_external_matches`. Search results never become identity aliases, and
+  two entities sharing a TMDB ID stay distinct.
+- **Re-matched on every refresh:** movie TMDB data lived on provider rows and was
+  wiped by every refresh. Matches are now entity-owned and mirrored back after
+  import with no API calls.
+- **TV IDs as movie matches:** `/search/multi` TV results could be recorded as
+  movies. Results are now filtered by media kind.
+- **Credential leak risk:** reqwest error text included the URL with `api_key`.
+  Errors now drop the URL, and the Read Access Token (Bearer) is supported.
+- **Progressive:** priority order (personal → in progress → recent), 25-title
+  batches, Home refresh while matching, and retry of unresolved titles after 7
+  days or on a matcher bump.
+
+### Tests (22 new or reworked)
+
+- Enrich (10): clear match; low confidence and the former weak band stay
+  unresolved; remakes are ambiguous without a year and matched with one;
+  duplicate IDs across searches; determinism; original titles; trusted-ID
+  corroboration rules; credential detection and redaction; secret-free evidence;
+  media-kind filter.
+- Desktop matcher with an offline fixture fetcher (6): a corroborated trusted ID
+  makes no search call; a contradicted ID and a 404 fall back to search (the
+  cascade stops early); conflicting provider IDs are unused; low
+  confidence/ambiguous stay unresolved with evidence; a TV-only result never
+  matches a movie; series follow the same rules.
+- Storage (5): priority ordering; queue exit, retry age and version bump;
+  mirror, refresh survival without re-queueing, and clearing on unresolved; a
+  shared TMDB ID never merges or aliases entities; schema CHECKs.
+- Mutation check: accepting unverified trusted IDs fails a test.
+
+`just lint`, `just typecheck`, `just test` (424 Rust, 0 failed, 5 ignored; 28
+frontend): pass. SQLx metadata regenerated; the removed per-row movie TMDB
+queries were pruned.
+
+### Remaining known gaps
+
+- Not run against the live TMDB API in this session (no credential here). The
+  behaviour is covered by offline fixtures only.
+- Movies only have trusted IDs. Series have no entity, and Xtream `get_series`
+  `tmdb` is not parsed yet.
+- Existing libraries lose weak-match posters as titles are re-decided under
+  matcher v2. That is deliberate and trades coverage for correctness.
+- Search matching is still lexical (title Jaccard + year). No
+  embedding/original-language rerank.
+- A merged entity keeps its own match record. The survivor is matched
+  independently.
+- There is no UI yet to inspect evidence or manually pick a candidate.

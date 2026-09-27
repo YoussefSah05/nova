@@ -425,19 +425,29 @@ impl<'a> SeriesRepository<'a> {
         Ok(rows.into_iter().map(|r| r.value).collect())
     }
 
-    /// Distinct series of a source that have not yet had a TMDB pass (no
-    /// `series_meta` row, or one still flagged `tmdb_status IS NULL`).
+    /// Distinct series of a source needing a TMDB decision: never matched,
+    /// decided by an older matcher, or left unresolved before
+    /// `retry_unresolved_before`.
     pub async fn list_for_tmdb(
         &self,
         source_id: i64,
+        matcher_version: u32,
+        retry_unresolved_before: i64,
     ) -> Result<Vec<SeriesTmdbQuery>, StorageError> {
+        let version = i64::from(matcher_version);
         let rows = sqlx::query!(
             r#"SELECT DISTINCT se.series_title as "series_title!: String"
                FROM series_episodes se
                LEFT JOIN series_meta sm
                  ON sm.source_id = se.source_id AND sm.series_title = se.series_title
-               WHERE se.source_id = ? AND sm.tmdb_status IS NULL"#,
+               WHERE se.source_id = ?
+                 AND (sm.tmdb_status IS NULL
+                      OR sm.matcher_version IS NULL
+                      OR sm.matcher_version < ?
+                      OR (sm.tmdb_status = 'unmatched' AND sm.checked_at < ?))"#,
             source_id,
+            version,
+            retry_unresolved_before,
         )
         .fetch_all(self.pool)
         .await?;
@@ -458,17 +468,27 @@ impl<'a> SeriesRepository<'a> {
         let mut tx = self.pool.begin().await?;
         for u in updates {
             let status = if u.matched { "matched" } else { "unmatched" };
+            let confidence = u.confidence_bp.map(i64::from);
+            let version = i64::from(u.matcher_version);
+            let now = nova_core::now_ts();
             sqlx::query!(
                 "INSERT INTO series_meta
-                   (source_id, series_title, canonical_title, poster_url, backdrop_url, overview, tmdb_genres, tmdb_status)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,
+                    tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,
+                    evidence_json, checked_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(source_id, series_title) DO UPDATE SET
                    canonical_title = excluded.canonical_title,
                    poster_url = excluded.poster_url,
                    backdrop_url = excluded.backdrop_url,
                    overview = excluded.overview,
                    tmdb_genres = excluded.tmdb_genres,
-                   tmdb_status = excluded.tmdb_status",
+                   tmdb_status = excluded.tmdb_status,
+                   match_method = excluded.match_method,
+                   confidence_bp = excluded.confidence_bp,
+                   matcher_version = excluded.matcher_version,
+                   evidence_json = excluded.evidence_json,
+                   checked_at = excluded.checked_at",
                 source_id,
                 u.series_title,
                 u.canonical_title,
@@ -477,6 +497,11 @@ impl<'a> SeriesRepository<'a> {
                 u.overview,
                 u.genres_csv,
                 status,
+                u.method,
+                confidence,
+                version,
+                u.evidence_json,
+                now,
             )
             .execute(&mut *tx)
             .await?;

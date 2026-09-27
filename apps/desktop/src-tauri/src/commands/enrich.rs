@@ -9,13 +9,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use nova_enrich::{
-    best_scored, cluster, parse_genres, parse_search, DedupItem, EnrichError, FastEmbedder,
-    GenreClassifier, TmdbClient, TmdbMatch, MIN_CONFIDENCE, WEAK_CONFIDENCE,
+    cluster, decide, parse_details, parse_genres, parse_search, rank, retain_kind, verify_trusted,
+    CandidateEvidence, Decision, DedupItem, EnrichError, FastEmbedder, GenreClassifier,
+    MatchEvidence, TmdbClient, TmdbMatch, TmdbMediaKind, TrustedCheck, TrustedIdEvidence,
+    UnresolvedReason, MATCHER_VERSION,
 };
 use nova_storage::{
-    ChannelRepository, EmbeddingRepository, EnrichUpdate, ProfileSettingsRepository,
-    SeriesRepository, SeriesTmdbQuery, SeriesTmdbWrite, TmdbCacheRepository, TmdbQuery, TmdbWrite,
-    UnenrichedRow, VodRepository,
+    ChannelRepository, EmbeddingRepository, EnrichUpdate, ExternalMatchRepository,
+    ExternalMatchWrite, MatchMethod, MatchedMetadata, MovieMatchWork, ProfileSettingsRepository,
+    SeriesRepository, SeriesTmdbQuery, SeriesTmdbWrite, TmdbCacheRepository, UnenrichedRow,
+    VodRepository,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -30,9 +33,6 @@ use super::require_profile_pool;
 
 pub(crate) use nova_enrich::MODEL_ID;
 
-/// TMDB results flushed to the DB this often, so a long pass persists progress
-/// incrementally (and re-runs resume) instead of losing everything on a hiccup.
-const TMDB_WRITE_BATCH: usize = 200;
 /// Variant entries embed nearly identically; cluster above this cosine. Used only
 /// as a *secondary* guard now — primary grouping is exact `dedup_key` equality.
 const DEDUP_THRESHOLD: f32 = 0.92;
@@ -381,20 +381,93 @@ pub(crate) async fn run_enrichment(
     Ok(())
 }
 
-/// TMDB enrichment for movies + series of a source. Each search is cached by key
-/// so duplicates (and re-runs) don't re-hit the API; unmatched rows are recorded
-/// so they're skipped next time. Network-bound, so it runs on the async runtime
-/// (not `spawn_blocking`).
+/// Titles matched per committed batch: small, so results appear progressively
+/// and an interrupted pass loses at most one batch.
+const TMDB_BATCH: usize = 25;
+/// Unresolved titles are retried after this long (TMDB's catalog grows, and a
+/// provider may fix a title). A matcher version bump retries everything.
+const RETRY_UNRESOLVED_SECS: i64 = 7 * 24 * 3600;
+
+/// One TMDB request, identified by its response-cache key.
+enum TmdbRequest {
+    MovieDetails(i64),
+    SearchMovie { query: String, year: Option<i32> },
+    SearchTv(String),
+    SearchMulti(String),
+}
+
+impl TmdbRequest {
+    /// Stable cache key (unchanged from the Phase C keys for searches, so
+    /// existing cached bodies are reused).
+    fn cache_key(&self) -> String {
+        match self {
+            Self::MovieDetails(id) => format!("movie-details::{id}"),
+            Self::SearchMovie { query, year } => match year {
+                Some(y) => format!("movie::{}::{y}", query.to_lowercase()),
+                None => format!("movie::{}::noyear", query.to_lowercase()),
+            },
+            Self::SearchTv(q) => format!("tv::{}", q.to_lowercase()),
+            Self::SearchMulti(q) => format!("multi::{}", q.to_lowercase()),
+        }
+    }
+}
+
+/// Where TMDB bodies come from: the cached network client in the app, a fixture
+/// map in tests. `Ok(None)` means TMDB answered 404.
+trait TmdbFetch {
+    async fn fetch(&self, request: &TmdbRequest) -> Result<Option<String>, ApiError>;
+}
+
+struct CachedTmdb<'a> {
+    client: &'a TmdbClient,
+    cache: &'a TmdbCacheRepository<'a>,
+}
+
+impl TmdbFetch for CachedTmdb<'_> {
+    async fn fetch(&self, request: &TmdbRequest) -> Result<Option<String>, ApiError> {
+        let key = request.cache_key();
+        if let Some(body) = self.cache.get(&key).await? {
+            // An empty cached body records a 404.
+            return Ok((!body.is_empty()).then_some(body));
+        }
+        let fetched = match request {
+            TmdbRequest::MovieDetails(id) => self.client.movie_details(*id).await,
+            TmdbRequest::SearchMovie { query, year } => {
+                self.client.search_movie(query, *year).await.map(Some)
+            }
+            TmdbRequest::SearchTv(q) => self.client.search_tv(q).await.map(Some),
+            TmdbRequest::SearchMulti(q) => self.client.search_multi(q).await.map(Some),
+        }
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        self.cache
+            .put(&key, fetched.as_deref().unwrap_or(""))
+            .await?;
+        Ok(fetched)
+    }
+}
+
+/// TMDB metadata for the movies (canonical entities) and series of a source.
+/// Offline-first: only called when the user enabled TMDB and set a credential.
+///
+/// Progressive: work is ordered by importance (favourites/watchlist, then
+/// in-progress, then recently added) and committed every [`TMDB_BATCH`] titles,
+/// so the most relevant posters appear first and a restart resumes. A transient
+/// error on one title skips it (it is retried on the next run) without failing
+/// the pass.
 async fn run_tmdb(
     pool: &Arc<sqlx::SqlitePool>,
     source_id: i64,
-    api_key: String,
+    credential: String,
     app: &AppHandle,
     slot: &mut JobSlot,
     cancellation: &RuntimeCancellation,
 ) -> Result<(), ApiError> {
-    let client = TmdbClient::new(api_key).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let client = TmdbClient::new(credential).map_err(|e| ApiError::Internal(e.to_string()))?;
     let cache = TmdbCacheRepository::new(pool);
+    let tmdb = CachedTmdb {
+        client: &client,
+        cache: &cache,
+    };
 
     let movie_genres = {
         let body = fetch_cached(&cache, "genres:movie", || client.genre_list("movie")).await?;
@@ -405,9 +478,14 @@ async fn run_tmdb(
         parse_genres(&body).map_err(|e| ApiError::Internal(e.to_string()))?
     };
 
-    // ── Movies ──
-    let movies = VodRepository::new(pool).list_for_tmdb(source_id).await?;
-    let series = SeriesRepository::new(pool).list_for_tmdb(source_id).await?;
+    let retry_before = nova_core::now_ts() - RETRY_UNRESOLVED_SECS;
+    let matches = ExternalMatchRepository::new(pool);
+    let movies = matches
+        .movie_work(source_id, MATCHER_VERSION, retry_before)
+        .await?;
+    let series = SeriesRepository::new(pool)
+        .list_for_tmdb(source_id, MATCHER_VERSION, retry_before)
+        .await?;
     let tmdb_total = movies.len() + series.len();
     let mut done = 0usize;
     let emit_stage = |stage: &str, processed: usize| {
@@ -423,143 +501,244 @@ async fn run_tmdb(
             },
         );
     };
-    let emit = |processed: usize| emit_stage("matching", processed);
-    emit(0);
+    emit_stage("matching", 0);
 
-    // Per-item errors (a transient TMDB hiccup / rate-limit on one of thousands
-    // of calls) must NOT abort the whole pass — skip the row (it stays unenriched
-    // and is retried next run) and keep going. Matches are flushed in batches so
-    // progress persists and a re-run resumes via `tmdb_status IS NULL`.
-    let mut movie_writes: Vec<TmdbWrite> = Vec::new();
-    for q in &movies {
-        yield_point(slot, cancellation, || emit_stage("queued", done)).await?;
-        match match_movie(&client, &cache, q, &movie_genres).await {
-            Ok(best) => movie_writes.push(to_movie_write(q.id, best)),
-            Err(e) => {
-                tracing::warn!(id = q.id, error = ?e, "tmdb movie match failed; retry next run")
+    for batch in movies.chunks(TMDB_BATCH) {
+        let mut writes = Vec::with_capacity(batch.len());
+        for work in batch {
+            yield_point(slot, cancellation, || emit_stage("queued", done)).await?;
+            match match_movie(&tmdb, work, &movie_genres).await {
+                Ok(write) => writes.push(write),
+                Err(e) => tracing::warn!(
+                    entity = work.entity_id.as_str(),
+                    error = ?e,
+                    "tmdb movie match failed; retried next run"
+                ),
             }
+            done += 1;
         }
-        done += 1;
-        if done.is_multiple_of(25) {
-            emit(done);
-        }
-        if movie_writes.len() >= TMDB_WRITE_BATCH {
-            VodRepository::new(pool).apply_tmdb(&movie_writes).await?;
-            movie_writes.clear();
-        }
-    }
-    if !movie_writes.is_empty() {
-        VodRepository::new(pool).apply_tmdb(&movie_writes).await?;
+        matches.apply_movie_matches(&writes).await?;
+        // Emitted after the commit: the UI may refresh and show these titles.
+        emit_stage("matching", done);
     }
 
-    // ── Series (search by title only; no year column) ──
-    let mut series_writes: Vec<SeriesTmdbWrite> = Vec::new();
-    for q in &series {
-        yield_point(slot, cancellation, || emit_stage("queued", done)).await?;
-        match match_series(&client, &cache, q, &tv_genres).await {
-            Ok(best) => series_writes.push(to_series_write(q.series_title.clone(), best)),
-            Err(e) => {
-                tracing::warn!(series = %q.series_title, error = ?e, "tmdb series match failed; retry next run")
+    for batch in series.chunks(TMDB_BATCH) {
+        let mut writes = Vec::with_capacity(batch.len());
+        for q in batch {
+            yield_point(slot, cancellation, || emit_stage("queued", done)).await?;
+            match match_series(&tmdb, q, &tv_genres).await {
+                Ok(write) => writes.push(write),
+                Err(e) => tracing::warn!(error = ?e, "tmdb series match failed; retried next run"),
             }
+            done += 1;
         }
-        done += 1;
-        if done.is_multiple_of(25) {
-            emit(done);
-        }
-        if series_writes.len() >= TMDB_WRITE_BATCH {
-            SeriesRepository::new(pool)
-                .apply_tmdb(source_id, &series_writes)
-                .await?;
-            series_writes.clear();
-        }
-    }
-    if !series_writes.is_empty() {
         SeriesRepository::new(pool)
-            .apply_tmdb(source_id, &series_writes)
+            .apply_tmdb(source_id, &writes)
             .await?;
+        emit_stage("matching", done);
     }
     Ok(())
 }
 
-/// Match one movie via the cascade: movie+year → movie no-year → `/search/multi`,
-/// stopping once confident. Network errors propagate so the caller can skip just
-/// this row.
-async fn match_movie(
-    client: &TmdbClient,
-    cache: &TmdbCacheRepository<'_>,
-    q: &TmdbQuery,
-    genres: &HashMap<i64, String>,
-) -> Result<Option<(TmdbMatch, f32)>, ApiError> {
-    let query = nova_core::clean::search_title(&q.title);
-    let year = q.year.map(|y| y as i32);
-    let qlc = query.to_lowercase();
-    let mut best: Option<(TmdbMatch, f32)> = None;
-
-    let key = format!("movie::{qlc}::{}", year.unwrap_or(0));
-    let body = fetch_cached(cache, &key, || client.search_movie(&query, year)).await?;
-    best = take_better(best, score_body(&body, &query, year, genres)?);
-
-    if year.is_some() && !is_confident(&best) {
-        let key = format!("movie::{qlc}::noyear");
-        let body = fetch_cached(cache, &key, || client.search_movie(&query, None)).await?;
-        best = take_better(best, score_body(&body, &query, year, genres)?);
-    }
-    if !is_confident(&best) {
-        let key = format!("multi::{qlc}");
-        let body = fetch_cached(cache, &key, || client.search_multi(&query)).await?;
-        best = take_better(best, score_body(&body, &query, year, genres)?);
-    }
-    Ok(best)
+fn parse_err(e: EnrichError) -> ApiError {
+    ApiError::Internal(e.to_string())
 }
 
-/// Match one series: `/search/tv` → `/search/multi` fallback.
-async fn match_series(
-    client: &TmdbClient,
-    cache: &TmdbCacheRepository<'_>,
-    q: &SeriesTmdbQuery,
-    genres: &HashMap<i64, String>,
-) -> Result<Option<(TmdbMatch, f32)>, ApiError> {
-    let query = nova_core::clean::search_series_title(&q.series_title);
-    let qlc = query.to_lowercase();
-    let mut best: Option<(TmdbMatch, f32)> = None;
-
-    let key = format!("tv::{qlc}");
-    let body = fetch_cached(cache, &key, || client.search_tv(&query)).await?;
-    best = take_better(best, score_body(&body, &query, None, genres)?);
-
-    if !is_confident(&best) {
-        let key = format!("multi::{qlc}");
-        let body = fetch_cached(cache, &key, || client.search_multi(&query)).await?;
-        best = take_better(best, score_body(&body, &query, None, genres)?);
-    }
-    Ok(best)
+fn evidence_json(evidence: &MatchEvidence) -> String {
+    serde_json::to_string(evidence).unwrap_or_else(|_| "{}".into())
 }
 
-/// Parse a search body and return its best-scored candidate.
-fn score_body(
-    body: &str,
+fn outcome_name(reason: UnresolvedReason) -> &'static str {
+    match reason {
+        UnresolvedReason::NoCandidates => "no_candidates",
+        UnresolvedReason::LowConfidence => "low_confidence",
+        UnresolvedReason::Ambiguous => "ambiguous",
+    }
+}
+
+fn matched_metadata(m: TmdbMatch) -> MatchedMetadata {
+    MatchedMetadata {
+        external_id: m.tmdb_id.to_string(),
+        canonical_title: m.canonical_title,
+        poster_url: m.poster_url,
+        backdrop_url: m.backdrop_url,
+        overview: m.overview,
+        genres: canonicalize_genres(&m.genres),
+    }
+}
+
+/// Search, accumulating candidates across the cascade until one decides.
+async fn search_cascade(
+    tmdb: &impl TmdbFetch,
+    steps: Vec<TmdbRequest>,
+    kind: TmdbMediaKind,
     query: &str,
     year: Option<i32>,
-    genres: &std::collections::HashMap<i64, String>,
-) -> Result<Option<(TmdbMatch, f32)>, ApiError> {
-    let items = parse_search(body).map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(best_scored(query, year, &items, genres))
-}
-
-fn is_confident(b: &Option<(TmdbMatch, f32)>) -> bool {
-    b.as_ref().is_some_and(|(_, s)| *s >= MIN_CONFIDENCE)
-}
-
-/// Keep whichever candidate scored higher.
-fn take_better(
-    cur: Option<(TmdbMatch, f32)>,
-    cand: Option<(TmdbMatch, f32)>,
-) -> Option<(TmdbMatch, f32)> {
-    match (cur, cand) {
-        (Some(a), Some(b)) => Some(if b.1 > a.1 { b } else { a }),
-        (Some(a), None) => Some(a),
-        (None, b) => b,
+    evidence: &mut MatchEvidence,
+) -> Result<Vec<nova_enrich::Scored>, ApiError> {
+    let mut items = Vec::new();
+    let mut ranked = Vec::new();
+    for step in steps {
+        evidence.requests.push(step.cache_key());
+        if let Some(body) = tmdb.fetch(&step).await? {
+            items.extend(retain_kind(parse_search(&body).map_err(parse_err)?, kind));
+        }
+        ranked = rank(query, year, items.clone());
+        if matches!(decide(&ranked), Decision::Matched(_)) {
+            break;
+        }
     }
+    evidence.candidates = ranked
+        .iter()
+        .take(nova_enrich::tmdb::MAX_EVIDENCE_CANDIDATES)
+        .map(CandidateEvidence::of)
+        .collect();
+    Ok(ranked)
+}
+
+/// Decide one movie entity: a corroborated provider ID first, otherwise a
+/// search whose top candidate must be confident and unambiguous. Anything else
+/// is recorded as unresolved, with the evidence that led there.
+async fn match_movie(
+    tmdb: &impl TmdbFetch,
+    work: &MovieMatchWork,
+    genres: &HashMap<i64, String>,
+) -> Result<ExternalMatchWrite, ApiError> {
+    let raw = work.source_title.as_deref().unwrap_or(&work.title);
+    let query = nova_core::clean::search_title(raw);
+    let titles = vec![work.title.clone(), raw.to_string()];
+    let mut evidence = MatchEvidence::new(query.clone(), work.year);
+    let write = |matched: Option<TmdbMatch>,
+                 method: MatchMethod,
+                 confidence_bp: Option<u16>,
+                 evidence: &MatchEvidence| ExternalMatchWrite {
+        entity_id: work.entity_id.clone(),
+        matched: matched.map(matched_metadata),
+        method,
+        confidence_bp,
+        matcher_version: MATCHER_VERSION,
+        evidence_json: evidence_json(evidence),
+    };
+
+    // 1. Trusted ID. Several distinct provider IDs are contradictory evidence:
+    //    rely on search instead.
+    if let [tmdb_id] = work.trusted_tmdb_ids[..] {
+        let request = TmdbRequest::MovieDetails(tmdb_id);
+        evidence.requests.push(request.cache_key());
+        let check = match tmdb.fetch(&request).await? {
+            None => None,
+            Some(body) => {
+                let details = parse_details(&body).map_err(parse_err)?;
+                let check = verify_trusted(&details, &titles, work.year);
+                if check == TrustedCheck::Consistent {
+                    evidence.trusted_id = Some(TrustedIdEvidence {
+                        tmdb_id,
+                        check: Some(check),
+                    });
+                    evidence.outcome = "matched".into();
+                    let m = TmdbMatch::from_item(&details, &work.title, genres);
+                    return Ok(write(
+                        Some(m),
+                        MatchMethod::TrustedId,
+                        Some(10_000),
+                        &evidence,
+                    ));
+                }
+                Some(check)
+            }
+        };
+        evidence.trusted_id = Some(TrustedIdEvidence { tmdb_id, check });
+    }
+
+    // 2. Search: movie+year → movie → multi (movies only), until decided.
+    let mut steps = Vec::new();
+    if work.year.is_some() {
+        steps.push(TmdbRequest::SearchMovie {
+            query: query.clone(),
+            year: work.year,
+        });
+    }
+    steps.push(TmdbRequest::SearchMovie {
+        query: query.clone(),
+        year: None,
+    });
+    steps.push(TmdbRequest::SearchMulti(query.clone()));
+    let ranked = search_cascade(
+        tmdb,
+        steps,
+        TmdbMediaKind::Movie,
+        &query,
+        work.year,
+        &mut evidence,
+    )
+    .await?;
+    Ok(match decide(&ranked) {
+        Decision::Matched(i) => {
+            evidence.outcome = "matched".into();
+            let m = TmdbMatch::from_item(&ranked[i].item, &work.title, genres);
+            let bp = nova_enrich::tmdb::score_bp(ranked[i].score);
+            write(Some(m), MatchMethod::Search, Some(bp), &evidence)
+        }
+        Decision::Unresolved(reason) => {
+            evidence.outcome = outcome_name(reason).into();
+            let bp = ranked.first().map(|s| nova_enrich::tmdb::score_bp(s.score));
+            write(None, MatchMethod::Search, bp, &evidence)
+        }
+    })
+}
+
+/// Decide one series (no trusted IDs yet): `/search/tv` → `/search/multi`.
+async fn match_series(
+    tmdb: &impl TmdbFetch,
+    q: &SeriesTmdbQuery,
+    genres: &HashMap<i64, String>,
+) -> Result<SeriesTmdbWrite, ApiError> {
+    let query = nova_core::clean::search_series_title(&q.series_title);
+    let mut evidence = MatchEvidence::new(query.clone(), None);
+    let steps = vec![
+        TmdbRequest::SearchTv(query.clone()),
+        TmdbRequest::SearchMulti(query.clone()),
+    ];
+    let ranked =
+        search_cascade(tmdb, steps, TmdbMediaKind::Tv, &query, None, &mut evidence).await?;
+    Ok(match decide(&ranked) {
+        Decision::Matched(i) => {
+            evidence.outcome = "matched".into();
+            let m = TmdbMatch::from_item(&ranked[i].item, &q.series_title, genres);
+            let genres = canonicalize_genres(&m.genres);
+            SeriesTmdbWrite {
+                series_title: q.series_title.clone(),
+                canonical_title: Some(m.canonical_title),
+                poster_url: m.poster_url,
+                backdrop_url: m.backdrop_url,
+                overview: m.overview,
+                primary_genre: genres.first().cloned(),
+                genres_csv: (!genres.is_empty()).then(|| genres.join(", ")),
+                matched: true,
+                method: "search",
+                confidence_bp: Some(nova_enrich::tmdb::score_bp(ranked[i].score)),
+                matcher_version: MATCHER_VERSION,
+                evidence_json: evidence_json(&evidence),
+            }
+        }
+        Decision::Unresolved(reason) => {
+            evidence.outcome = outcome_name(reason).into();
+            SeriesTmdbWrite {
+                series_title: q.series_title.clone(),
+                canonical_title: None,
+                poster_url: None,
+                backdrop_url: None,
+                overview: None,
+                primary_genre: None,
+                genres_csv: None,
+                matched: false,
+                method: "search",
+                confidence_bp: ranked.first().map(|s| nova_enrich::tmdb::score_bp(s.score)),
+                matcher_version: MATCHER_VERSION,
+                evidence_json: evidence_json(&evidence),
+            }
+        }
+    })
 }
 
 /// Map TMDB genre names onto Nova's canonical taxonomy so chips/rails stay
@@ -595,70 +774,6 @@ where
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     cache.put(key, &body).await?;
     Ok(body)
-}
-
-/// Tier the scored candidate into a movie write:
-/// - confident → canonical title + canonical genres + overview + art,
-/// - weak (has a poster) → poster/backdrop only, keep the original title,
-/// - otherwise → unmatched.
-fn to_movie_write(id: i64, scored: Option<(TmdbMatch, f32)>) -> TmdbWrite {
-    match scored {
-        Some((m, s)) if s >= MIN_CONFIDENCE => {
-            let genres = canonicalize_genres(&m.genres);
-            TmdbWrite {
-                id,
-                canonical_title: Some(m.canonical_title),
-                poster_url: m.poster_url,
-                backdrop_url: m.backdrop_url,
-                overview: m.overview,
-                primary_genre: genres.first().cloned(),
-                genres_csv: (!genres.is_empty()).then(|| genres.join(", ")),
-                matched: true,
-            }
-        }
-        Some((m, s)) if s >= WEAK_CONFIDENCE && m.poster_url.is_some() => TmdbWrite {
-            id,
-            poster_url: m.poster_url,
-            backdrop_url: m.backdrop_url,
-            matched: true,
-            ..Default::default()
-        },
-        _ => TmdbWrite {
-            id,
-            matched: false,
-            ..Default::default()
-        },
-    }
-}
-
-fn to_series_write(series_title: String, scored: Option<(TmdbMatch, f32)>) -> SeriesTmdbWrite {
-    match scored {
-        Some((m, s)) if s >= MIN_CONFIDENCE => {
-            let genres = canonicalize_genres(&m.genres);
-            SeriesTmdbWrite {
-                series_title,
-                canonical_title: Some(m.canonical_title),
-                poster_url: m.poster_url,
-                backdrop_url: m.backdrop_url,
-                overview: m.overview,
-                primary_genre: genres.first().cloned(),
-                genres_csv: (!genres.is_empty()).then(|| genres.join(", ")),
-                matched: true,
-            }
-        }
-        Some((m, s)) if s >= WEAK_CONFIDENCE && m.poster_url.is_some() => SeriesTmdbWrite {
-            series_title,
-            poster_url: m.poster_url,
-            backdrop_url: m.backdrop_url,
-            matched: true,
-            ..Default::default()
-        },
-        _ => SeriesTmdbWrite {
-            series_title,
-            matched: false,
-            ..Default::default()
-        },
-    }
 }
 
 /// Cluster near-duplicates over already-computed vectors (embedding happens in
@@ -722,4 +837,201 @@ fn bucket_key(text: &str) -> String {
         .filter(|c| c.is_alphanumeric())
         .flat_map(|c| c.to_lowercase())
         .collect()
+}
+
+#[cfg(test)]
+mod tmdb_matching_tests {
+    use super::*;
+    use nova_core::catalog::EntityId;
+    use nova_storage::MatchPriority;
+    use std::sync::Mutex;
+
+    /// Offline TMDB: bodies by cache key; a missing key is a 404. Records the
+    /// keys requested, in order.
+    #[derive(Default)]
+    struct Fixture {
+        bodies: HashMap<String, String>,
+        requested: Mutex<Vec<String>>,
+    }
+
+    impl Fixture {
+        fn with(mut self, key: &str, body: &str) -> Self {
+            self.bodies.insert(key.into(), body.into());
+            self
+        }
+        fn requested(&self) -> Vec<String> {
+            self.requested.lock().unwrap().clone()
+        }
+    }
+
+    impl TmdbFetch for Fixture {
+        async fn fetch(&self, request: &TmdbRequest) -> Result<Option<String>, ApiError> {
+            let key = request.cache_key();
+            self.requested.lock().unwrap().push(key.clone());
+            Ok(self.bodies.get(&key).cloned())
+        }
+    }
+
+    const GODFATHER: &str = r#"{"id": 238, "title": "The Godfather", "release_date": "1972-03-14",
+        "poster_path": "/g.jpg", "overview": "Spanning the years...",
+        "genres": [{"id": 18, "name": "Drama"}, {"id": 80, "name": "Crime"}]}"#;
+    const EMPTY: &str = r#"{"results": []}"#;
+
+    fn work(title: &str, year: Option<i32>, trusted: &[i64]) -> MovieMatchWork {
+        MovieMatchWork {
+            entity_id: EntityId::new("mov-1").unwrap(),
+            title: title.into(),
+            source_title: Some(format!("FR| {title} FHD")),
+            year,
+            trusted_tmdb_ids: trusted.to_vec(),
+            priority: MatchPriority::Catalog,
+        }
+    }
+
+    fn evidence(write: &ExternalMatchWrite) -> serde_json::Value {
+        serde_json::from_str(&write.evidence_json).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_corroborated_trusted_id_matches_without_searching() {
+        let tmdb = Fixture::default().with("movie-details::238", GODFATHER);
+        let w = match_movie(
+            &tmdb,
+            &work("Le Parrain", Some(1972), &[238]),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(tmdb.requested(), vec!["movie-details::238"]);
+        assert_eq!(w.method, MatchMethod::TrustedId);
+        assert_eq!(w.confidence_bp, Some(10_000));
+        let m = w.matched.as_ref().unwrap();
+        assert_eq!(m.external_id, "238");
+        assert_eq!(m.canonical_title, "The Godfather");
+        assert_eq!(m.genres, vec!["Drama", "Crime"]);
+        let e = evidence(&w);
+        assert_eq!(e["trustedId"]["check"], "consistent");
+        assert_eq!(e["outcome"], "matched");
+        assert_eq!(w.entity_id.as_str(), "mov-1", "the Nova ID is untouched");
+    }
+
+    #[tokio::test]
+    async fn a_contradicted_or_unknown_trusted_id_falls_back_to_search() {
+        let search =
+            r#"{"results": [{"id": 238, "title": "The Godfather", "release_date": "1972-03-14"}]}"#;
+        // The provider ID points at a 1972 film, but the catalog says 1990.
+        let tmdb = Fixture::default()
+            .with("movie-details::238", GODFATHER)
+            .with("movie::le parrain::1990", EMPTY)
+            .with("movie::le parrain::noyear", EMPTY)
+            .with("multi::le parrain", EMPTY);
+        let w = match_movie(
+            &tmdb,
+            &work("Le Parrain", Some(1990), &[238]),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
+        assert!(w.matched.is_none(), "a contradicted ID is never trusted");
+        assert_eq!(evidence(&w)["trustedId"]["check"], "contradicted");
+        assert_eq!(evidence(&w)["outcome"], "no_candidates");
+
+        // Unknown to TMDB (404): search decides.
+        let tmdb = Fixture::default().with("movie::the godfather::1972", search);
+        let w = match_movie(
+            &tmdb,
+            &work("The Godfather", Some(1972), &[999]),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(w.method, MatchMethod::Search);
+        assert_eq!(w.matched.as_ref().unwrap().external_id, "238");
+        let e = evidence(&w);
+        assert!(e["trustedId"]["check"].is_null());
+        assert_eq!(
+            tmdb.requested(),
+            vec!["movie-details::999", "movie::the godfather::1972"],
+            "the cascade stops at the first decisive search"
+        );
+    }
+
+    #[tokio::test]
+    async fn conflicting_trusted_ids_are_not_used() {
+        let tmdb = Fixture::default();
+        let w = match_movie(
+            &tmdb,
+            &work("Heat", Some(1995), &[949, 1234]),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
+        assert!(tmdb
+            .requested()
+            .iter()
+            .all(|k| !k.starts_with("movie-details")));
+        assert!(w.matched.is_none());
+    }
+
+    #[tokio::test]
+    async fn low_confidence_and_ambiguous_results_stay_unresolved_with_evidence() {
+        let weak = r#"{"results": [{"id": 5, "title": "Heat Wave Rising", "release_date": "2012-01-01", "poster_path": "/p.jpg"}]}"#;
+        let tmdb = Fixture::default()
+            .with("movie::heat::1995", weak)
+            .with("movie::heat::noyear", weak)
+            .with("multi::heat", weak);
+        let w = match_movie(&tmdb, &work("Heat", Some(1995), &[]), &HashMap::new())
+            .await
+            .unwrap();
+        assert!(w.matched.is_none(), "no poster-only guesses");
+        let e = evidence(&w);
+        assert_eq!(e["outcome"], "low_confidence");
+        assert_eq!(e["candidates"][0]["tmdbId"], 5);
+        assert_eq!(e["requests"].as_array().unwrap().len(), 3);
+
+        let remakes = r#"{"results": [
+            {"id": 111, "title": "Scarface", "release_date": "1983-12-09"},
+            {"id": 112, "title": "Scarface", "release_date": "1932-04-09"}]}"#;
+        let tmdb = Fixture::default()
+            .with("movie::scarface::noyear", remakes)
+            .with("multi::scarface", remakes);
+        let w = match_movie(&tmdb, &work("Scarface", None, &[]), &HashMap::new())
+            .await
+            .unwrap();
+        assert!(w.matched.is_none());
+        assert_eq!(evidence(&w)["outcome"], "ambiguous");
+    }
+
+    #[tokio::test]
+    async fn a_tv_result_is_never_recorded_as_a_movie_match() {
+        let tv_only = r#"{"results": [{"id": 60622, "name": "Fargo", "media_type": "tv", "first_air_date": "2014-04-15"}]}"#;
+        let tmdb = Fixture::default()
+            .with("movie::fargo::noyear", EMPTY)
+            .with("multi::fargo", tv_only);
+        let w = match_movie(&tmdb, &work("Fargo", None, &[]), &HashMap::new())
+            .await
+            .unwrap();
+        assert!(w.matched.is_none());
+        assert_eq!(evidence(&w)["outcome"], "no_candidates");
+    }
+
+    #[tokio::test]
+    async fn series_follow_the_same_rules() {
+        let tv = r#"{"results": [{"id": 1396, "name": "Breaking Bad", "first_air_date": "2008-01-20", "poster_path": "/b.jpg"}]}"#;
+        let tmdb = Fixture::default().with("tv::breaking bad", tv);
+        let q = SeriesTmdbQuery {
+            series_title: "Breaking Bad".into(),
+        };
+        let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();
+        assert!(w.matched);
+        assert_eq!((w.method, w.matcher_version), ("search", MATCHER_VERSION));
+        assert!(w.evidence_json.contains("\"outcome\":\"matched\""));
+
+        let tmdb = Fixture::default();
+        let q = SeriesTmdbQuery {
+            series_title: "Unknown Show".into(),
+        };
+        let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();
+        assert!(!w.matched && w.poster_url.is_none() && w.canonical_title.is_none());
+    }
 }
