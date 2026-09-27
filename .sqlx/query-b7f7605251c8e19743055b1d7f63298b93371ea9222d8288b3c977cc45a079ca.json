@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT\n                 COALESCE(NULLIF(channel_group, ''), name) as \"group_key!: String\",\n                 COUNT(*) as \"member_count!: i64\",\n                 MIN(id) as \"rep_id!: i64\",\n                 MIN(name) as \"name!: String\",\n                 MIN(NULLIF(logo_url, '')) as \"logo_url?: String\",\n                 MIN(category) as \"category?: String\",\n                 MIN(region) as \"region?: String\",\n                 MAX(is_favorite) as \"is_favorite!: i64\",\n                 MAX(is_in_watchlist) as \"is_in_watchlist!: i64\"\n               FROM channels\n               WHERE source_id = ?\n                 AND COALESCE(NULLIF(channel_group, ''), name) IN (SELECT value FROM json_each(?))\n               GROUP BY COALESCE(NULLIF(channel_group, ''), name)",
+  "query": "SELECT\n                 COALESCE(NULLIF(channel_group, ''), name) as \"group_key!: String\",\n                 COUNT(*) as \"member_count!: i64\",\n                 MIN(id) as \"rep_id!: i64\",\n                 MIN(name) as \"name!: String\",\n                 COALESCE(MIN(NULLIF(logo_url, '')),\n                          MIN((SELECT l.url FROM epg_channel_logos l\n                            WHERE l.source_id = channels.source_id\n                              AND l.channel_key = lower(channels.tvg_id)\n                            ORDER BY l.updated_at DESC LIMIT 1))) as \"logo_url?: String\",\n                 MIN(category) as \"category?: String\",\n                 MIN(region) as \"region?: String\",\n                 MAX(is_favorite) as \"is_favorite!: i64\",\n                 MAX(is_in_watchlist) as \"is_in_watchlist!: i64\"\n               FROM channels\n               WHERE source_id = ?\n                 AND COALESCE(NULLIF(channel_group, ''), name) IN (SELECT value FROM json_each(?))\n               GROUP BY COALESCE(NULLIF(channel_group, ''), name)",
   "describe": {
     "columns": [
       {
@@ -64,5 +64,5 @@
       null
     ]
   },
-  "hash": "8cbdf3645622a07a5a68d682abb628b611c553ac08bbb934684c00d3438f46fe"
+  "hash": "b7f7605251c8e19743055b1d7f63298b93371ea9222d8288b3c977cc45a079ca"
 }

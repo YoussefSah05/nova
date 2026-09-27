@@ -18,6 +18,13 @@ pub struct Program {
     pub icon_url: Option<String>,
 }
 
+/// The logo an XMLTV `<channel id>` declares with its first `<icon src>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelIcon {
+    pub channel_id: String,
+    pub icon_url: String,
+}
+
 #[derive(Debug, Error)]
 pub enum EpgError {
     #[error("XML parse error: {0}")]
@@ -46,9 +53,81 @@ pub fn channel_id_matches(m3u: &str, xmltv: &str) -> bool {
     strip(m3u).eq_ignore_ascii_case(&strip(xmltv))
 }
 
+/// The lookup key of a channel's EPG logo: its `tvg-id`, ASCII-lowercased (the
+/// same folding as SQLite's `lower()`, which the read path applies).
+pub fn channel_logo_key(tvg_id: &str) -> String {
+    tvg_id.to_ascii_lowercase()
+}
+
+/// Pair each channel `tvg-id` with the icon of the XMLTV channel it matches
+/// under [`channel_id_matches`] (exact, case-insensitive first; then with a
+/// trailing country domain stripped). Returns `(channel_logo_key, icon_url)`
+/// once per key; the first icon declared for an id wins.
+pub fn match_channel_icons(tvg_ids: &[String], icons: &[ChannelIcon]) -> Vec<(String, String)> {
+    use std::collections::{HashMap, HashSet};
+    let strip = |s: &str| -> String {
+        match s.rfind('.') {
+            Some(i) if s.len() - i <= 4 => s[..i].to_ascii_lowercase(),
+            _ => s.to_ascii_lowercase(),
+        }
+    };
+    let mut exact: HashMap<String, &str> = HashMap::new();
+    let mut stripped: HashMap<String, &str> = HashMap::new();
+    for icon in icons {
+        exact
+            .entry(icon.channel_id.to_ascii_lowercase())
+            .or_insert(&icon.icon_url);
+        stripped
+            .entry(strip(&icon.channel_id))
+            .or_insert(&icon.icon_url);
+    }
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for tvg in tvg_ids {
+        let key = channel_logo_key(tvg);
+        if key.is_empty() || !seen.insert(key.clone()) {
+            continue;
+        }
+        if let Some(url) = exact.get(&key).or_else(|| stripped.get(&strip(tvg))) {
+            out.push((key, (*url).to_string()));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn icon(id: &str, url: &str) -> ChannelIcon {
+        ChannelIcon {
+            channel_id: id.into(),
+            icon_url: url.into(),
+        }
+    }
+
+    #[test]
+    fn matches_icons_like_programmes_match_channels() {
+        let icons = [
+            icon("BBC1.uk", "https://l/bbc1.png"),
+            icon("CNN", "https://l/cnn.png"),
+            icon("cnn", "https://l/cnn-dup.png"),
+        ];
+        let tvg = [
+            "bbc1".to_string(),
+            "cnn".to_string(),
+            "CNN".to_string(),
+            "espn".to_string(),
+            String::new(),
+        ];
+        assert_eq!(
+            match_channel_icons(&tvg, &icons),
+            vec![
+                ("bbc1".to_string(), "https://l/bbc1.png".to_string()),
+                ("cnn".to_string(), "https://l/cnn.png".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn exact_match() {

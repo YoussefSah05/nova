@@ -7,7 +7,7 @@
 
 use nova_core::now_ts;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
 
@@ -66,6 +66,51 @@ impl<'a> EpgSourcesRepository<'a> {
                 last_error: r.last_error,
             })
             .collect())
+    }
+
+    /// Distinct non-empty tvg-ids of a source's channels (what XMLTV channel
+    /// ids are matched against).
+    pub async fn channel_tvg_ids(&self, source_id: i64) -> Result<Vec<String>, StorageError> {
+        let rows = sqlx::query_scalar!(
+            r#"SELECT DISTINCT tvg_id as "tvg_id!: String" FROM channels
+               WHERE source_id = ? AND tvg_id IS NOT NULL AND tvg_id <> ''"#,
+            source_id
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Replace the channel logos one feed contributes to its source.
+    /// `logos` are `(channel_logo_key, url)` pairs (`nova_epg::match_channel_icons`).
+    pub async fn replace_channel_logos_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        epg_source_id: i64,
+        source_id: i64,
+        logos: &[(String, String)],
+    ) -> Result<(), StorageError> {
+        sqlx::query!(
+            "DELETE FROM epg_channel_logos WHERE epg_source_id = ?",
+            epg_source_id
+        )
+        .execute(&mut **tx)
+        .await?;
+        let now = now_ts();
+        for (key, url) in logos {
+            sqlx::query!(
+                "INSERT OR REPLACE INTO epg_channel_logos
+                     (epg_source_id, source_id, channel_key, url, updated_at)
+                 VALUES (?, ?, ?, ?, ?)",
+                epg_source_id,
+                source_id,
+                key,
+                url,
+                now,
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
     }
 
     pub async fn touch_success(&self, id: i64) -> Result<(), StorageError> {

@@ -136,7 +136,12 @@ impl<'a> ChannelRepository<'a> {
         let wl_flag: i64 = if watchlist_only { 1 } else { 0 };
         let rows = match sort {
             ContentSort::RecentlyAdded => sqlx::query!(
-                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
+                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group,
+                        COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l
+                            WHERE l.source_id = channels.source_id
+                              AND l.channel_key = lower(channels.tvg_id)
+                            ORDER BY l.updated_at DESC LIMIT 1)) as "logo_url?: String",
+                        stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
                  FROM channels
                  WHERE source_id = ?
                    AND (? IS NULL OR country = ?)
@@ -177,7 +182,12 @@ impl<'a> ChannelRepository<'a> {
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
-                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
+                r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group,
+                        COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l
+                            WHERE l.source_id = channels.source_id
+                              AND l.channel_key = lower(channels.tvg_id)
+                            ORDER BY l.updated_at DESC LIMIT 1)) as "logo_url?: String",
+                        stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
                  FROM channels
                  WHERE source_id = ?
                    AND (? IS NULL OR country = ?)
@@ -294,7 +304,11 @@ impl<'a> ChannelRepository<'a> {
                  COUNT(*) as "member_count!: i64",
                  MIN(id) as "rep_id!: i64",
                  MIN(name) as "name!: String",
-                 MIN(NULLIF(logo_url, '')) as "logo_url?: String",
+                 COALESCE(MIN(NULLIF(logo_url, '')),
+                          MIN((SELECT l.url FROM epg_channel_logos l
+                            WHERE l.source_id = channels.source_id
+                              AND l.channel_key = lower(channels.tvg_id)
+                            ORDER BY l.updated_at DESC LIMIT 1))) as "logo_url?: String",
                  MIN(category) as "category?: String",
                  MIN(region) as "region?: String",
                  MAX(is_favorite) as "is_favorite!: i64",
@@ -384,7 +398,11 @@ impl<'a> ChannelRepository<'a> {
                  COUNT(*) as "member_count!: i64",
                  MIN(id) as "rep_id!: i64",
                  MIN(name) as "name!: String",
-                 MIN(NULLIF(logo_url, '')) as "logo_url?: String",
+                 COALESCE(MIN(NULLIF(logo_url, '')),
+                          MIN((SELECT l.url FROM epg_channel_logos l
+                            WHERE l.source_id = channels.source_id
+                              AND l.channel_key = lower(channels.tvg_id)
+                            ORDER BY l.updated_at DESC LIMIT 1))) as "logo_url?: String",
                  MIN(category) as "category?: String",
                  MIN(region) as "region?: String",
                  MAX(is_favorite) as "is_favorite!: i64",
@@ -421,7 +439,12 @@ impl<'a> ChannelRepository<'a> {
         group: &str,
     ) -> Result<Vec<Channel>, StorageError> {
         let rows = sqlx::query!(
-            r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
+            r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group,
+                        COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l
+                            WHERE l.source_id = channels.source_id
+                              AND l.channel_key = lower(channels.tvg_id)
+                            ORDER BY l.updated_at DESC LIMIT 1)) as "logo_url?: String",
+                        stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
                FROM channels
                WHERE source_id = ? AND COALESCE(NULLIF(channel_group, ''), name) = ?
                ORDER BY name ASC, id ASC"#,

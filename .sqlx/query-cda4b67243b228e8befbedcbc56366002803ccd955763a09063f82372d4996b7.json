@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR REPLACE INTO epg_channel_logos\n                     (epg_source_id, source_id, channel_key, url, updated_at)\n                 VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "cda4b67243b228e8befbedcbc56366002803ccd955763a09063f82372d4996b7"
+}

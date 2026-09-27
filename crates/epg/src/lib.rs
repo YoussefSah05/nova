@@ -11,6 +11,8 @@ pub mod model;
 pub mod parser;
 pub mod time;
 
-pub use model::{channel_id_matches, EpgError, Program};
+pub use model::{
+    channel_id_matches, channel_logo_key, match_channel_icons, ChannelIcon, EpgError, Program,
+};
 pub use parser::{parse, Programs};
 pub use time::xmltv_to_epoch;

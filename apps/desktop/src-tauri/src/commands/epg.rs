@@ -251,12 +251,15 @@ async fn run_refresh(
         },
     );
 
-    // quick-xml is sync — run the streaming parser on a blocking thread.
-    let parse_result = tokio::task::spawn_blocking(move || -> Result<Vec<Program>, String> {
+    // quick-xml is sync — run the streaming parser on a blocking thread. The
+    // feed's `<channel>` icons come back alongside the programmes.
+    type Parsed = (Vec<Program>, Vec<nova_epg::ChannelIcon>);
+    let parse_result = tokio::task::spawn_blocking(move || -> Result<Parsed, String> {
         let cursor = std::io::Cursor::new(bytes);
         let reader = std::io::BufReader::new(cursor);
         let mut programs = Vec::new();
-        for p in nova_epg::parse(reader) {
+        let mut parser = nova_epg::parse(reader);
+        for p in parser.by_ref() {
             match p {
                 Ok(p) => programs.push(p),
                 Err(e) => {
@@ -266,11 +269,11 @@ async fn run_refresh(
                 }
             }
         }
-        Ok(programs)
+        Ok((programs, parser.take_channel_icons()))
     })
     .await;
 
-    let programs = match parse_result {
+    let (programs, channel_icons) = match parse_result {
         Ok(Ok(p)) => p,
         Ok(Err(e)) => return fail(&app, source_id, epg_source_id, started_at, e, pool).await,
         Err(e) => {
@@ -283,6 +286,19 @@ async fn run_refresh(
                 pool,
             )
             .await
+        }
+    };
+
+    // Channel logos this feed declares, matched to the source's channels the
+    // same way programmes are (tvg-id). A read failure only costs the logos.
+    let channel_logos = match EpgSourcesRepository::new(pool)
+        .channel_tvg_ids(source_id)
+        .await
+    {
+        Ok(tvg_ids) => nova_epg::match_channel_icons(&tvg_ids, &channel_icons),
+        Err(e) => {
+            tracing::warn!(error = %e, "epg_refresh: channel tvg-ids unavailable");
+            Vec::new()
         }
     };
 
@@ -311,6 +327,14 @@ async fn run_refresh(
                 .await
                 .map_err(|e| e.to_string())?;
         }
+        EpgSourcesRepository::replace_channel_logos_tx(
+            &mut tx,
+            epg_source_id,
+            source_id,
+            &channel_logos,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())?;
         Ok(total)
     }

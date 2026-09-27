@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM epg_channel_logos WHERE epg_source_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9af0531add2f44565514d1a2f89dbbf4bd404e976bb671a7c002fbb5313b933c"
+}

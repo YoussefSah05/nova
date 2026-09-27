@@ -2,7 +2,9 @@
 //!
 //! Iterates over `<programme>` elements in a (possibly very large) XMLTV
 //! document and emits one [`Program`] per element without buffering the
-//! whole document — `quick-xml` event mode, not DOM. See
+//! whole document — `quick-xml` event mode, not DOM. `<channel>` icons met
+//! along the way are collected on the side ([`Programs::take_channel_icons`]).
+//! See
 //! `docs/reference/xmltv-epg.md` for parsing rules.
 
 use std::io::BufRead;
@@ -11,7 +13,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::QName;
 use quick_xml::Reader;
 
-use crate::model::{EpgError, Program};
+use crate::model::{ChannelIcon, EpgError, Program};
 use crate::time::xmltv_to_epoch;
 
 /// Streaming iterator over `<programme>` elements. Construct via [`parse`].
@@ -19,12 +21,14 @@ pub struct Programs<R: BufRead> {
     reader: Reader<R>,
     buf: Vec<u8>,
     inner_buf: Vec<u8>,
+    channel_icons: Vec<ChannelIcon>,
 }
 
 /// Begin parsing an XMLTV document. The returned iterator yields one
-/// [`Program`] per `<programme>` element; `<channel>` elements and other
-/// content are skipped (channel ID matching happens against `programme.channel`
-/// at the storage layer).
+/// [`Program`] per `<programme>` element. A `<channel>` element contributes its
+/// first `<icon src>` to [`Programs::take_channel_icons`]; other content is
+/// skipped (channel ID matching happens against `programme.channel` at the
+/// storage layer).
 pub fn parse<R: BufRead>(reader: R) -> Programs<R> {
     let mut reader = Reader::from_reader(reader);
     reader.config_mut().trim_text(true);
@@ -32,6 +36,7 @@ pub fn parse<R: BufRead>(reader: R) -> Programs<R> {
         reader,
         buf: Vec::with_capacity(4096),
         inner_buf: Vec::with_capacity(4096),
+        channel_icons: Vec::new(),
     }
 }
 
@@ -50,6 +55,16 @@ impl<R: BufRead> Iterator for Programs<R> {
                         Ok(h) => h,
                         Err(e) => return Some(Err(e)),
                     }
+                }
+                Ok(Event::Start(start)) if start.local_name().as_ref() == b"channel" => {
+                    let id = match channel_id(&start) {
+                        Ok(id) => id,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if let Err(e) = self.parse_channel(id) {
+                        return Some(Err(e));
+                    }
+                    continue;
                 }
                 Ok(Event::Eof) => return None,
                 Ok(_) => continue,
@@ -88,7 +103,72 @@ fn extract_programme_header(start: &BytesStart<'_>) -> Result<ProgrammeHeader, E
     Ok(h)
 }
 
+fn channel_id(start: &BytesStart<'_>) -> Result<Option<String>, EpgError> {
+    for attr in start.attributes().with_checks(false).flatten() {
+        if attr.key.as_ref() == b"id" {
+            let id = decode_attr(&attr.value)?;
+            return Ok(Some(id.trim().to_string()).filter(|s| !s.is_empty()));
+        }
+    }
+    Ok(None)
+}
+
+fn icon_src(start: &BytesStart<'_>) -> Result<Option<String>, EpgError> {
+    for attr in start.attributes().with_checks(false).flatten() {
+        if attr.key.as_ref() == b"src" {
+            return Ok(Some(decode_attr(&attr.value)?));
+        }
+    }
+    Ok(None)
+}
+
 impl<R: BufRead> Programs<R> {
+    /// The `<channel>` icons seen so far (all of them once the iterator is
+    /// exhausted), leaving the list empty.
+    pub fn take_channel_icons(&mut self) -> Vec<ChannelIcon> {
+        std::mem::take(&mut self.channel_icons)
+    }
+
+    /// Consume one `<channel>` element, keeping its first icon.
+    fn parse_channel(&mut self, id: Option<String>) -> Result<(), EpgError> {
+        let mut icon: Option<String> = None;
+        loop {
+            self.inner_buf.clear();
+            let skip: Option<Vec<u8>> = match self.reader.read_event_into(&mut self.inner_buf) {
+                Ok(Event::Start(inner)) => {
+                    if inner.local_name().as_ref() == b"icon" && icon.is_none() {
+                        icon = icon_src(&inner)?;
+                    }
+                    Some(inner.local_name().as_ref().to_vec())
+                }
+                Ok(Event::Empty(inner)) => {
+                    if inner.local_name().as_ref() == b"icon" && icon.is_none() {
+                        icon = icon_src(&inner)?;
+                    }
+                    None
+                }
+                Ok(Event::End(end)) if end.local_name().as_ref() == b"channel" => break,
+                Ok(Event::Eof) => break,
+                Ok(_) => None,
+                Err(e) => return Err(EpgError::from(e)),
+            };
+            if let Some(name) = skip {
+                self.skip_to_end(&name)?;
+            }
+        }
+        if let (Some(channel_id), Some(icon_url)) = (
+            id,
+            icon.as_deref()
+                .and_then(nova_core::artwork::plausible_image_url),
+        ) {
+            self.channel_icons.push(ChannelIcon {
+                channel_id,
+                icon_url,
+            });
+        }
+        Ok(())
+    }
+
     fn parse_programme(&mut self, header: ProgrammeHeader) -> Result<Option<Program>, EpgError> {
         let ProgrammeHeader {
             channel_tvg_id,
@@ -342,5 +422,42 @@ mod tests {
         </tv>"#;
         let progs: Vec<_> = parse(xml.as_slice()).collect::<Result<_, _>>().unwrap();
         assert_eq!(progs[0].icon_url.as_deref(), Some("http://x/img.png"));
+    }
+
+    #[test]
+    fn collects_channel_icons_alongside_programmes() {
+        let xml = br#"<tv>
+          <channel id="bbc1.uk">
+            <display-name lang="en">BBC One</display-name>
+            <icon src="https://logos.example/bbc1.png" width="300"/>
+            <icon src="https://logos.example/bbc1-alt.png"/>
+          </channel>
+          <channel id="cdn.tv"><icon src="https://logos.example/channel/42"></icon></channel>
+          <channel id="noicon"><display-name>No icon</display-name></channel>
+          <channel id="bad"><icon src="https://image.tmdb.org/t/p/w500"/></channel>
+          <channel><icon src="https://logos.example/orphan.png"/></channel>
+          <programme start="20240101120000 +0000" stop="20240101130000 +0000" channel="bbc1.uk">
+            <title>News</title>
+          </programme>
+        </tv>"#;
+        let mut programs = parse(xml.as_slice());
+        let progs: Vec<_> = programs.by_ref().collect::<Result<_, _>>().unwrap();
+        assert_eq!(progs.len(), 1, "channels never become programmes");
+        assert_eq!(progs[0].title, "News");
+        let icons = programs.take_channel_icons();
+        assert_eq!(
+            icons,
+            vec![
+                ChannelIcon {
+                    channel_id: "bbc1.uk".into(),
+                    icon_url: "https://logos.example/bbc1.png".into(),
+                },
+                ChannelIcon {
+                    channel_id: "cdn.tv".into(),
+                    icon_url: "https://logos.example/channel/42".into(),
+                },
+            ]
+        );
+        assert!(programs.take_channel_icons().is_empty());
     }
 }

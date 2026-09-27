@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT tvg_id as \"tvg_id!: String\" FROM channels\n               WHERE source_id = ? AND tvg_id IS NOT NULL AND tvg_id <> ''",
+  "describe": {
+    "columns": [
+      {
+        "name": "tvg_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "35f77077d3740699edec0dbcbd3050a05bc775a5d64a98260c210dcd92f481b2"
+}
