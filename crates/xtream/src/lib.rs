@@ -7,6 +7,7 @@
 //! Each endpoint is streamed via `chunk()` → blocking `serde_json::Deserializer`
 //! so entries are emitted as bytes arrive — no buffering of the full response.
 
+use nova_core::clean::{parse_source_title, TitleKind};
 use nova_core::{normalize_category, MediaKind, ParsedEntry};
 use serde::de::{DeserializeOwned, SeqAccess, Visitor};
 use serde::Deserialize;
@@ -587,7 +588,8 @@ struct SeriesJson {
 // ── Entry converters ──────────────────────────────────────────────────────────
 
 fn to_live_entry(s: LiveStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
-    let (country_prefix, clean_title) = strip_country_prefix(&s.name);
+    let parsed = parse_source_title(&s.name, TitleKind::Live);
+    let (country_prefix, clean_title) = (parsed.country_prefix, parsed.title);
     let logo_url = s
         .stream_icon
         .as_deref()
@@ -615,8 +617,8 @@ fn to_live_entry(s: LiveStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
 }
 
 fn to_vod_entry(s: VodStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
-    let (country_prefix, stripped) = strip_country_prefix(&s.name);
-    let (clean_title, year) = extract_year(&stripped);
+    let parsed = parse_source_title(&s.name, TitleKind::Movie);
+    let (country_prefix, clean_title, year) = (parsed.country_prefix, parsed.title, parsed.year);
     let logo_url = s
         .stream_icon
         .as_deref()
@@ -645,7 +647,8 @@ fn to_vod_entry(s: VodStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
 }
 
 fn to_series_entry(s: SeriesJson, _creds: &XtreamCredentials) -> ParsedEntry {
-    let (country_prefix, clean_title) = strip_country_prefix(&s.name);
+    let parsed = parse_source_title(&s.name, TitleKind::Series);
+    let (country_prefix, clean_title) = (parsed.country_prefix, parsed.title);
     let logo_url = s
         .cover
         .as_deref()
@@ -698,29 +701,6 @@ fn has_image_extension(url: &str) -> bool {
         || lower.ends_with(".png")
         || lower.ends_with(".webp")
         || lower.ends_with(".gif")
-}
-
-fn strip_country_prefix(name: &str) -> (Option<String>, String) {
-    if let Some(pipe_pos) = name.find("| ") {
-        let prefix = &name[..pipe_pos];
-        let code = prefix.trim_start_matches("SRS-");
-        if code.len() >= 2 && code.len() <= 3 && code.chars().all(|c| c.is_ascii_uppercase()) {
-            return (Some(code.to_string()), name[pipe_pos + 2..].to_string());
-        }
-    }
-    (None, name.to_string())
-}
-
-fn extract_year(title: &str) -> (String, Option<u16>) {
-    if let Some(open) = title.rfind('(') {
-        let after = &title[open + 1..];
-        if let Some(close) = after.find(')') {
-            if let Ok(y) = after[..close].parse::<u16>() {
-                return (title[..open].trim().to_string(), Some(y));
-            }
-        }
-    }
-    (title.to_string(), None)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -810,6 +790,32 @@ mod tests {
         assert_eq!(e.stream_url, "http://h:80/live/u/p/1.m3u8");
         // "FRANCE GENERAL" normalizes to the canonical Entertainment genre.
         assert_eq!(e.category.as_deref(), Some("Entertainment"));
+    }
+
+    #[test]
+    fn vod_names_with_spaced_prefixes_and_in_title_numbers() {
+        let creds = XtreamCredentials {
+            base_url: "http://h:80".into(),
+            username: "u".into(),
+            password: "p".into(),
+        };
+        let vod = |name: &str| VodStreamJson {
+            stream_id: 1,
+            name: name.into(),
+            stream_icon: None,
+            category_name: None,
+            container_extension: None,
+            tmdb: None,
+        };
+        let e = to_vod_entry(vod("FR | Blade Runner 2049 (2017) 4K"), &creds);
+        assert_eq!(e.clean_title, "Blade Runner 2049");
+        assert_eq!(
+            (e.year, e.country_prefix.as_deref()),
+            (Some(2017), Some("FR"))
+        );
+        assert_eq!(e.name, "FR | Blade Runner 2049 (2017) 4K", "raw kept");
+        let e = to_vod_entry(vod("UK: The Office (US)"), &creds);
+        assert_eq!(e.clean_title, "The Office (US)");
     }
 
     #[test]

@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::process::Stdio;
 
+use nova_core::clean::{parse_source_title, TitleKind};
 use nova_core::{normalize_category, MediaKind, ParsedEntry};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -366,20 +367,25 @@ fn classify(attrs: ExtinfAttrs, stream_url: &str) -> ParsedEntry {
     // Validate logo URL regardless of how attrs were constructed
     let logo_url = attrs.tvg_logo.filter(|u| has_image_extension(u));
 
-    let (country_prefix, stripped) = strip_country_prefix(&attrs.tvg_name);
-    let stripped = stripped.trim_start_matches('-').trim().to_string();
-
+    // One shared, versioned parser (`nova_core::clean::parse_source_title`)
+    // extracts the display title and every clue; the raw name is kept as-is.
+    let title_kind = match kind {
+        MediaKind::Movie => TitleKind::Movie,
+        MediaKind::Series => TitleKind::Series,
+        MediaKind::Live => TitleKind::Live,
+    };
+    let parsed = parse_source_title(&attrs.tvg_name, title_kind);
+    let country_prefix = parsed.country_prefix;
     let (clean_title, year, series_title, season, episode) = match kind {
-        MediaKind::Movie => {
-            let (title, yr) = extract_year(&stripped);
-            (title, yr, None, None, None)
-        }
-        MediaKind::Series => {
-            let (base, s, e) = extract_season_episode(&stripped);
-            let series = base.trim_end_matches('-').trim().to_string();
-            (series.clone(), None, Some(series), s, e)
-        }
-        MediaKind::Live => (stripped.clone(), None, None, None, None),
+        MediaKind::Movie => (parsed.title, parsed.year, None, None, None),
+        MediaKind::Series => (
+            parsed.title.clone(),
+            None,
+            Some(parsed.title),
+            parsed.season,
+            parsed.episode,
+        ),
+        MediaKind::Live => (parsed.title, None, None, None, None),
     };
 
     let group_title = attrs.group_title.unwrap_or_default();
@@ -426,100 +432,11 @@ fn detect_kind(url: &str, group_title: Option<&str>) -> MediaKind {
     MediaKind::Live
 }
 
-/// Strips prefix like `"DE| "`, `"FR| "`, `"EU| "`, `"SRS-FR| "` from a name.
-fn strip_country_prefix(name: &str) -> (Option<String>, String) {
-    if let Some(pipe_pos) = name.find("| ") {
-        let prefix = &name[..pipe_pos];
-        let code = prefix.trim_start_matches("SRS-");
-        if code.len() >= 2 && code.len() <= 3 && code.chars().all(|c| c.is_ascii_uppercase()) {
-            return (Some(code.to_string()), name[pipe_pos + 2..].to_string());
-        }
-    }
-    (None, name.to_string())
-}
-
-/// Extracts trailing `(YYYY)` year from a movie title.
-fn extract_year(title: &str) -> (String, Option<u16>) {
-    if let Some(open) = title.rfind('(') {
-        let after = &title[open + 1..];
-        if let Some(close) = after.find(')') {
-            if let Ok(y) = after[..close].parse::<u16>() {
-                return (title[..open].trim().to_string(), Some(y));
-            }
-        }
-    }
-    (title.to_string(), None)
-}
-
-/// Extracts `S{nn} E{nn}` or `S{nn}E{nn}` suffix from a series episode name.
-fn extract_season_episode(title: &str) -> (String, Option<u8>, Option<u8>) {
-    if let Some((pos, s, e)) = find_season_episode(title) {
-        return (title[..pos].trim().to_string(), Some(s), Some(e));
-    }
-    (title.to_string(), None, None)
-}
-
-fn find_season_episode(title: &str) -> Option<(usize, u8, u8)> {
-    // S/E markers are ASCII. Preserve original byte offsets and avoid Unicode
-    // uppercase expansion (e.g. ß → SS) before slicing the original title.
-    let (offsets, chars): (Vec<usize>, Vec<char>) = title
-        .char_indices()
-        .map(|(offset, ch)| (offset, ch.to_ascii_uppercase()))
-        .unzip();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == 'S' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
-            let start = i;
-            i += 1;
-            let mut s_str = String::new();
-            while i < chars.len() && chars[i].is_ascii_digit() {
-                s_str.push(chars[i]);
-                i += 1;
-            }
-            // Optional space between S and E
-            while i < chars.len() && chars[i] == ' ' {
-                i += 1;
-            }
-            if i < chars.len()
-                && chars[i] == 'E'
-                && i + 1 < chars.len()
-                && chars[i + 1].is_ascii_digit()
-            {
-                i += 1;
-                let mut e_str = String::new();
-                while i < chars.len() && chars[i].is_ascii_digit() {
-                    e_str.push(chars[i]);
-                    i += 1;
-                }
-                if let (Ok(s), Ok(e)) = (s_str.parse::<u8>(), e_str.parse::<u8>()) {
-                    return Some((offsets[start], s, e));
-                }
-            }
-        } else {
-            i += 1;
-        }
-    }
-    None
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn episode_suffix_uses_original_utf8_byte_offsets() {
-        for title in ["Exemple / مثال", "Série française", "Straße", "🎬 Example"] {
-            let (name, season, episode) = extract_season_episode(&format!("{title} s01 e02"));
-            assert_eq!(name, title);
-            assert_eq!((season, episode), (Some(1), Some(2)));
-        }
-        assert_eq!(
-            extract_season_episode("مثال بلا أرقام"),
-            ("مثال بلا أرقام".into(), None, None)
-        );
-    }
 
     fn make_live() -> (ExtinfAttrs, &'static str) {
         (
@@ -634,25 +551,66 @@ mod tests {
         assert_eq!(a.group_title.as_deref(), Some("EU| FRANCE GENERAL"));
     }
 
-    #[test]
-    fn strip_srs_prefix() {
-        let (c, rest) = strip_country_prefix("SRS-FR| HBO");
-        assert_eq!(c.as_deref(), Some("FR"));
-        assert_eq!(rest, "HBO");
+    fn entry(name: &str, group: &str, url: &str) -> ParsedEntry {
+        classify(
+            ExtinfAttrs {
+                tvg_id: None,
+                tvg_name: name.into(),
+                tvg_logo: None,
+                group_title: Some(group.into()),
+            },
+            url,
+        )
     }
 
     #[test]
-    fn strip_eu_prefix() {
-        let (c, rest) = strip_country_prefix("EU| FRANCE GENERAL");
-        assert_eq!(c.as_deref(), Some("EU"));
-        assert_eq!(rest, "FRANCE GENERAL");
+    fn messy_provider_names_parse_into_separate_clues() {
+        let e = entry(
+            "FR | OPPENHEIMER [4K] MULTI (2023)",
+            "FR| FILMS",
+            "http://h/movie/u/p/1.mkv",
+        );
+        assert_eq!(e.name, "FR | OPPENHEIMER [4K] MULTI (2023)", "raw kept");
+        assert_eq!(e.clean_title, "OPPENHEIMER");
+        assert_eq!(
+            (e.year, e.country_prefix.as_deref()),
+            (Some(2023), Some("FR"))
+        );
+
+        let e = entry(
+            "AR | مسلسل الحفرة الموسم 2 الحلقة 5",
+            "AR| SERIES",
+            "http://h/series/u/p/2.mkv",
+        );
+        assert_eq!(e.series_title.as_deref(), Some("الحفرة"));
+        assert_eq!((e.season, e.episode), (Some(2), Some(5)));
+
+        let e = entry(
+            "DE | Tatort - Folge 1234",
+            "DE| SERIES",
+            "http://h/series/u/p/3.mkv",
+        );
+        assert_eq!(
+            (e.season, e.episode),
+            (None, Some(1234)),
+            "absolute numbering fits"
+        );
+
+        let e = entry(
+            "FR - NOVO 19",
+            "EU| FRANCE GENERAL",
+            "http://h/live/u/p/4.m3u8",
+        );
+        assert_eq!(
+            (e.clean_title.as_str(), e.country_prefix.as_deref()),
+            ("NOVO 19", Some("FR"))
+        );
     }
 
     #[test]
-    fn no_prefix_passthrough() {
-        let (c, rest) = strip_country_prefix("CNN International");
-        assert!(c.is_none());
-        assert_eq!(rest, "CNN International");
+    fn series_without_numbering_leave_it_unknown() {
+        let e = entry("Breaking Bad", "SERIES", "http://h/series/u/p/5.mkv");
+        assert_eq!((e.season, e.episode), (None, None));
     }
 
     #[test]

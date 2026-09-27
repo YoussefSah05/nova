@@ -70,8 +70,8 @@ pub struct ParsedEntry {
     pub year: Option<u16>,
     /// Series title without season/episode suffix, e.g. `"Mon Comeback"`.
     pub series_title: Option<String>,
-    pub season: Option<u8>,
-    pub episode: Option<u8>,
+    pub season: Option<u32>,
+    pub episode: Option<u32>,
     /// Human-readable category extracted from `group_title`, e.g. `"GERMANY MOVIES"`.
     pub category: Option<String>,
     /// Provider-scoped stable item ID (e.g. `xtream:vod:123`) when the

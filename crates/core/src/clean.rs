@@ -11,6 +11,10 @@
 //! This is the cheap first pass; later enrichment layers (embeddings, TMDB)
 //! build on the cleaner output.
 
+mod parse;
+
+pub use parse::{parse_source_title, ParsedTitle, TitleKind, PARSER_VERSION};
+
 /// Unambiguous release/quality/codec/source tags, normalized to uppercase
 /// alphanumerics (so `H.264`, `WEB-DL`, `x265` all match after normalization).
 /// Deliberately excludes ambiguous standalone English words (`WEB`, `DVD`,
@@ -22,21 +26,11 @@ const JUNK_TOKENS: &[&str] = &[
     "HDCAM", "DUBBED", "IMAX", "REMUX", "10BIT", "8BIT",
 ];
 
-/// Polish a (already country/year/season-stripped) title into a display name.
+/// Polish a provider title into a display name: the title part of
+/// [`parse_source_title`] without kind-specific extraction (numbers kept).
+/// Never empty: a name made only of tags (a channel called "HD") is kept.
 pub fn polish_title(raw: &str) -> String {
-    let folded = fold(raw);
-    let kept: Vec<&str> = folded
-        .split_whitespace()
-        .filter(|tok| !is_junk_token(tok))
-        .collect();
-    let cleaned = cleanup(&kept.join(" "));
-    if cleaned.is_empty() {
-        // Everything was stripped (e.g. a channel literally named "HD"): keep
-        // the folded original rather than render an empty card.
-        cleanup(&folded)
-    } else {
-        cleaned
-    }
+    parse_source_title(raw, TitleKind::Live).title
 }
 
 /// A grouping key for near-duplicate detection. Strips the same quality/codec
@@ -48,8 +42,10 @@ pub fn polish_title(raw: &str) -> String {
 /// Returns an empty string when nothing distinctive remains (e.g. a channel
 /// literally named "HD"); callers treat an empty key as "do not group".
 pub fn dedup_key(raw: &str) -> String {
-    fold(raw)
-        .split_whitespace()
+    // Same provider-prefix rules as the parser, so `FR | Oppenheimer` and
+    // `Oppenheimer` share a key.
+    let (_, rest) = parse::strip_prefixes(&fold(raw));
+    rest.split_whitespace()
         .filter(|tok| !is_junk_token(tok))
         .map(|tok| {
             tok.chars()
@@ -104,21 +100,16 @@ pub fn channel_brand(raw: &str) -> String {
     tokens.join(" ")
 }
 
-/// Build the cleanest possible **TMDB search query** from a raw catalog name.
-/// More aggressive than [`polish_title`]: drops a leading provider/country
-/// prefix (everything before the last `|`), bracketed groups (`[MULTI]`,
-/// `(2019)`), quality/codec junk, a 4-digit year (passed to the API separately),
-/// and `SxxEyy` episode markers. Keeps the real words (incl. hyphenated names).
-/// Falls back to the folded input if stripping leaves nothing.
+/// Build the cleanest possible **TMDB search query** from a raw catalog name:
+/// the parsed movie title (provider prefix, tags and a genuine release year
+/// removed, see [`parse_source_title`]) without bracketed groups, episode
+/// markers or `:`/`_` separators. Numbers that are part of the title survive
+/// (`Blade Runner 2049`). Falls back to the parsed title if nothing remains.
 pub fn search_title(raw: &str) -> String {
-    let folded = fold(raw);
-    // Provider/country prefixes precede pipes: "FR| US| The Matrix" → "The Matrix".
-    let after_pipe = folded.rsplit('|').next().unwrap_or(&folded);
-
-    // Drop bracketed/parenthesized groups.
-    let mut unbracketed = String::with_capacity(after_pipe.len());
+    let parsed = parse_source_title(raw, TitleKind::Movie);
+    let mut unbracketed = String::with_capacity(parsed.title.len());
     let mut depth = 0i32;
-    for c in after_pipe.chars() {
+    for c in parsed.title.chars() {
         match c {
             '(' | '[' | '{' => depth += 1,
             ')' | ']' | '}' => depth = (depth - 1).max(0),
@@ -126,18 +117,15 @@ pub fn search_title(raw: &str) -> String {
             _ => {}
         }
     }
-
     let kept: Vec<&str> = unbracketed
         .split(|c: char| c.is_whitespace() || matches!(c, ':' | '_' | '|'))
         .filter(|t| !t.is_empty())
         .filter(|t| !is_junk_token(t))
-        .filter(|t| !is_year_token(t))
         .filter(|t| !is_season_episode(t))
         .collect();
-
     let joined = cleanup(&kept.join(" "));
     if joined.is_empty() {
-        cleanup(&folded)
+        parsed.title
     } else {
         joined
     }
@@ -162,7 +150,7 @@ const SERIES_WORDS: &[&str] = &[
 /// (`Game of Thrones Season 8` → `Game of Thrones`, `مسلسل Breaking Bad` →
 /// `Breaking Bad`).
 pub fn search_series_title(raw: &str) -> String {
-    let folded = fold(raw);
+    let folded = parse_source_title(raw, TitleKind::Series).title;
     let mut had_season = false;
     let kept: Vec<&str> = folded
         .split_whitespace()
@@ -191,14 +179,6 @@ pub fn search_series_title(raw: &str) -> String {
         kept
     };
     search_title(&cleaned.join(" "))
-}
-
-/// A standalone 4-digit release year (1900–2099) — removed from search queries
-/// since the year is sent to TMDB as a separate parameter.
-fn is_year_token(tok: &str) -> bool {
-    tok.len() == 4
-        && tok.bytes().all(|c| c.is_ascii_digit())
-        && matches!(tok.parse::<u32>(), Ok(y) if (1900..=2099).contains(&y))
 }
 
 /// An `SxxEyy` / `Sx` / `NxNN` episode marker (lowercased), e.g. `S01E02`, `1x05`.
@@ -362,6 +342,12 @@ mod tests {
     }
 
     #[test]
+    fn dedup_key_ignores_provider_prefixes() {
+        assert_eq!(dedup_key("FR | Oppenheimer"), dedup_key("Oppenheimer"));
+        assert_eq!(dedup_key("SRS-EN| Heat FHD"), "heat");
+    }
+
+    #[test]
     fn dedup_key_empty_when_only_junk() {
         assert_eq!(dedup_key("HD"), "");
     }
@@ -370,7 +356,16 @@ mod tests {
     fn search_title_strips_prefixes_brackets_year_quality() {
         assert_eq!(search_title("VOD| The Matrix 1999 1080p"), "The Matrix");
         assert_eq!(search_title("FR| US| Inception [MULTI] 2010"), "Inception");
-        assert_eq!(search_title("EN - Breaking Bad S01E01"), "EN Breaking Bad");
+        assert_eq!(search_title("EN - Breaking Bad S01E01"), "Breaking Bad");
+        // In-title numbers are not years (audit finding).
+        assert_eq!(
+            search_title("Blade Runner 2049 (2017)"),
+            "Blade Runner 2049"
+        );
+        assert_eq!(
+            search_title("FR | OPPENHEIMER [4K] MULTI (2023)"),
+            "OPPENHEIMER"
+        );
         assert_eq!(
             search_title("Mad Max: Fury Road (2015) FHD"),
             "Mad Max Fury Road"

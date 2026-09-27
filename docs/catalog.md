@@ -244,3 +244,32 @@ Auth: TMDB v3 is still the current API for movie/TV data. The credential field
 accepts TMDB's default **API Read Access Token** (sent as `Authorization: Bearer`)
 or a legacy v3 API key, detected by shape. Request errors no longer include URLs,
 so a legacy key can't leak into logs.
+
+### Source-title parsing (naming v1, step 1)
+
+`nova_core::clean::parse_source_title(raw, TitleKind)` is the single
+deterministic parser for provider titles (`PARSER_VERSION = 1`). It returns a
+`ParsedTitle`: a display title, never empty, plus the clues it removed, as
+separate fields: `country_prefix`, `year`, `season`, `episode` (absolute numbering
+has no season), `quality_hints` and `language_hints`. The raw name itself is
+untouched.
+
+The M3U and Xtream converters delegate to it (their private prefix/year/episode
+helpers are gone), `polish_title` is its kind-neutral title, and `dedup_key`
+shares its prefix rules. `search_title`/`search_series_title` are views over it.
+
+- **Prefixes:** `FR|`, `FR |`, `|AR|`, `SRS-FR|`, `FR| US|`, `VOD | NF-FR |`, and
+  `UK:` / `FR -` for known country or language codes only (so `Mission:` and
+  `Up:` survive).
+- **Years:** a bracketed 1900–2099 year, or a trailing bare year up to 2030 for
+  movies. `Blade Runner 2049`, `1917` and `2001: A Space Odyssey` keep their
+  numbers.
+- **Numbering:** `S01E02`, `S01 E02`, `1x07`, and season/episode words in
+  English, French, Spanish, German, Italian, Turkish, Dutch and Arabic
+  (`الموسم 2 الحلقة 5`, `Folge 1234`). Missing numbering stays `None`.
+- **Brackets:** tag-only groups become hints, and distinguishing groups stay in
+  the title (`The Office (US)`, `(Director's Cut)`).
+- **Scene dot-names** are split (`BREAKING.BAD` → `BREAKING BAD`); acronyms stay
+  (`S.W.A.T.`, `H.264`).
+- Capitalization is not changed. ALL-CAPS provider titles stay as-is until a
+  confident TMDB name replaces them (step 5).
