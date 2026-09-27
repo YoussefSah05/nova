@@ -28,11 +28,17 @@ export function episodeLabel(ep: SeriesEpisode, withSeason = true): string {
   return code ?? ep.episodeTitle ?? "Episode";
 }
 
-export function episodeToMedia(ep: SeriesEpisode, fallbackPoster?: string | null): PlayMedia {
+/// `seriesTitle` should be the series' display title (the player header);
+/// the episode row only carries the parsed provider series title.
+export function episodeToMedia(
+  ep: SeriesEpisode,
+  fallbackPoster?: string | null,
+  seriesTitle?: string
+): PlayMedia {
   return {
     kind: "episode",
     id: ep.id,
-    title: ep.seriesTitle,
+    title: seriesTitle ?? ep.seriesTitle,
     subtitle: episodeLabel(ep),
     posterUrl: ep.logoUrl ?? fallbackPoster ?? null,
   };

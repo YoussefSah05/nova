@@ -330,7 +330,7 @@ export function PlayerModal({
         const sorted = [...eps].sort((a, b) => a.season - b.season || a.episode - b.episode);
         const idx = sorted.findIndex((e) => e.id === media.id);
         const next = idx >= 0 && idx + 1 < sorted.length ? sorted[idx + 1] : null;
-        setNextEpisode(next ? episodeToMedia(next, media.posterUrl) : null);
+        setNextEpisode(next ? episodeToMedia(next, media.posterUrl, media.title) : null);
       } catch {
         if (!cancelled) setNextEpisode(null);
       }
@@ -338,7 +338,7 @@ export function PlayerModal({
     return () => {
       cancelled = true;
     };
-  }, [media.kind, media.id, profileId, media.posterUrl]);
+  }, [media.kind, media.id, profileId, media.posterUrl, media.title]);
 
   // Read by the native-state handler (which has empty deps) without re-binding.
   const autoplayRef = useRef<{ enabled: boolean; next: PlayMedia | null }>({
@@ -1982,6 +1982,7 @@ function CinemaPanel({
           profileId={profileId}
           currentEpisodeId={currentMediaId}
           fallbackPoster={media.posterUrl}
+          seriesDisplayTitle={media.title}
           onSelectMedia={onSelectMedia}
         />
       ) : (

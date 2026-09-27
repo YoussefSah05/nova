@@ -148,7 +148,7 @@ export function seriesToItem(s: SeriesSummary): BrowseItem {
     key: `series-${s.sourceId}-${s.seriesTitle}`,
     kind: "series",
     id: s.sourceId,
-    title: s.canonicalTitle ?? s.seriesTitle,
+    title: s.displayTitle,
     subtitle: s.category,
     posterUrl: s.posterUrl,
     tvgId: null,
@@ -246,13 +246,12 @@ async function fetchItems(
         (item) => movieVersionKey(item) ?? item.dedupGroup ?? null
       );
     }
-    // Canonical movies (one card per entity). Presentation-only: the same
-    // film's language/source copies are still gathered under one card by raw
-    // title (falling back to the enrichment cluster) until entity resolution
-    // consolidates them server-side.
-    return collapseByKey(
-      counted(await invoke<CanonicalMediaSummary[]>(LIST_COMMAND.movies, args)).map(movieToItem),
-      (item) => movieVersionKey(item) ?? item.dedupGroup ?? null
+    // Canonical movies: one card per entity. Which copies are the same film
+    // is decided server-side by entity resolution (evidence-based, never on a
+    // title alone); a merged entity lists its versions in the detail view. No
+    // client-side grouping, which could merge remakes or distinct films.
+    return counted(await invoke<CanonicalMediaSummary[]>(LIST_COMMAND.movies, args)).map(
+      movieToItem
     );
   }
   // Series: plain free-text search → hybrid (semantic + keyword) retrieval.
@@ -308,7 +307,7 @@ function collapseByKey(
 /// *identical* normalized titles merge — distinct shows (incl. numbered seasons
 /// like `Foo 2`) keep their own card. Empty → never group.
 function seriesGroupKey(item: BrowseItem): string | null {
-  const raw = item.series?.canonicalTitle ?? item.series?.seriesTitle ?? item.title;
+  const raw = item.series?.displayTitle ?? item.title;
   const key = raw
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
@@ -373,13 +372,16 @@ const TRAILING_LANG = new Set([
   "tr",
 ]);
 
-/// Grouping key for a movie's language/source versions, derived from the RAW name
-/// (which keeps the real title even when `clean_title` is broken). Drops the
-/// provider prefix, bracketed groups, year, quality junk and a trailing language
-/// tag; keeps numbers so sequels/parts stay distinct. `null` when no real title
-/// remains (e.g. year-only names) so those never group.
+/// Grouping key for legacy (non-canonical) search results' language/source
+/// versions, derived from the RAW name. Drops the provider prefix, bracketed
+/// groups, quality junk and a trailing language tag; keeps numbers so
+/// sequels/parts stay distinct, and **keeps the release year** so remakes never
+/// group (`Scarface (1932)` vs `Scarface (1983)`), matching the server-side
+/// rule that a missing or different year never merges. `null` when no real
+/// title remains (e.g. year-only names) so those never group.
 function movieVersionKey(item: BrowseItem): string | null {
   const raw = item.movie?.sourceTitle ?? item.vod?.name ?? item.title;
+  const year = item.movie?.year ?? item.vod?.year ?? raw.match(/\b(?:19|20)\d{2}\b/)?.[0] ?? null;
   // Everything after the last '|' drops "FR|", "EN-AR|", "NF-FR| FR|" prefixes.
   const afterPipe = raw.includes("|") ? raw.slice(raw.lastIndexOf("|") + 1) : raw;
   const unbracketed = afterPipe.replace(/[([{][^)\]}]*[)\]}]/g, " ");
@@ -395,7 +397,7 @@ function movieVersionKey(item: BrowseItem): string | null {
   }
   const key = tokens.join(" ").trim();
   // Require some alphabetic content — never group year/number-only names.
-  return key && /\p{L}/u.test(key) ? key : null;
+  return key && /\p{L}/u.test(key) ? `${key}|${year ?? "?"}` : null;
 }
 
 async function fetchCount(

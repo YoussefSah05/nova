@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE canonical_entities\n               SET title = COALESCE(\n                       (SELECT COALESCE(v.clean_title, v.name)\n                        FROM stream_variants s JOIN vod_items v ON v.id = s.vod_item_id\n                        WHERE s.entity_id = canonical_entities.id\n                        ORDER BY COALESCE(v.clean_title, v.name)\n                                     = UPPER(COALESCE(v.clean_title, v.name)),\n                                 COALESCE(v.clean_title, v.name)\n                        LIMIT 1),\n                       title),\n                   year = COALESCE(\n                       (SELECT MIN(v.year)\n                        FROM stream_variants s JOIN vod_items v ON v.id = s.vod_item_id\n                        WHERE s.entity_id = canonical_entities.id),\n                       year)\n               WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "5c03751c3cb56504b14d6b821a24a17a3cf2e32ddf5d490c3f9de9a0863c35df"
+}

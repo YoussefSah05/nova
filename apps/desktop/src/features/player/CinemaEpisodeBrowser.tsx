@@ -17,11 +17,14 @@ export function CinemaEpisodeBrowser({
   profileId,
   currentEpisodeId,
   fallbackPoster,
+  seriesDisplayTitle,
   onSelectMedia,
 }: {
   profileId: string;
   currentEpisodeId: number;
   fallbackPoster?: string | null;
+  /// Display title of the playing series, reused for sibling episodes.
+  seriesDisplayTitle?: string;
   onSelectMedia: (m: PlayMedia) => void;
 }) {
   const [episodes, setEpisodes] = useState<SeriesEpisode[]>([]);
@@ -77,7 +80,7 @@ export function CinemaEpisodeBrowser({
     <div className="flex h-full flex-col gap-2 px-6 py-3">
       <div className="flex items-center gap-3">
         <p className="truncate text-xs font-semibold uppercase tracking-wide text-white/45">
-          {seriesTitle || "Episodes"}
+          {seriesDisplayTitle || seriesTitle || "Episodes"}
         </p>
         {seasons.length > 1 && (
           <div className="flex gap-1.5 overflow-x-auto [scrollbar-width:none]">
@@ -114,7 +117,9 @@ export function CinemaEpisodeBrowser({
               <button
                 key={ep.id}
                 type="button"
-                onClick={() => !active && onSelectMedia(episodeToMedia(ep, fallbackPoster))}
+                onClick={() =>
+                  !active && onSelectMedia(episodeToMedia(ep, fallbackPoster, seriesDisplayTitle))
+                }
                 aria-current={active}
                 className={cn(
                   "group flex w-40 flex-shrink-0 flex-col gap-1.5 rounded-lg p-2 text-left transition-colors",

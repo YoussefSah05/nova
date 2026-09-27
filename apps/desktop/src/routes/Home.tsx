@@ -449,7 +449,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
               setPlayingMedia({
                 kind: "episode",
                 id: episode.id,
-                title: selectedSeries.seriesTitle,
+                title: selectedSeries.displayTitle,
                 subtitle: episodeLabel(episode),
                 posterUrl: episode.logoUrl ?? selectedSeries.posterUrl,
               })

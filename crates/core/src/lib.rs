@@ -6,6 +6,7 @@ pub mod catalog;
 pub mod classify;
 pub mod clean;
 pub mod models;
+pub mod naming;
 pub mod region;
 pub use classify::normalize_category;
 pub use clean::polish_title;
@@ -308,6 +309,22 @@ pub struct SeriesSummary {
     pub canonical_title: Option<String>,
     pub backdrop_url: Option<String>,
     pub overview: Option<String>,
+    /// The name to show, by `naming::display_title` (confident TMDB title,
+    /// else the parsed provider title).
+    pub display_title: String,
+}
+
+impl SeriesSummary {
+    /// Apply the display-name policy to this row's names.
+    pub fn with_display_title(mut self) -> Self {
+        self.display_title = naming::display_title(naming::DisplayNameSources {
+            trusted_metadata: self.canonical_title.as_deref(),
+            parsed: Some(&self.series_title),
+            raw: &self.series_title,
+            ..Default::default()
+        });
+        self
+    }
 }
 
 /// Sort order for browse list commands.

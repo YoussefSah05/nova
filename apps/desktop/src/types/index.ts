@@ -97,6 +97,9 @@ export interface SeriesSummary {
   canonicalTitle: string | null;
   backdropUrl: string | null;
   overview: string | null;
+  /// Name to show, chosen by the backend's naming policy (confident TMDB
+  /// title, else the parsed provider title).
+  displayTitle: string;
 }
 
 export interface SeriesEpisode {

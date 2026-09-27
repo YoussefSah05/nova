@@ -246,19 +246,23 @@ impl<'a> SeriesRepository<'a> {
             .fetch_all(self.pool)
             .await?
             .into_iter()
-            .map(|r| SeriesSummary {
-                series_title: r.series_title,
-                source_id,
-                category: r.category,
-                episode_count: r.episode_count,
-                season_count: r.season_count,
-                poster_url: r.poster_url,
-                is_favorite: r.is_favorite != 0,
-                is_in_watchlist: r.is_in_watchlist != 0,
-                added_at: r.added_at,
-                canonical_title: r.canonical_title,
-                backdrop_url: r.backdrop_url,
-                overview: r.overview,
+            .map(|r| {
+                SeriesSummary {
+                    series_title: r.series_title,
+                    source_id,
+                    category: r.category,
+                    episode_count: r.episode_count,
+                    season_count: r.season_count,
+                    poster_url: r.poster_url,
+                    is_favorite: r.is_favorite != 0,
+                    is_in_watchlist: r.is_in_watchlist != 0,
+                    added_at: r.added_at,
+                    canonical_title: r.canonical_title,
+                    backdrop_url: r.backdrop_url,
+                    overview: r.overview,
+                    display_title: String::new(),
+                }
+                .with_display_title()
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
@@ -297,19 +301,23 @@ impl<'a> SeriesRepository<'a> {
             .fetch_all(self.pool)
             .await?
             .into_iter()
-            .map(|r| SeriesSummary {
-                series_title: r.series_title,
-                source_id,
-                category: r.category,
-                episode_count: r.episode_count,
-                season_count: r.season_count,
-                poster_url: r.poster_url,
-                is_favorite: r.is_favorite != 0,
-                is_in_watchlist: r.is_in_watchlist != 0,
-                added_at: r.added_at,
-                canonical_title: r.canonical_title,
-                backdrop_url: r.backdrop_url,
-                overview: r.overview,
+            .map(|r| {
+                SeriesSummary {
+                    series_title: r.series_title,
+                    source_id,
+                    category: r.category,
+                    episode_count: r.episode_count,
+                    season_count: r.season_count,
+                    poster_url: r.poster_url,
+                    is_favorite: r.is_favorite != 0,
+                    is_in_watchlist: r.is_in_watchlist != 0,
+                    added_at: r.added_at,
+                    canonical_title: r.canonical_title,
+                    backdrop_url: r.backdrop_url,
+                    overview: r.overview,
+                    display_title: String::new(),
+                }
+                .with_display_title()
             })
             .collect(),
         };
@@ -716,19 +724,23 @@ impl<'a> SeriesRepository<'a> {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|r| SeriesSummary {
-                series_title: r.series_title,
-                source_id,
-                category: r.category,
-                episode_count: r.episode_count,
-                season_count: r.season_count,
-                poster_url: r.poster_url,
-                is_favorite: r.is_favorite != 0,
-                is_in_watchlist: r.is_in_watchlist != 0,
-                added_at: r.added_at,
-                canonical_title: r.canonical_title,
-                backdrop_url: r.backdrop_url,
-                overview: r.overview,
+            .map(|r| {
+                SeriesSummary {
+                    series_title: r.series_title,
+                    source_id,
+                    category: r.category,
+                    episode_count: r.episode_count,
+                    season_count: r.season_count,
+                    poster_url: r.poster_url,
+                    is_favorite: r.is_favorite != 0,
+                    is_in_watchlist: r.is_in_watchlist != 0,
+                    added_at: r.added_at,
+                    canonical_title: r.canonical_title,
+                    backdrop_url: r.backdrop_url,
+                    overview: r.overview,
+                    display_title: String::new(),
+                }
+                .with_display_title()
             })
             .collect())
     }
@@ -736,4 +748,85 @@ impl<'a> SeriesRepository<'a> {
 
 fn like_query(query: Option<&str>) -> Option<String> {
     query.map(|q| format!("%{q}%"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{init_profile_db, SeriesTmdbWrite, SourceRepository};
+
+    fn episode(source_id: i64, title: &str) -> SeriesEpisode {
+        SeriesEpisode {
+            id: 0,
+            source_id,
+            series_title: title.into(),
+            category: None,
+            season: 1,
+            episode: 1,
+            episode_title: None,
+            logo_url: None,
+            stream_url: format!("http://host/series/{title}.mkv"),
+            added_at: None,
+            numbering: EpisodeNumberingKind::SeasonEpisode,
+            evidence: SourceEvidence::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn series_display_titles_follow_the_naming_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_profile_db(dir.path().join("p.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let source = SourceRepository::new(&pool)
+            .create("xtream", "t", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let repo = SeriesRepository::new(&pool);
+        repo.insert_batch(&[episode(source, "BREAKING BAD"), episode(source, "Dark")])
+            .await
+            .unwrap();
+        repo.apply_tmdb(
+            source,
+            &[SeriesTmdbWrite {
+                series_title: "BREAKING BAD".into(),
+                canonical_title: Some("Breaking Bad".into()),
+                original_title: Some("Breaking Bad".into()),
+                title_language: Some("en-US".into()),
+                matched: true,
+                method: "search",
+                matcher_version: 2,
+                evidence_json: "{}".into(),
+                ..SeriesTmdbWrite::default()
+            }],
+        )
+        .await
+        .unwrap();
+        let list = repo
+            .list_series(
+                source,
+                None,
+                None,
+                false,
+                false,
+                ContentSort::Default,
+                10,
+                0,
+            )
+            .await
+            .unwrap();
+        let titles: Vec<(&str, &str)> = list
+            .iter()
+            .map(|s| (s.series_title.as_str(), s.display_title.as_str()))
+            .collect();
+        assert!(
+            titles.contains(&("BREAKING BAD", "Breaking Bad")),
+            "confident TMDB title"
+        );
+        assert!(
+            titles.contains(&("Dark", "Dark")),
+            "unmatched: parsed title"
+        );
+    }
 }

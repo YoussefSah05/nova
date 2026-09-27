@@ -338,3 +338,27 @@ facet shows the collection meanwhile).
   and series work queues). Unresolved titles are not.
 - **Cache keys** carry the language, except for `en-US`, which keeps the Phase C
   keys so existing cached bodies are reused.
+
+### Display-name policy (naming v1, step 5)
+
+`nova_core::naming::display_title` (`NAMING_POLICY_VERSION = 1`) is the single
+precedence rule: **user correction** (a reserved slot, since no correction store
+exists yet) → **confident TMDB title** in the metadata language → **parsed
+provider title** → **raw provider title**. Unresolved and low-confidence matches
+carry no trusted title, so a guess never becomes the display name. SQL read
+paths use the same order via `COALESCE`.
+
+- **Movies:** `canonical_entities.title` is now derived from *all* the entity's
+  bound records: mixed case is preferred over ALL-CAPS, then the first in order.
+  It is recomputed at compile time and for a merge survivor, so it no longer
+  depends on which source was refreshed last or which entity survived a merge.
+  Lists and detail show `COALESCE(TMDB title, entity title, raw)`, so every
+  source shows the same name. Raw provider titles remain only in the version
+  picker.
+- **Series:** `SeriesSummary.displayTitle` is computed by the policy in Rust. The
+  UI, the series detail and the episode player header use it (previously the
+  player header showed the provider series title).
+- **Grouping:** canonical movies are no longer grouped client-side. Which copies
+  are one film is decided by server-side entity resolution, and a merged entity
+  lists its versions in the detail view. The legacy search path's grouping key
+  now keeps the release year, so remakes never group.

@@ -846,6 +846,47 @@ fn tmdb(mut item: VodItem, id: i64) -> VodItem {
 }
 
 #[tokio::test]
+async fn the_entity_title_does_not_depend_on_which_source_refreshed_last() {
+    let db = db().await;
+    let backup = second_source(&db).await;
+    let caps = |source: i64, url: &str| {
+        let mut m = movie(source, "HEAT", url, Some("xtream:vod:1"));
+        m.clean_title = Some("HEAT".into());
+        m
+    };
+    let mixed = |source: i64, url: &str| movie(source, "Heat", url, Some("xtream:vod:1"));
+    import(&db, &[caps(db.source_id, "http://host/1.mkv")], false).await;
+    import_to(&db, backup, &[mixed(backup, "http://other/1.mkv")], false).await;
+    // Pin the ALL-CAPS copy's entity as the survivor (the hard case: its own
+    // compile only ever saw "HEAT").
+    let caps_entity = movies_in(&db, db.source_id).await[0].entity_id.clone();
+    set_created_at(&db, &caps_entity, 0).await;
+    resolve(&db).await;
+    let title = || async {
+        sqlx::query_scalar::<_, String>(
+            "SELECT title FROM canonical_entities WHERE state = 'active'",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(
+        title().await,
+        vec!["Heat".to_string()],
+        "one entity, mixed case preferred"
+    );
+    // Refresh each source in turn: the title stays put (no last-writer-wins).
+    import(&db, &[caps(db.source_id, "http://host/1.mkv")], true).await;
+    assert_eq!(title().await, vec!["Heat".to_string()]);
+    import_to(&db, backup, &[mixed(backup, "http://other/1.mkv")], true).await;
+    assert_eq!(title().await, vec!["Heat".to_string()]);
+    // Both sources list it under the entity title, not their own copy's name.
+    for source in [db.source_id, backup] {
+        assert_eq!(movies_in(&db, source).await[0].title, "Heat");
+    }
+}
+
+#[tokio::test]
 async fn cross_source_copies_merge_and_user_state_is_combined() {
     let db = db().await;
     let backup = second_source(&db).await;

@@ -324,6 +324,31 @@ impl CanonicalRepository<'_> {
         .execute(&mut **tx)
         .await?;
 
+        // The survivor now owns more records: re-derive its parsed title/year
+        // with the compiler's deterministic rule (mixed case first, then
+        // order), so the result never depends on which entity survived.
+        sqlx::query!(
+            r#"UPDATE canonical_entities
+               SET title = COALESCE(
+                       (SELECT COALESCE(v.clean_title, v.name)
+                        FROM stream_variants s JOIN vod_items v ON v.id = s.vod_item_id
+                        WHERE s.entity_id = canonical_entities.id
+                        ORDER BY COALESCE(v.clean_title, v.name)
+                                     = UPPER(COALESCE(v.clean_title, v.name)),
+                                 COALESCE(v.clean_title, v.name)
+                        LIMIT 1),
+                       title),
+                   year = COALESCE(
+                       (SELECT MIN(v.year)
+                        FROM stream_variants s JOIN vod_items v ON v.id = s.vod_item_id
+                        WHERE s.entity_id = canonical_entities.id),
+                       year)
+               WHERE id = ?"#,
+            survivor,
+        )
+        .execute(&mut **tx)
+        .await?;
+
         sqlx::query!(
             r#"UPDATE canonical_entities
                SET is_favorite = MAX(is_favorite,

@@ -97,14 +97,12 @@ export function SeriesDetail({
               className="h-full w-full object-cover"
             />
           ) : (
-            <PosterFallback title={series.canonicalTitle ?? series.seriesTitle} />
+            <PosterFallback title={series.displayTitle} />
           )}
         </div>
         <div className="flex flex-1 items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="font-display text-xl font-semibold text-white">
-              {series.canonicalTitle ?? series.seriesTitle}
-            </h2>
+            <h2 className="font-display text-xl font-semibold text-white">{series.displayTitle}</h2>
             <p className="text-sm text-white/50 mt-1">
               {seasonCount} season{seasonCount !== 1 ? "s" : ""} · {episodeCount} episode
               {episodeCount !== 1 ? "s" : ""}

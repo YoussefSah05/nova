@@ -30,11 +30,13 @@ function movie(id: number): CanonicalMediaSummary {
   };
 }
 beforeEach(() => mocks.invoke.mockReset());
-it("advances past a full database page even when variants collapse to one card", async () => {
+it("advances by full database pages; canonical movies are never grouped client-side", async () => {
+  // Entity resolution decides which copies are one film; the client shows one
+  // card per canonical entity, even when raw titles look alike.
   mocks.invoke.mockResolvedValueOnce(Array.from({ length: 200 }, (_, i) => movie(i)));
   const page = await fetchBrowsePage("movies", "p", 1, {}, 0);
-  expect(page.items).toHaveLength(1);
-  expect(page.items[0].variants).toHaveLength(199);
+  expect(page.items).toHaveLength(200);
+  expect(page.items.every((item) => !item.variants?.length)).toBe(true);
   expect(page.nextOffset).toBe(200);
   mocks.invoke.mockResolvedValueOnce([movie(200)]);
   const last = await fetchBrowsePage("movies", "p", 1, {}, page.nextOffset!);

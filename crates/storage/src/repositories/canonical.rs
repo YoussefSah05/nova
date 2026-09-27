@@ -243,22 +243,25 @@ impl<'a> CanonicalRepository<'a> {
         .execute(&mut **tx)
         .await?;
 
-        // 5. Refresh display title/year from the bound record, and re-derive
-        //    the legacy flag mirror from the entity (the source of truth).
+        // 5. Refresh the entity's parsed title/year from *all* its bound
+        //    records, deterministically: the same choice whichever source was
+        //    refreshed last (it used to be last-writer-wins). A mixed-case
+        //    title is preferred over an ALL-CAPS copy, then the first in
+        //    order. Then re-derive the legacy flag mirror from the entity.
         sqlx::query!(
             r#"UPDATE canonical_entities
                SET title = (SELECT COALESCE(v.clean_title, v.name)
                             FROM stream_variants s JOIN vod_items v ON v.id = s.vod_item_id
-                            WHERE s.entity_id = canonical_entities.id AND s.source_id = ?
-                            ORDER BY v.id LIMIT 1),
-                   year  = (SELECT v.year
+                            WHERE s.entity_id = canonical_entities.id
+                            ORDER BY COALESCE(v.clean_title, v.name)
+                                         = UPPER(COALESCE(v.clean_title, v.name)),
+                                     COALESCE(v.clean_title, v.name)
+                            LIMIT 1),
+                   year  = (SELECT MIN(v.year)
                             FROM stream_variants s JOIN vod_items v ON v.id = s.vod_item_id
-                            WHERE s.entity_id = canonical_entities.id AND s.source_id = ?
-                            ORDER BY v.id LIMIT 1)
+                            WHERE s.entity_id = canonical_entities.id)
                WHERE id IN (SELECT entity_id FROM stream_variants
                             WHERE source_id = ? AND vod_item_id IS NOT NULL)"#,
-            source_id,
-            source_id,
             source_id,
         )
         .execute(&mut **tx)
@@ -366,7 +369,7 @@ impl<'a> CanonicalRepository<'a> {
         let recent: i64 = matches!(sort, ContentSort::RecentlyAdded).into();
         let rows = sqlx::query!(
             r#"SELECT e.id as "entity_id!: String",
-                      COALESCE(v.canonical_title, v.clean_title, v.name) as "title!: String",
+                      COALESCE(v.canonical_title, e.title, v.name) as "title!: String",
                       v.name as "source_title!: String",
                       v.year as "year?: i64",
                       v.category as "category?: String",
@@ -490,7 +493,7 @@ impl<'a> CanonicalRepository<'a> {
                       e.year as "year?: i64",
                       e.is_favorite as "is_favorite!: i64",
                       e.is_in_watchlist as "is_in_watchlist!: i64",
-                      COALESCE(v.canonical_title, v.clean_title, v.name) as "display_title?: String",
+                      COALESCE(v.canonical_title, e.title) as "display_title?: String",
                       v.name as "source_title?: String",
                       v.year as "variant_year?: i64",
                       v.category as "category?: String",
