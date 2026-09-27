@@ -286,7 +286,11 @@ export interface ProfileSettings {
   defaultPlaybackRoute: DefaultPlaybackRoute;
   // Catalog enrichment (Phase C) — opt-in TMDB, user-supplied key.
   tmdbEnabled: boolean;
-  tmdbApiKey: string | null;
+  /// Read-only: the credential itself never reaches the webview. Change it
+  /// with `set_tmdb_credential` / `clear_tmdb_credential`.
+  tmdbCredentialConfigured: boolean;
+  /// Last 4 characters of the saved credential, to identify it.
+  tmdbCredentialHint: string | null;
   // UI accent theme id (amber | teal | rose | violet | blue).
   accentColor: string;
 }
@@ -298,7 +302,8 @@ export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
   preferredSubtitleLang: null,
   defaultPlaybackRoute: "auto",
   tmdbEnabled: false,
-  tmdbApiKey: null,
+  tmdbCredentialConfigured: false,
+  tmdbCredentialHint: null,
   accentColor: "amber",
 };
 
@@ -339,4 +344,5 @@ export type ApiError =
   | { kind: "NotFound"; message: string }
   | { kind: "StorageError"; message: string }
   | { kind: "Conflict"; message: string }
+  | { kind: "InvalidInput"; message: string }
   | { kind: "Internal"; message: string };

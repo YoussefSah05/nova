@@ -28,8 +28,11 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
   const [busy, setBusy] = useState<null | "download" | "run">(null);
   const [progress, setProgress] = useState<EnrichProgress | null>(null);
   const [settings, setSettings] = useState<ProfileSettings>(DEFAULT_PROFILE_SETTINGS);
-  const [keyDraft, setKeyDraft] = useState("");
-  const [saved, setSaved] = useState(false);
+  // The token is write-only: the backend never returns it, so this draft is
+  // the only place it exists in the page, and only while being typed.
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [editingToken, setEditingToken] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const [m, s] = await Promise.all([
@@ -38,7 +41,6 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
     ]);
     setModel(m);
     setSettings(s);
-    setKeyDraft(s.tmdbApiKey ?? "");
   }, [profileId]);
 
   useEffect(() => {
@@ -59,9 +61,30 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
   const persist = async (next: ProfileSettings) => {
     setSettings(next);
     await invoke("set_profile_settings", { profileId, settings: next });
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1500);
   };
+
+  const saveToken = async () => {
+    setTokenError(null);
+    try {
+      await invoke("set_tmdb_credential", { profileId, credential: tokenDraft });
+      setTokenDraft("");
+      setEditingToken(false);
+      await refresh();
+    } catch (e) {
+      setTokenError((e as { message?: string } | null)?.message ?? "The token could not be saved.");
+    }
+  };
+
+  const removeToken = async () => {
+    if (!window.confirm("Remove the saved TMDB token? TMDB matching stops until a new one is set."))
+      return;
+    await invoke("clear_tmdb_credential", { profileId });
+    setTokenDraft("");
+    setEditingToken(false);
+    await refresh();
+  };
+
+  const showTokenInput = !settings.tmdbCredentialConfigured || editingToken;
 
   const download = async () => {
     setBusy("download");
@@ -130,32 +153,59 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
         >
           <Toggle
             checked={settings.tmdbEnabled}
-            onChange={(v) =>
-              void persist({ ...settings, tmdbEnabled: v, tmdbApiKey: keyDraft || null })
-            }
+            onChange={(v) => void persist({ ...settings, tmdbEnabled: v })}
             label="Use TMDB"
           />
         </SettingRow>
         <div className="py-3">
           <p className="mb-1.5 text-sm font-medium text-white">API Read Access Token</p>
-          <div className="flex items-center gap-2">
-            <TextInput
-              value={keyDraft}
-              onChange={setKeyDraft}
-              placeholder="Read Access Token (or legacy API key)"
-              ariaLabel="TMDB API Read Access Token"
-            />
-            <SettingsButton
-              variant="primary"
-              onClick={() => void persist({ ...settings, tmdbApiKey: keyDraft || null })}
-            >
-              {saved ? "Saved" : "Save"}
-            </SettingsButton>
-          </div>
+          {showTokenInput ? (
+            <div className="flex items-center gap-2">
+              <TextInput
+                secret
+                value={tokenDraft}
+                onChange={setTokenDraft}
+                placeholder="Read Access Token (or legacy API key)"
+                ariaLabel="TMDB API Read Access Token"
+              />
+              <SettingsButton
+                variant="primary"
+                onClick={() => void saveToken()}
+                disabled={tokenDraft.trim() === ""}
+              >
+                Save
+              </SettingsButton>
+              {settings.tmdbCredentialConfigured && (
+                <SettingsButton
+                  onClick={() => {
+                    setTokenDraft("");
+                    setTokenError(null);
+                    setEditingToken(false);
+                  }}
+                >
+                  Cancel
+                </SettingsButton>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span
+                className="flex-1 font-mono text-sm text-white/70"
+                aria-label="Saved TMDB token"
+              >
+                Token saved ••••{settings.tmdbCredentialHint}
+              </span>
+              <SettingsButton onClick={() => setEditingToken(true)}>Replace</SettingsButton>
+              <SettingsButton variant="danger" onClick={() => void removeToken()}>
+                Remove
+              </SettingsButton>
+            </div>
+          )}
+          {tokenError && <p className="mt-1.5 text-xs text-rose-300">{tokenError}</p>}
           <p className="mt-1.5 text-xs text-white/40">
             Free at themoviedb.org → Settings → API: copy the “API Read Access Token” (a legacy “API
-            Key” also works). Stored locally; nothing is sent to TMDB unless this is enabled and a
-            token is set.
+            Key” also works). Stored only in this profile on this Mac and never shown again after
+            saving; nothing is sent to TMDB unless this is enabled and a token is set.
           </p>
         </div>
       </SettingsCard>

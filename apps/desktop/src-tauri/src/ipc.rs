@@ -9,6 +9,8 @@ pub enum ApiError {
     NotFound(String),
     StorageError(String),
     Conflict(String),
+    /// The request itself is invalid (e.g. a malformed credential).
+    InvalidInput(String),
     Internal(String),
 }
 

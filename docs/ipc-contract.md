@@ -424,8 +424,19 @@ an engine study (latency, footprint, no conflicting native dependencies).
 
 ## TMDB credential (P11)
 
-`ProfileSettings.tmdbApiKey` holds either TMDB's **API Read Access Token**
-(preferred; a JWT sent as a Bearer header) or a legacy v3 API key. The backend
-detects which. The field name is unchanged for compatibility. Enrichment progress
+The stored credential is either TMDB's **API Read Access Token** (preferred; a
+JWT sent as a Bearer header) or a legacy v3 API key. The backend detects which.
+
+The credential is **write-only** from the webview:
+
+- `get_profile_settings` never returns it. Instead it returns
+  `tmdbCredentialConfigured: boolean` and `tmdbCredentialHint: string | null`
+  (the last 4 characters).
+- `set_profile_settings` ignores any credential it is sent and keeps the stored
+  one.
+- `set_tmdb_credential { profileId, credential }` saves or replaces it. A
+  malformed value (empty, over 1 KiB, whitespace or control characters) is
+  rejected with the new `ApiError` kind `InvalidInput`.
+- `clear_tmdb_credential { profileId }` removes it. Enrichment progress
 now also emits `catalog:enrich:progress` with `stage: "matching"` after each
 committed batch of matches, and clients may refresh on it.

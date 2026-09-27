@@ -69,15 +69,22 @@ export function TextInput({
   onChange,
   placeholder,
   ariaLabel,
+  secret = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   ariaLabel?: string;
+  /// Masked entry for credentials: no autofill, autocorrect or spellcheck.
+  secret?: boolean;
 }) {
   return (
     <input
-      type="text"
+      type={secret ? "password" : "text"}
+      autoComplete={secret ? "off" : undefined}
+      autoCorrect={secret ? "off" : undefined}
+      autoCapitalize={secret ? "off" : undefined}
+      spellCheck={secret ? false : undefined}
       value={value}
       placeholder={placeholder}
       aria-label={ariaLabel}

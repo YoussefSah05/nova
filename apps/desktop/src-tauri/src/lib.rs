@@ -185,6 +185,8 @@ pub fn run() {
             // Cleanup — per-profile viewing settings + player episode list
             commands::profile_settings::get_profile_settings,
             commands::profile_settings::set_profile_settings,
+            commands::profile_settings::set_tmdb_credential,
+            commands::profile_settings::clear_tmdb_credential,
             // Cleanup — Settings sections
             commands::settings::update_profile,
             commands::settings::delete_source,

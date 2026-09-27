@@ -366,7 +366,10 @@ pub struct ProfileSettings {
     /// backdrops, overviews and genres. Offline-first — nothing calls TMDB unless
     /// this is on *and* a key is set.
     pub tmdb_enabled: bool,
-    /// User-supplied TMDB API key (v3 auth). `None` keeps enrichment fully offline.
+    /// User-supplied TMDB credential: an API Read Access Token or a legacy v3
+    /// key. `None` keeps enrichment fully offline. Persisted, but write-only
+    /// towards the webview (see desktop `ProfileSettingsView`).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tmdb_api_key: Option<String>,
     /// UI accent theme id: `amber` | `teal` | `rose` | `violet` | `blue`.
     /// `#[serde(default)]` on the container → old blobs without it load fine.
