@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR REPLACE INTO directory_channel_logos\n                     (source_id, channel_key, directory_id, url, method, confidence_bp, updated_at)\n                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "656e98366b8dce44401d20e04a5dd3126ca283e299ec7337ecbf2a94dbb17470"
+}

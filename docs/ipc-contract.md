@@ -87,6 +87,9 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `get_artwork_cache_stats` | `{}` | `{ files, bytes }` | artwork v1 — the shared on-disk artwork cache behind the `nova-art://` protocol |
 | `clear_artwork_cache` | `{}` | `void` | artwork v1 |
 | `get_title_art` | `{ profileId, subject: { kind: "movie", entityId } \| { kind: "series", sourceId, seriesTitle } }` | `{ logoUrl, logoLanguage, logoWidth, logoHeight, backdropUrl }` | artwork v1 — TMDB title logo (metadata language → English → neutral) + text-free backdrop; stored per TMDB work, fetched on demand only when TMDB is enabled, never fails (empty when unknown) |
+| `match_channel_logos` | `{ profileId, sourceId?: number \| null, forceRefresh?: boolean }` | `boolean` (false: feature off or a pass already running) | artwork v1 — opt-in iptv-org directory; refreshes the on-device index at most weekly, matches logo-less channels in the background, progress on `artwork:channel-logos` |
+| `clear_channel_logo_matches` | `{ profileId }` | `void` | artwork v1 — drops the profile's directory logos (feature turned off) |
+| `get_logo_directory_status` | `{}` | `{ downloaded, entries, builtAt? }` | artwork v1 |
 | `get_app_info` | `{}` | `{ version, dataDir, transcriptsBytes, modelsBytes }` | cleanup |
 | `enqueue_translation` | `{ transcript_id: number, target_lang: string, backend: TranslationBackend }` | `JobId` | 7 |
 | `get_transcript` | `{ transcript_id: number }` | `Transcript` | 6 |
@@ -211,6 +214,7 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | Event | Payload | Phase |
 |---|---|---|
 | `playlist:import:progress` | `{ sourceId, stage, parsed, inserted, liveCount, movieCount, seriesCount, failedCount, skippedCount, elapsedMs, done, error?, warning? }` | 2 |
+| `artwork:channel-logos` | `{ stage: 'downloading'\|'matching'\|'complete'\|'failed', sourceId?, matched, candidates, done, error? }` | artwork v1 |
 | `transcription:cues` | `{ mediaKind, mediaId, language, cues: [{start,end,text}] }` (incremental, absolute times) | 6 |
 | `transcription:status` | `{ mediaKind, mediaId, state: 'preparing'\|'streaming'\|'complete'\|'failed', coveredSec?, error? }` | 6 |
 | `model:download:progress` | `{ artifact: 'weights'\|'coreml', downloadedBytes, totalBytes? }` | 6 |

@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT NULLIF(tvg_id, '') as \"tvg_id?: String\",\n                      name as \"name!: String\",\n                      NULLIF(country, '') as \"country?: String\"\n               FROM channels\n               WHERE source_id = ? AND (logo_url IS NULL OR logo_url = '')",
+  "describe": {
+    "columns": [
+      {
+        "name": "tvg_id?: String",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "name!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "country?: String",
+        "ordinal": 2,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "213a2383fa2d529aade2df68a26f891a4955825b937beebdbbc9bff62903a8e1"
+}

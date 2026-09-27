@@ -5,6 +5,7 @@
 //! being a real image of sane size, and available offline afterwards.
 
 pub mod cache;
+pub mod directory;
 pub mod validate;
 
 pub use cache::{ArtworkCache, ArtworkError, CacheStats, CachedImage, DEFAULT_MAX_BYTES};

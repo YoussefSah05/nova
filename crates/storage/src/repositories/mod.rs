@@ -1,6 +1,7 @@
 pub mod canonical;
 pub mod caption_style;
 pub mod catalog_search;
+pub mod channel_logos;
 pub mod channels;
 pub mod embeddings;
 pub mod enrich;
@@ -29,6 +30,7 @@ pub use canonical::{
 };
 pub use caption_style::CaptionStyleRepository;
 pub use catalog_search::{CatalogSearchRepository, MovieSearchCandidate, MOVIE_SEARCH_VERSION};
+pub use channel_logos::{ChannelLogoRepository, DirectoryLogoWrite, LogoCandidate};
 pub use channels::ChannelRepository;
 pub use embeddings::{from_blob, to_blob, EmbeddingRepository};
 pub use enrich::{EnrichUpdate, SeriesTmdbQuery, SeriesTmdbWrite, UnenrichedRow};

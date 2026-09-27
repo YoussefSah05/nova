@@ -16,6 +16,7 @@ import {
   TextInput,
   Toggle,
 } from "../SettingsUI";
+import { ChannelLogoDirectoryCard } from "./ChannelLogoDirectoryCard";
 
 /// Languages offered for TMDB titles/overviews (BCP-47 tags TMDB accepts).
 const METADATA_LANGUAGES = [
@@ -240,6 +241,8 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
           </p>
         </div>
       </SettingsCard>
+
+      <ChannelLogoDirectoryCard profileId={profileId} settings={settings} persist={persist} />
 
       <p className="text-xs text-white/40">
         Cleans the catalog with on-device AI: collapses duplicate channels/movies into one card and

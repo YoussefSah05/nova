@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!: i64\", source_id, tvg_id, name, country, category, raw_group,\n                        COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l\n                            WHERE l.source_id = channels.source_id\n                              AND l.channel_key = lower(channels.tvg_id)\n                            ORDER BY l.updated_at DESC LIMIT 1)) as \"logo_url?: String\",\n                        stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region\n               FROM channels\n               WHERE source_id = ? AND COALESCE(NULLIF(channel_group, ''), name) = ?\n               ORDER BY name ASC, id ASC",
+  "query": "SELECT id as \"id!: i64\", source_id, tvg_id, name, country, category, raw_group,\n                        COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l\n                            WHERE l.source_id = channels.source_id\n                              AND l.channel_key = lower(channels.tvg_id)\n                            ORDER BY l.updated_at DESC LIMIT 1),\n                                 (SELECT d.url FROM directory_channel_logos d\n                            WHERE d.source_id = channels.source_id\n                              AND d.channel_key = COALESCE(lower(NULLIF(channels.tvg_id, '')),\n                                                           'name:' || lower(channels.name)))) as \"logo_url?: String\",\n                        stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region\n                 FROM channels\n                 WHERE source_id = ?\n                   AND (? IS NULL OR country = ?)\n                   AND (? IS NULL OR category = ?)\n                   AND (? IS NULL OR region = ?)\n                   AND (? IS NULL OR name LIKE ? OR category LIKE ? OR raw_group LIKE ?)\n                   AND (? = 0 OR is_favorite = 1)\n                   AND (? = 0 OR is_in_watchlist = 1)\n                 ORDER BY added_at DESC, id DESC LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -85,7 +85,7 @@
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 15
     },
     "nullable": [
       true,
@@ -106,5 +106,5 @@
       true
     ]
   },
-  "hash": "d37bbed9584edb67381b1692faef9fda071f9350a5bbd4e88b5aeb44e1c58aff"
+  "hash": "c9d3ec6e9868428a8ccbfeeb945648d436b30624e369748a6f2ff8df49aa367f"
 }

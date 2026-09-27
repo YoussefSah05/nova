@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM directory_channel_logos",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "2c5d5016a11fcbb6f7dbf0125aa96818654943e55e127a182df18cfafc239a47"
+}

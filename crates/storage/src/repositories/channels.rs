@@ -140,7 +140,11 @@ impl<'a> ChannelRepository<'a> {
                         COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l
                             WHERE l.source_id = channels.source_id
                               AND l.channel_key = lower(channels.tvg_id)
-                            ORDER BY l.updated_at DESC LIMIT 1)) as "logo_url?: String",
+                            ORDER BY l.updated_at DESC LIMIT 1),
+                                 (SELECT d.url FROM directory_channel_logos d
+                            WHERE d.source_id = channels.source_id
+                              AND d.channel_key = COALESCE(lower(NULLIF(channels.tvg_id, '')),
+                                                           'name:' || lower(channels.name)))) as "logo_url?: String",
                         stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
                  FROM channels
                  WHERE source_id = ?
@@ -186,7 +190,11 @@ impl<'a> ChannelRepository<'a> {
                         COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l
                             WHERE l.source_id = channels.source_id
                               AND l.channel_key = lower(channels.tvg_id)
-                            ORDER BY l.updated_at DESC LIMIT 1)) as "logo_url?: String",
+                            ORDER BY l.updated_at DESC LIMIT 1),
+                                 (SELECT d.url FROM directory_channel_logos d
+                            WHERE d.source_id = channels.source_id
+                              AND d.channel_key = COALESCE(lower(NULLIF(channels.tvg_id, '')),
+                                                           'name:' || lower(channels.name)))) as "logo_url?: String",
                         stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
                  FROM channels
                  WHERE source_id = ?
@@ -308,7 +316,11 @@ impl<'a> ChannelRepository<'a> {
                           MIN((SELECT l.url FROM epg_channel_logos l
                             WHERE l.source_id = channels.source_id
                               AND l.channel_key = lower(channels.tvg_id)
-                            ORDER BY l.updated_at DESC LIMIT 1))) as "logo_url?: String",
+                            ORDER BY l.updated_at DESC LIMIT 1)),
+                          MIN((SELECT d.url FROM directory_channel_logos d
+                            WHERE d.source_id = channels.source_id
+                              AND d.channel_key = COALESCE(lower(NULLIF(channels.tvg_id, '')),
+                                                           'name:' || lower(channels.name))))) as "logo_url?: String",
                  MIN(category) as "category?: String",
                  MIN(region) as "region?: String",
                  MAX(is_favorite) as "is_favorite!: i64",
@@ -402,7 +414,11 @@ impl<'a> ChannelRepository<'a> {
                           MIN((SELECT l.url FROM epg_channel_logos l
                             WHERE l.source_id = channels.source_id
                               AND l.channel_key = lower(channels.tvg_id)
-                            ORDER BY l.updated_at DESC LIMIT 1))) as "logo_url?: String",
+                            ORDER BY l.updated_at DESC LIMIT 1)),
+                          MIN((SELECT d.url FROM directory_channel_logos d
+                            WHERE d.source_id = channels.source_id
+                              AND d.channel_key = COALESCE(lower(NULLIF(channels.tvg_id, '')),
+                                                           'name:' || lower(channels.name))))) as "logo_url?: String",
                  MIN(category) as "category?: String",
                  MIN(region) as "region?: String",
                  MAX(is_favorite) as "is_favorite!: i64",
@@ -443,7 +459,11 @@ impl<'a> ChannelRepository<'a> {
                         COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l
                             WHERE l.source_id = channels.source_id
                               AND l.channel_key = lower(channels.tvg_id)
-                            ORDER BY l.updated_at DESC LIMIT 1)) as "logo_url?: String",
+                            ORDER BY l.updated_at DESC LIMIT 1),
+                                 (SELECT d.url FROM directory_channel_logos d
+                            WHERE d.source_id = channels.source_id
+                              AND d.channel_key = COALESCE(lower(NULLIF(channels.tvg_id, '')),
+                                                           'name:' || lower(channels.name)))) as "logo_url?: String",
                         stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region
                FROM channels
                WHERE source_id = ? AND COALESCE(NULLIF(channel_group, ''), name) = ?

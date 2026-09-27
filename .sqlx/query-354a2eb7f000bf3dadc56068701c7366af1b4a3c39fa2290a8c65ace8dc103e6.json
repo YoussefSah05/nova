@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!: i64\", source_id, tvg_id, name, country, category, raw_group,\n                        COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l\n                            WHERE l.source_id = channels.source_id\n                              AND l.channel_key = lower(channels.tvg_id)\n                            ORDER BY l.updated_at DESC LIMIT 1)) as \"logo_url?: String\",\n                        stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region\n                 FROM channels\n                 WHERE source_id = ?\n                   AND (? IS NULL OR country = ?)\n                   AND (? IS NULL OR category = ?)\n                   AND (? IS NULL OR region = ?)\n                   AND (? IS NULL OR name LIKE ? OR category LIKE ? OR raw_group LIKE ?)\n                   AND (? = 0 OR is_favorite = 1)\n                   AND (? = 0 OR is_in_watchlist = 1)\n                 ORDER BY added_at DESC, id DESC LIMIT ? OFFSET ?",
+  "query": "SELECT id as \"id!: i64\", source_id, tvg_id, name, country, category, raw_group,\n                        COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l\n                            WHERE l.source_id = channels.source_id\n                              AND l.channel_key = lower(channels.tvg_id)\n                            ORDER BY l.updated_at DESC LIMIT 1),\n                                 (SELECT d.url FROM directory_channel_logos d\n                            WHERE d.source_id = channels.source_id\n                              AND d.channel_key = COALESCE(lower(NULLIF(channels.tvg_id, '')),\n                                                           'name:' || lower(channels.name)))) as \"logo_url?: String\",\n                        stream_url, is_favorite, is_in_watchlist, last_played_at, added_at, dedup_group, channel_group, region\n               FROM channels\n               WHERE source_id = ? AND COALESCE(NULLIF(channel_group, ''), name) = ?\n               ORDER BY name ASC, id ASC",
   "describe": {
     "columns": [
       {
@@ -85,7 +85,7 @@
       }
     ],
     "parameters": {
-      "Right": 15
+      "Right": 2
     },
     "nullable": [
       true,
@@ -106,5 +106,5 @@
       true
     ]
   },
-  "hash": "c2b7e3fd5b711d11b103e94548aa73b7c8c3fa22f1f59dd77641dbd0e9f8d386"
+  "hash": "354a2eb7f000bf3dadc56068701c7366af1b4a3c39fa2290a8c65ace8dc103e6"
 }

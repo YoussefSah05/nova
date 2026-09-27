@@ -18,6 +18,7 @@ use crate::state::AppState;
 use std::time::{Duration, Instant};
 
 pub mod caption_style;
+pub mod channel_logos;
 pub mod enrich;
 pub mod epg;
 pub mod models;

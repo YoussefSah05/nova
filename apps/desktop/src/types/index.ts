@@ -295,6 +295,8 @@ export interface ProfileSettings {
   /// TMDB title/overview language (BCP-47, e.g. "en-US", "fr-FR"). Display
   /// only; changing it refetches localized titles, never changes identity.
   metadataLanguage: string;
+  /// Fill missing channel logos from the public iptv-org directory (opt-in).
+  logoDirectoryEnabled: boolean;
   /// Read-only: the credential itself never reaches the webview. Change it
   /// with `set_tmdb_credential` / `clear_tmdb_credential`.
   tmdbCredentialConfigured: boolean;
@@ -312,6 +314,7 @@ export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
   defaultPlaybackRoute: "auto",
   tmdbEnabled: false,
   metadataLanguage: "en-US",
+  logoDirectoryEnabled: false,
   tmdbCredentialConfigured: false,
   tmdbCredentialHint: null,
   accentColor: "amber",

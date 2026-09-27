@@ -205,6 +205,9 @@ pub fn run() {
             commands::enrich::download_enrich_models,
             commands::enrich::start_enrichment,
             commands::title_art::get_title_art,
+            commands::channel_logos::match_channel_logos,
+            commands::channel_logos::clear_channel_logo_matches,
+            commands::channel_logos::get_logo_directory_status,
             // Cleanup — per-profile viewing settings + player episode list
             commands::profile_settings::get_profile_settings,
             commands::profile_settings::set_profile_settings,

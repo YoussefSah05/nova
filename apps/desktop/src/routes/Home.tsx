@@ -203,6 +203,12 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           // Kick off catalog enrichment (de-dup + genre fill). No-ops if the
           // embedding model isn't installed; results stream in via the listener.
           void invoke("start_enrichment", { profileId: profile.id, sourceId: activeSourceId });
+          // Fill missing channel logos from the opt-in directory (no-op when off).
+          void invoke("match_channel_logos", {
+            profileId: profile.id,
+            sourceId: activeSourceId,
+            forceRefresh: false,
+          });
         }
       }
     }).then((un) => {
@@ -237,6 +243,24 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
         }
       }
     ).then((un) => {
+      if (cancelled) un();
+      else unlisten = un;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [qc, profile.id, activeSourceId]);
+
+  // Directory channel logos land in one write per source: repaint when done.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listen<{ done: boolean; stage: string }>("artwork:channel-logos", (event) => {
+      if (event.payload.done && event.payload.stage === "complete" && activeSourceId !== null) {
+        invalidateSource(qc, profile.id, activeSourceId);
+      }
+    }).then((un) => {
       if (cancelled) un();
       else unlisten = un;
     });

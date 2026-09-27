@@ -501,6 +501,10 @@ pub struct ProfileSettings {
     /// Language of TMDB titles and overviews (BCP-47, e.g. `en-US`, `fr-FR`).
     /// Presentation only: identity never depends on it.
     pub metadata_language: String,
+    /// Artwork v1: fill channel logos the provider and EPG did not supply from
+    /// the public iptv-org channel directory (downloaded whole about once a
+    /// week and matched on device). Off by default: offline-first.
+    pub logo_directory_enabled: bool,
     /// UI accent theme id: `amber` | `teal` | `rose` | `violet` | `blue`.
     /// `#[serde(default)]` on the container → old blobs without it load fine.
     pub accent_color: String,
@@ -517,6 +521,7 @@ impl Default for ProfileSettings {
             tmdb_enabled: false,
             tmdb_api_key: None,
             metadata_language: DEFAULT_METADATA_LANGUAGE.to_string(),
+            logo_directory_enabled: false,
             accent_color: "amber".to_string(),
         }
     }
