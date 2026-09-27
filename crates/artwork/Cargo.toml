@@ -1,0 +1,17 @@
+[package]
+name = "nova-artwork"
+version = "0.1.0"
+edition = "2021"
+description = "Validated on-disk artwork cache (posters, backdrops, logos)"
+
+[dependencies]
+nova-core = { path = "../core" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+imagesize = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

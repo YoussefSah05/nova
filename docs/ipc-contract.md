@@ -84,6 +84,8 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `remove_whisper_model` | `{}` | `void` | cleanup |
 | `get_transcription_cache_stats` | `{ profileId }` | `{ transcripts, bytes }` | cleanup |
 | `clear_transcription_cache` | `{ profileId }` | `void` | cleanup |
+| `get_artwork_cache_stats` | `{}` | `{ files, bytes }` | artwork v1 — the shared on-disk artwork cache behind the `nova-art://` protocol |
+| `clear_artwork_cache` | `{}` | `void` | artwork v1 |
 | `get_app_info` | `{}` | `{ version, dataDir, transcriptsBytes, modelsBytes }` | cleanup |
 | `enqueue_translation` | `{ transcript_id: number, target_lang: string, backend: TranslationBackend }` | `JobId` | 7 |
 | `get_transcript` | `{ transcript_id: number }` | `Transcript` | 6 |

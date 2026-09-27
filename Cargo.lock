@@ -2273,6 +2273,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "imagesize"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edcd27d72f2f071c64249075f42e205ff93c9a4c5f6c6da53e79ed9f9832c285"
+
+[[package]]
 name = "imgref"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2917,6 +2923,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
+name = "nova-artwork"
+version = "0.1.0"
+dependencies = [
+ "imagesize",
+ "nova-core",
+ "reqwest 0.12.28",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "nova-catalog-ingest"
 version = "0.1.0"
 dependencies = [
@@ -2964,6 +2984,7 @@ name = "nova-desktop"
 version = "0.2.0-alpha.0"
 dependencies = [
  "dirs 5.0.1",
+ "nova-artwork",
  "nova-core",
  "nova-enrich",
  "nova-epg",

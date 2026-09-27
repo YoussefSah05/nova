@@ -1,4 +1,5 @@
 pub mod airplay;
+pub mod artwork_protocol;
 pub mod caption_session;
 pub mod commands;
 pub mod desktop_jobs;
@@ -56,7 +57,27 @@ pub fn run() {
         // Remember the window's size / position / maximized state across launches.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(state::AppState::new(pool, proxy_port, proxy_sessions))
+        .register_asynchronous_uri_scheme_protocol(
+            artwork_protocol::SCHEME,
+            |ctx, request, responder| {
+                artwork_protocol::handle(ctx.app_handle().clone(), request, responder)
+            },
+        )
         .setup(|app| {
+            // Artwork cache behind `nova-art://`: disposable, so it lives in the
+            // cache dir; trimmed to its budget once per launch.
+            let art_dir = app.path().app_cache_dir()?.join("artwork");
+            let artwork = Arc::new(nova_artwork::ArtworkCache::new(
+                art_dir,
+                nova_artwork::DEFAULT_MAX_BYTES,
+            ));
+            app.manage(artwork.clone());
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = artwork.evict().await {
+                    tracing::warn!(error = %e, "artwork cache eviction failed");
+                }
+            });
+
             let engine = app.state::<state::AppState>().mpv_engine.clone();
 
             // A removed drive should stop advertising its models even when
@@ -195,6 +216,8 @@ pub fn run() {
             commands::settings::remove_whisper_model,
             commands::settings::get_transcription_cache_stats,
             commands::settings::clear_transcription_cache,
+            commands::settings::get_artwork_cache_stats,
+            commands::settings::clear_artwork_cache,
             commands::settings::get_app_info,
             // Phase 5 — AirPlay (parallel AVPlayer route)
             commands::playback::airplay_set_picker_rect,

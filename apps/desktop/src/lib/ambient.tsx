@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "@/lib/motion";
+import { artworkSrc } from "@/lib/artwork";
 import { cn } from "@/lib/utils";
 
 const cache = new Map<string, string | null>();
@@ -65,7 +66,7 @@ export function sampleAmbientColor(url: string): Promise<string | null> {
       }
     };
     img.onerror = () => finish(url, null, resolve);
-    img.src = url;
+    img.src = artworkSrc(url);
   });
 }
 

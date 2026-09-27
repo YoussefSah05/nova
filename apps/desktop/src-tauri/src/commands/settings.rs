@@ -2,7 +2,9 @@
 //! management, whisper-model + transcription-cache maintenance, and app info.
 
 use std::path::Path;
+use std::sync::Arc;
 
+use nova_artwork::ArtworkCache;
 use nova_core::Profile;
 use nova_storage::{ProfileRepository, SourceRepository, TranscriptRepository};
 use nova_transcribe::{default_model, model_paths};
@@ -125,6 +127,37 @@ pub async fn clear_transcription_cache(
         let _ = std::fs::remove_file(p);
     }
     Ok(())
+}
+
+// ── Artwork cache ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtworkCacheStats {
+    pub files: u64,
+    pub bytes: u64,
+}
+
+fn artwork_error(e: nova_artwork::ArtworkError) -> ApiError {
+    ApiError::Internal(e.to_string())
+}
+
+/// Size of the on-disk artwork cache (shared by every profile).
+#[tauri::command]
+pub async fn get_artwork_cache_stats(
+    cache: State<'_, Arc<ArtworkCache>>,
+) -> Result<ArtworkCacheStats, ApiError> {
+    let stats = cache.stats().await.map_err(artwork_error)?;
+    Ok(ArtworkCacheStats {
+        files: stats.files,
+        bytes: stats.bytes,
+    })
+}
+
+/// Empty the artwork cache; images are downloaded again as they are shown.
+#[tauri::command]
+pub async fn clear_artwork_cache(cache: State<'_, Arc<ArtworkCache>>) -> Result<(), ApiError> {
+    cache.clear().await.map_err(artwork_error)
 }
 
 // ── App info ──────────────────────────────────────────────────────────────────

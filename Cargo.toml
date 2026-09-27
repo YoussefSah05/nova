@@ -18,6 +18,7 @@ members = [
     "crates/search",
     "crates/mcp",
     "crates/enrich",
+    "crates/artwork",
 ]
 
 [workspace.dependencies]
@@ -65,6 +66,7 @@ hf-hub = { version = "0.4", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+imagesize = "0.13"
 ring = "0.17"
 zeroize = "1"
 tempfile = "3"

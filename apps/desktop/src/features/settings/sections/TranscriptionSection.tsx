@@ -1,4 +1,5 @@
-//! Settings → Transcription & Cache: whisper model + cached-transcript management.
+//! Settings → Transcription & Cache: whisper model, cached transcripts and the
+//! artwork cache.
 
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -14,6 +15,10 @@ interface ModelStatus {
 }
 interface CacheStats {
   transcripts: number;
+  bytes: number;
+}
+interface ArtworkCacheStats {
+  files: number;
   bytes: number;
 }
 interface ModelProgress {
@@ -127,7 +132,50 @@ export function TranscriptionSection({ profileId }: { profileId: string }) {
             {busy === "clear" ? "Clearing…" : "Clear cache"}
           </SettingsButton>
         </SettingRow>
+        <ArtworkCacheRow />
       </SettingsCard>
     </div>
+  );
+}
+
+/** Posters, backdrops and logos kept on this device (shared by all profiles). */
+function ArtworkCacheRow() {
+  const [stats, setStats] = useState<ArtworkCacheStats | null>(null);
+  const [clearing, setClearing] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setStats(await invoke<ArtworkCacheStats>("get_artwork_cache_stats"));
+  }, []);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const clear = async () => {
+    setClearing(true);
+    try {
+      await invoke("clear_artwork_cache");
+      await refresh();
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  return (
+    <SettingRow
+      title="Cached artwork"
+      description={
+        stats
+          ? `${stats.files} image${stats.files === 1 ? "" : "s"} · ${formatBytes(stats.bytes)} · downloaded again when shown`
+          : "…"
+      }
+    >
+      <SettingsButton
+        variant="danger"
+        onClick={clear}
+        disabled={clearing || (stats?.files ?? 0) === 0}
+      >
+        {clearing ? "Clearing…" : "Clear artwork"}
+      </SettingsButton>
+    </SettingRow>
   );
 }
