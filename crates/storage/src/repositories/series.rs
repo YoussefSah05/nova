@@ -1,4 +1,6 @@
-use nova_core::{now_ts, ContentSort, SeriesEpisode, SeriesSummary};
+use nova_core::{
+    now_ts, ContentSort, EpisodeNumberingKind, SeriesEpisode, SeriesSummary, SourceEvidence,
+};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
@@ -27,9 +29,14 @@ impl<'a> SeriesRepository<'a> {
     ) -> Result<(), StorageError> {
         let added_at = now_ts();
         for e in entries {
+            let ev = &e.evidence;
+            let parser_version = ev.parser_version.map(i64::from);
+            let quality = SourceEvidence::csv(&ev.quality_hints);
+            let language = SourceEvidence::csv(&ev.language_hints);
+            let numbering = e.numbering.as_str();
             sqlx::query!(
-                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, raw_name, raw_group, parser_version, quality_hints, language_hints, numbering)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 e.source_id,
                 e.series_title,
                 e.category,
@@ -39,6 +46,12 @@ impl<'a> SeriesRepository<'a> {
                 e.logo_url,
                 e.stream_url,
                 added_at,
+                ev.raw_name,
+                ev.raw_group,
+                parser_version,
+                quality,
+                language,
+                numbering,
             )
             .execute(&mut **tx)
             .await?;
@@ -133,9 +146,10 @@ impl<'a> SeriesRepository<'a> {
 
         let added_at = now_ts();
         for e in episodes {
+            let numbering = e.numbering.as_str();
             sqlx::query!(
-                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, is_favorite, is_in_watchlist)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, is_favorite, is_in_watchlist, raw_name, numbering)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 e.source_id,
                 e.series_title,
                 e.category,
@@ -147,6 +161,8 @@ impl<'a> SeriesRepository<'a> {
                 added_at,
                 fav,
                 wl,
+                e.evidence.raw_name,
+                numbering,
             )
             .execute(&mut *tx)
             .await?;
@@ -288,7 +304,7 @@ impl<'a> SeriesRepository<'a> {
         series_title: &str,
     ) -> Result<Vec<SeriesEpisode>, StorageError> {
         let rows = sqlx::query!(
-            r#"SELECT id as "id!: i64", source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at
+            r#"SELECT id as "id!: i64", source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, numbering
              FROM series_episodes
              WHERE source_id = ? AND series_title = ?
              ORDER BY season ASC, episode ASC"#,
@@ -310,6 +326,8 @@ impl<'a> SeriesRepository<'a> {
                 logo_url: r.logo_url,
                 stream_url: r.stream_url,
                 added_at: r.added_at,
+                numbering: EpisodeNumberingKind::from_db(&r.numbering),
+                evidence: SourceEvidence::default(),
             })
             .collect())
     }
@@ -318,7 +336,7 @@ impl<'a> SeriesRepository<'a> {
     /// episode belongs to (for the cinema-mode episode browser / autoplay).
     pub async fn get_episode(&self, id: i64) -> Result<Option<SeriesEpisode>, StorageError> {
         let row = sqlx::query!(
-            r#"SELECT id as "id!: i64", source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at
+            r#"SELECT id as "id!: i64", source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, numbering
              FROM series_episodes WHERE id = ?"#,
             id,
         )
@@ -335,6 +353,8 @@ impl<'a> SeriesRepository<'a> {
             logo_url: r.logo_url,
             stream_url: r.stream_url,
             added_at: r.added_at,
+            numbering: EpisodeNumberingKind::from_db(&r.numbering),
+            evidence: SourceEvidence::default(),
         }))
     }
 

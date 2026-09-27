@@ -49,6 +49,7 @@ fn movie(source_id: i64, name: &str, url: &str, upstream: Option<&str>) -> VodIt
         overview: None,
         upstream_id: upstream.map(str::to_string),
         provider_tmdb_id: None,
+        evidence: Default::default(),
     }
 }
 

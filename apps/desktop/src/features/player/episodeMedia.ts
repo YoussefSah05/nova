@@ -4,13 +4,36 @@
 import type { SeriesEpisode } from "@/types";
 import type { PlayMedia } from "./PlayerModal";
 
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/// The episode's number code, only as far as it is actually known:
+/// `S03E07`, `E1234` for absolute numbering, or null when unknown (placeholder
+/// numbers are never shown as a real S01E01). `withSeason: false` gives `E07`
+/// for lists already grouped by season.
+export function episodeCode(ep: SeriesEpisode, withSeason = true): string | null {
+  switch (ep.numbering) {
+    case "unknown":
+      return null;
+    case "absolute":
+      return `E${pad(ep.episode)}`;
+    default:
+      return withSeason ? `S${pad(ep.season)}E${pad(ep.episode)}` : `E${pad(ep.episode)}`;
+  }
+}
+
+/// `S03E07 — One Minute`, falling back to whichever part is known, or "Episode".
+export function episodeLabel(ep: SeriesEpisode, withSeason = true): string {
+  const code = episodeCode(ep, withSeason);
+  if (code && ep.episodeTitle) return `${code} — ${ep.episodeTitle}`;
+  return code ?? ep.episodeTitle ?? "Episode";
+}
+
 export function episodeToMedia(ep: SeriesEpisode, fallbackPoster?: string | null): PlayMedia {
-  const code = `S${String(ep.season).padStart(2, "0")}E${String(ep.episode).padStart(2, "0")}`;
   return {
     kind: "episode",
     id: ep.id,
     title: ep.seriesTitle,
-    subtitle: ep.episodeTitle ? `${code} — ${ep.episodeTitle}` : code,
+    subtitle: episodeLabel(ep),
     posterUrl: ep.logoUrl ?? fallbackPoster ?? null,
   };
 }

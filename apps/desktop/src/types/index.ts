@@ -110,6 +110,9 @@ export interface SeriesEpisode {
   logoUrl: string | null;
   streamUrl: string;
   addedAt: number | null;
+  /// Whether `season`/`episode` are real. `absolute`: only the episode number
+  /// is (e.g. "Folge 1234"); `unknown`: both are placeholders, never shown.
+  numbering: "seasonEpisode" | "absolute" | "unknown";
 }
 
 export type ContentSort = "default" | "recentlyAdded";

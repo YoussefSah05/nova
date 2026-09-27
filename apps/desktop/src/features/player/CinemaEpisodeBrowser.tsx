@@ -11,7 +11,7 @@ import { Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SeriesEpisode } from "@/types";
 import type { PlayMedia } from "./PlayerModal";
-import { episodeToMedia } from "./episodeMedia";
+import { episodeLabel, episodeToMedia } from "./episodeMedia";
 
 export function CinemaEpisodeBrowser({
   profileId,
@@ -147,8 +147,7 @@ export function CinemaEpisodeBrowser({
                   </div>
                 </div>
                 <span className="line-clamp-2 text-[11px] font-medium text-white/85">
-                  E{String(ep.episode).padStart(2, "0")}
-                  {ep.episodeTitle ? ` — ${ep.episodeTitle}` : ""}
+                  {episodeLabel(ep, false)}
                 </span>
               </button>
             );

@@ -1,7 +1,7 @@
 use nova_core::catalog::publish::{check_collapse, check_integrity, PublishRejection};
 use nova_core::{
-    Channel, ContentSort, ContinueWatchingItem, ImportProgress, ImportStage, MediaKind,
-    ParsedEntry, Profile, SeriesEpisode, SeriesSummary, Source, VodItem,
+    Channel, ContentSort, ContinueWatchingItem, EpisodeNumberingKind, ImportProgress, ImportStage,
+    MediaKind, ParsedEntry, Profile, SeriesEpisode, SeriesSummary, Source, SourceEvidence, VodItem,
 };
 use nova_storage::{
     init_profile_db, CanonicalRepository, ChannelRepository, EpgSourcesRepository,
@@ -708,6 +708,14 @@ async fn fetch_series_episodes(
                 .or_else(|| existing.first().and_then(|e| e.logo_url.clone())),
             stream_url: ep.stream_url,
             added_at: None,
+            // Provider numbering; Xtream reports a missing episode number as 0.
+            numbering: if ep.episode > 0 {
+                EpisodeNumberingKind::SeasonEpisode
+            } else {
+                EpisodeNumberingKind::Unknown
+            },
+            // Provider fields are stored verbatim (the episode title is raw).
+            evidence: SourceEvidence::default(),
         })
         .collect();
 
@@ -1435,6 +1443,7 @@ fn push_entry(
                 added_at: None,
                 dedup_group: None,
                 region,
+                evidence: SourceEvidence::from_entry(e),
             })
         }
         MediaKind::Movie => vod.push(VodItem {
@@ -1456,6 +1465,7 @@ fn push_entry(
             overview: None,
             upstream_id: e.upstream_id.clone(),
             provider_tmdb_id: e.provider_tmdb_id,
+            evidence: SourceEvidence::from_entry(e),
         }),
         MediaKind::Series => series.push(SeriesEpisode {
             id: 0,
@@ -1464,12 +1474,21 @@ fn push_entry(
                 e.series_title.as_deref().unwrap_or(&e.clean_title),
             ),
             category: e.category.clone(),
-            season: e.season.unwrap_or(1) as i64,
-            episode: e.episode.unwrap_or(1) as i64,
+            // Unknown parts are stored as placeholders (the columns are NOT
+            // NULL; the Xtream sentinel keeps its 0/0) and flagged by
+            // `numbering`, so they are never shown as a real S01E01.
+            season: i64::from(e.season.unwrap_or(1)),
+            episode: i64::from(e.episode.unwrap_or(1)),
             episode_title: None,
             logo_url: e.logo_url.clone(),
             stream_url: e.stream_url.clone(),
             added_at: None,
+            numbering: if e.season == Some(0) && e.episode == Some(0) {
+                EpisodeNumberingKind::SeasonEpisode
+            } else {
+                EpisodeNumberingKind::from_parsed(e.season, e.episode)
+            },
+            evidence: SourceEvidence::from_entry(e),
         }),
     }
 }
@@ -1543,6 +1562,9 @@ mod stabilization_tests {
             category: None,
             upstream_id: None,
             provider_tmdb_id: None,
+            quality_hints: Vec::new(),
+            language_hints: Vec::new(),
+            parser_version: None,
         }
     }
 
@@ -1957,6 +1979,122 @@ mod stabilization_tests {
             .unwrap();
         assert_eq!(active.id, active_id);
         assert_eq!(active.counts.movie, 60);
+    }
+
+    #[tokio::test]
+    async fn import_keeps_raw_evidence_next_to_parsed_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("m3u", "test", "https://example.invalid/list.m3u")
+            .await
+            .unwrap()
+            .id;
+        // Real parser output, as the M3U/Xtream converters produce it.
+        let parsed = |raw: &str, kind: MediaKind, group: &str| {
+            let title_kind = match &kind {
+                MediaKind::Live => nova_core::clean::TitleKind::Live,
+                MediaKind::Movie => nova_core::clean::TitleKind::Movie,
+                MediaKind::Series => nova_core::clean::TitleKind::Series,
+            };
+            let p = nova_core::clean::parse_source_title(raw, title_kind);
+            let is_series = matches!(kind, MediaKind::Series);
+            ParsedEntry {
+                kind,
+                name: raw.into(),
+                group_title: group.into(),
+                stream_url: format!("https://example.invalid/{}", raw.len()),
+                country_prefix: p.country_prefix.clone(),
+                clean_title: p.title.clone(),
+                year: p.year,
+                series_title: is_series.then(|| p.title.clone()),
+                season: p.season,
+                episode: p.episode,
+                quality_hints: p.quality_hints.clone(),
+                language_hints: p.language_hints.clone(),
+                parser_version: Some(nova_core::clean::PARSER_VERSION),
+                ..entry(raw)
+            }
+        };
+        let ok = import(
+            pool.clone(),
+            id,
+            vec![
+                Ok(parsed(
+                    "FR | OPPENHEIMER [4K] MULTI (2023)",
+                    MediaKind::Movie,
+                    "FR| FILMS 4K",
+                )),
+                Ok(parsed("AR | MBC 1 FHD", MediaKind::Live, "|AR| MBC")),
+                Ok(parsed(
+                    "DE | Tatort - Folge 1234",
+                    MediaKind::Series,
+                    "DE| SERIEN",
+                )),
+                Ok(parsed("Breaking Bad", MediaKind::Series, "SERIES")),
+            ],
+            ImportMode::Append,
+        )
+        .await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+
+        type MovieEvidence = (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+        );
+        let movie: MovieEvidence =
+            sqlx::query_as(
+                "SELECT name, clean_title, raw_group, quality_hints, language_hints, parser_version FROM vod_items",
+            )
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            movie.0, "FR | OPPENHEIMER [4K] MULTI (2023)",
+            "raw title untouched"
+        );
+        assert_eq!(movie.1.as_deref(), Some("OPPENHEIMER"));
+        assert_eq!(movie.2.as_deref(), Some("FR| FILMS 4K"), "raw group kept");
+        assert_eq!(
+            (movie.3.as_deref(), movie.4.as_deref()),
+            (Some("4K"), Some("MULTI"))
+        );
+        assert_eq!(movie.5, Some(i64::from(nova_core::clean::PARSER_VERSION)));
+
+        let channel: (String, Option<String>, Option<String>) =
+            sqlx::query_as("SELECT name, raw_name, quality_hints FROM channels")
+                .fetch_one(&*pool)
+                .await
+                .unwrap();
+        assert_eq!(channel.0, "MBC 1");
+        assert_eq!(channel.1.as_deref(), Some("AR | MBC 1 FHD"));
+        assert_eq!(channel.2.as_deref(), Some("FHD"));
+
+        let episodes = SeriesRepository::new(&pool);
+        let tatort = episodes.list_episodes(id, "Tatort").await.unwrap();
+        assert_eq!(tatort[0].episode, 1234);
+        assert_eq!(
+            tatort[0].numbering,
+            nova_core::EpisodeNumberingKind::Absolute
+        );
+        let bb = episodes.list_episodes(id, "Breaking Bad").await.unwrap();
+        assert_eq!(
+            bb[0].numbering,
+            nova_core::EpisodeNumberingKind::Unknown,
+            "placeholder numbers are flagged, not presented as S01E01"
+        );
+        let raw: (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT raw_name, raw_group FROM series_episodes WHERE series_title = 'Tatort'",
+        )
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(raw.0.as_deref(), Some("DE | Tatort - Folge 1234"));
+        assert_eq!(raw.1.as_deref(), Some("DE| SERIEN"));
     }
 
     #[tokio::test]

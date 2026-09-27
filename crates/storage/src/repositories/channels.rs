@@ -1,4 +1,4 @@
-use nova_core::{now_ts, Channel, ChannelGroup, ContentSort};
+use nova_core::{now_ts, Channel, ChannelGroup, ContentSort, SourceEvidence};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
@@ -27,9 +27,13 @@ impl<'a> ChannelRepository<'a> {
     ) -> Result<(), StorageError> {
         let added_at = now_ts();
         for c in entries {
+            let ev = &c.evidence;
+            let parser_version = ev.parser_version.map(i64::from);
+            let quality = SourceEvidence::csv(&ev.quality_hints);
+            let language = SourceEvidence::csv(&ev.language_hints);
             sqlx::query!(
-                "INSERT INTO channels (source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, added_at, channel_group, region)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO channels (source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, added_at, channel_group, region, raw_name, parser_version, quality_hints, language_hints)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 c.source_id,
                 c.tvg_id,
                 c.name,
@@ -41,6 +45,10 @@ impl<'a> ChannelRepository<'a> {
                 added_at,
                 c.channel_group,
                 c.region,
+                ev.raw_name,
+                parser_version,
+                quality,
+                language,
             )
             .execute(&mut **tx)
             .await?;
@@ -161,6 +169,7 @@ impl<'a> ChannelRepository<'a> {
                 dedup_group: r.dedup_group,
                 channel_group: r.channel_group,
                 region: r.region,
+                evidence: SourceEvidence::default(),
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
@@ -201,6 +210,7 @@ impl<'a> ChannelRepository<'a> {
                 dedup_group: r.dedup_group,
                 channel_group: r.channel_group,
                 region: r.region,
+                evidence: SourceEvidence::default(),
             })
             .collect(),
         };
@@ -435,6 +445,7 @@ impl<'a> ChannelRepository<'a> {
                 dedup_group: r.dedup_group,
                 channel_group: r.channel_group,
                 region: r.region,
+                evidence: SourceEvidence::default(),
             })
             .collect())
     }

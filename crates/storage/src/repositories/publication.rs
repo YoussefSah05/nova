@@ -329,6 +329,7 @@ mod tests {
             overview: None,
             upstream_id: Some(format!("xtream:vod:{n}")),
             provider_tmdb_id: None,
+            evidence: Default::default(),
         }
     }
 

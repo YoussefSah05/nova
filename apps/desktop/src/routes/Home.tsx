@@ -45,6 +45,7 @@ import { PlayerModal, type PlayMedia } from "@/features/player/PlayerModal";
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
 import { useAccentTheme } from "@/lib/useAccentTheme";
 import { cn } from "@/lib/utils";
+import { episodeLabel } from "@/features/player/episodeMedia";
 
 type Tab = BrowseTab;
 
@@ -449,7 +450,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
                 kind: "episode",
                 id: episode.id,
                 title: selectedSeries.seriesTitle,
-                subtitle: `S${String(episode.season).padStart(2, "0")}E${String(episode.episode).padStart(2, "0")}${episode.episodeTitle ? ` — ${episode.episodeTitle}` : ""}`,
+                subtitle: episodeLabel(episode),
                 posterUrl: episode.logoUrl ?? selectedSeries.posterUrl,
               })
             }

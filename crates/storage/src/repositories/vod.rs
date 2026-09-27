@@ -1,6 +1,6 @@
 use nova_core::catalog::media::{binding_key, locator_binding_key};
 use nova_core::catalog::EntityId;
-use nova_core::{now_ts, ContentSort, VodItem};
+use nova_core::{now_ts, ContentSort, SourceEvidence, VodItem};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
@@ -33,9 +33,13 @@ impl<'a> VodRepository<'a> {
             // here; the provider ID itself is not persisted.
             let binding_key = binding_key(v.upstream_id.as_deref(), &v.stream_url);
             let locator_key = locator_binding_key(&v.stream_url);
+            let ev = &v.evidence;
+            let parser_version = ev.parser_version.map(i64::from);
+            let quality = SourceEvidence::csv(&ev.quality_hints);
+            let language = SourceEvidence::csv(&ev.language_hints);
             sqlx::query!(
-                "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at, binding_key, locator_key, provider_tmdb_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at, binding_key, locator_key, provider_tmdb_id, raw_group, parser_version, quality_hints, language_hints)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 v.source_id,
                 v.name,
                 v.clean_title,
@@ -47,6 +51,10 @@ impl<'a> VodRepository<'a> {
                 binding_key,
                 locator_key,
                 v.provider_tmdb_id,
+                ev.raw_group,
+                parser_version,
+                quality,
+                language,
             )
             .execute(&mut **tx)
             .await?;
@@ -160,6 +168,7 @@ impl<'a> VodRepository<'a> {
                 overview: r.overview,
                 upstream_id: None,
                 provider_tmdb_id: None,
+                evidence: SourceEvidence::default(),
             })
             .collect(),
             ContentSort::Default => sqlx::query!(
@@ -198,6 +207,7 @@ impl<'a> VodRepository<'a> {
                 overview: r.overview,
                 upstream_id: None,
                 provider_tmdb_id: None,
+                evidence: SourceEvidence::default(),
             })
             .collect(),
         };
@@ -247,6 +257,7 @@ impl<'a> VodRepository<'a> {
                 overview: r.overview,
                 upstream_id: None,
                 provider_tmdb_id: None,
+                evidence: SourceEvidence::default(),
             })
             .collect())
     }

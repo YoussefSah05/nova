@@ -273,3 +273,26 @@ shares its prefix rules. `search_title`/`search_series_title` are views over it.
   (`S.W.A.T.`, `H.264`).
 - Capitalization is not changed. ALL-CAPS provider titles stay as-is until a
   confident TMDB name replaces them (step 5).
+
+### Raw source evidence (naming v1, step 2)
+
+Migration 0026 keeps provider evidence recoverable next to each row. Values fill
+in on the next import or refresh.
+
+- **Raw title:** `channels.raw_name` and `series_episodes.raw_name` are new.
+  `vod_items.name` already held it.
+- **Raw group label:** `vod_items.raw_group` and `series_episodes.raw_group` are
+  new. `channels.raw_group` already existed.
+- **`parser_version`:** the `PARSER_VERSION` that produced the parsed columns
+  (`NULL` before this migration).
+- **`quality_hints` / `language_hints`:** comma-separated tags the parser
+  removed (`4K,HEVC` / `MULTI`). They are variant hints, never identity.
+- **`series_episodes.numbering`:** `season_episode | absolute | unknown`. The
+  numeric columns stay `NOT NULL` (the Xtream catalog sentinel keeps 0/0), so
+  unknown numbering is stored as placeholders plus this flag.
+
+Import fills a `SourceEvidence` value on `Channel`/`VodItem`/`SeriesEpisode`. It
+is insert-only (`#[serde(skip)]`), never sent over IPC, and not loaded on reads.
+`SeriesEpisode.numbering` is exposed. The UI's `episodeLabel` shows `S03E07`,
+`E1234` for absolute numbering, or only the episode title when numbering is
+unknown, never a fabricated S01E01.

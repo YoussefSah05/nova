@@ -7,7 +7,7 @@
 //! Each endpoint is streamed via `chunk()` → blocking `serde_json::Deserializer`
 //! so entries are emitted as bytes arrive — no buffering of the full response.
 
-use nova_core::clean::{parse_source_title, TitleKind};
+use nova_core::clean::{parse_source_title, TitleKind, PARSER_VERSION};
 use nova_core::{normalize_category, MediaKind, ParsedEntry};
 use serde::de::{DeserializeOwned, SeqAccess, Visitor};
 use serde::Deserialize;
@@ -589,6 +589,8 @@ struct SeriesJson {
 
 fn to_live_entry(s: LiveStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
     let parsed = parse_source_title(&s.name, TitleKind::Live);
+    let (quality_hints, language_hints) =
+        (parsed.quality_hints.clone(), parsed.language_hints.clone());
     let (country_prefix, clean_title) = (parsed.country_prefix, parsed.title);
     let logo_url = s
         .stream_icon
@@ -613,11 +615,16 @@ fn to_live_entry(s: LiveStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
         category: Some(category),
         upstream_id: None,
         provider_tmdb_id: None,
+        quality_hints,
+        language_hints,
+        parser_version: Some(PARSER_VERSION),
     }
 }
 
 fn to_vod_entry(s: VodStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
     let parsed = parse_source_title(&s.name, TitleKind::Movie);
+    let (quality_hints, language_hints) =
+        (parsed.quality_hints.clone(), parsed.language_hints.clone());
     let (country_prefix, clean_title, year) = (parsed.country_prefix, parsed.title, parsed.year);
     let logo_url = s
         .stream_icon
@@ -643,11 +650,16 @@ fn to_vod_entry(s: VodStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
         category: Some(category),
         upstream_id: Some(format!("xtream:vod:{}", s.stream_id)),
         provider_tmdb_id: s.tmdb.as_ref().and_then(parse_tmdb_id),
+        quality_hints,
+        language_hints,
+        parser_version: Some(PARSER_VERSION),
     }
 }
 
 fn to_series_entry(s: SeriesJson, _creds: &XtreamCredentials) -> ParsedEntry {
     let parsed = parse_source_title(&s.name, TitleKind::Series);
+    let (quality_hints, language_hints) =
+        (parsed.quality_hints.clone(), parsed.language_hints.clone());
     let (country_prefix, clean_title) = (parsed.country_prefix, parsed.title);
     let logo_url = s
         .cover
@@ -677,6 +689,9 @@ fn to_series_entry(s: SeriesJson, _creds: &XtreamCredentials) -> ParsedEntry {
         category: Some(category),
         upstream_id: None,
         provider_tmdb_id: None,
+        quality_hints,
+        language_hints,
+        parser_version: Some(PARSER_VERSION),
     }
 }
 
@@ -985,6 +1000,9 @@ mod tests {
                 category: None,
                 upstream_id: None,
                 provider_tmdb_id: None,
+                quality_hints: Vec::new(),
+                language_hints: Vec::new(),
+                parser_version: None,
             },
             |entry| {
                 ids.push(entry.name.parse::<u32>().unwrap());

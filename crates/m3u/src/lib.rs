@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::process::Stdio;
 
-use nova_core::clean::{parse_source_title, TitleKind};
+use nova_core::clean::{parse_source_title, TitleKind, PARSER_VERSION};
 use nova_core::{normalize_category, MediaKind, ParsedEntry};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -375,6 +375,8 @@ fn classify(attrs: ExtinfAttrs, stream_url: &str) -> ParsedEntry {
         MediaKind::Live => TitleKind::Live,
     };
     let parsed = parse_source_title(&attrs.tvg_name, title_kind);
+    let quality_hints = parsed.quality_hints.clone();
+    let language_hints = parsed.language_hints.clone();
     let country_prefix = parsed.country_prefix;
     let (clean_title, year, series_title, season, episode) = match kind {
         MediaKind::Movie => (parsed.title, parsed.year, None, None, None),
@@ -407,6 +409,9 @@ fn classify(attrs: ExtinfAttrs, stream_url: &str) -> ParsedEntry {
         category: Some(category),
         upstream_id: None,
         provider_tmdb_id: None,
+        quality_hints,
+        language_hints,
+        parser_version: Some(PARSER_VERSION),
     }
 }
 

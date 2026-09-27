@@ -7,6 +7,7 @@ import type { SeriesEpisode, SeriesSummary } from "@/types";
 import { FavoriteButton } from "@/features/browse/FavoriteButton";
 import { WatchlistButton } from "@/features/browse/WatchlistButton";
 import { PosterFallback } from "@/features/browse/PosterFallback";
+import { episodeLabel } from "@/features/player/episodeMedia";
 
 interface SeriesDetailProps {
   profileId: string;
@@ -216,10 +217,7 @@ export function SeriesDetail({
                           ) : (
                             <div className="w-16 h-9 rounded bg-neutral-800 flex-shrink-0" />
                           )}
-                          <span className="text-sm text-white/80">
-                            E{String(ep.episode).padStart(2, "0")}
-                            {ep.episodeTitle ? ` — ${ep.episodeTitle}` : ""}
-                          </span>
+                          <span className="text-sm text-white/80">{episodeLabel(ep, false)}</span>
                         </button>
                       ))}
                     </div>

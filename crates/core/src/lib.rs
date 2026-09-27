@@ -80,6 +80,84 @@ pub struct ParsedEntry {
     /// Provider-claimed TMDB movie ID (Xtream `tmdb`). Identity evidence for
     /// entity resolution, never displayed; `None` when absent or invalid.
     pub provider_tmdb_id: Option<i64>,
+    /// Tags the parser removed from the title (see `clean::ParsedTitle`).
+    pub quality_hints: Vec<String>,
+    pub language_hints: Vec<String>,
+    /// `clean::PARSER_VERSION` that produced the parsed fields; `None` when
+    /// the fields were not parsed from a provider title.
+    pub parser_version: Option<u32>,
+}
+
+/// Provider evidence captured at import and persisted next to a catalog row:
+/// the untouched title and group label, the parser that produced the display
+/// values, and the tags it removed. Insert-side only: never serialized over IPC
+/// and not loaded on read paths.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceEvidence {
+    pub raw_name: Option<String>,
+    pub raw_group: Option<String>,
+    pub parser_version: Option<u32>,
+    pub quality_hints: Vec<String>,
+    pub language_hints: Vec<String>,
+}
+
+impl SourceEvidence {
+    /// Evidence for a row parsed from a provider entry.
+    pub fn from_entry(e: &ParsedEntry) -> Self {
+        let non_empty = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
+        Self {
+            raw_name: non_empty(&e.name),
+            raw_group: non_empty(&e.group_title),
+            parser_version: e.parser_version,
+            quality_hints: e.quality_hints.clone(),
+            language_hints: e.language_hints.clone(),
+        }
+    }
+
+    /// Stored form of a hint list: comma-separated, `None` when empty.
+    pub fn csv(hints: &[String]) -> Option<String> {
+        (!hints.is_empty()).then(|| hints.join(","))
+    }
+}
+
+/// How trustworthy an episode's stored `season`/`episode` numbers are.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EpisodeNumberingKind {
+    /// Both numbers are real (provider data or parsed from the title).
+    #[default]
+    SeasonEpisode,
+    /// Only the episode number is real (`Folge 1234`); season is a placeholder.
+    Absolute,
+    /// Neither is known; both numbers are placeholders and must not be shown.
+    Unknown,
+}
+
+impl EpisodeNumberingKind {
+    /// From parsed numbering, for rows that store placeholders when unknown.
+    pub fn from_parsed(season: Option<u32>, episode: Option<u32>) -> Self {
+        match (season, episode) {
+            (Some(_), Some(_)) => Self::SeasonEpisode,
+            (None, Some(_)) => Self::Absolute,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SeasonEpisode => "season_episode",
+            Self::Absolute => "absolute",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "absolute" => Self::Absolute,
+            "unknown" => Self::Unknown,
+            _ => Self::SeasonEpisode,
+        }
+    }
 }
 
 // ── Storage-mapped types (returned by repositories) ──────────────────────────
@@ -118,6 +196,9 @@ pub struct Channel {
     pub channel_group: Option<String>,
     /// Coarse region bucket (`nova_core::region::region_of` of `country`).
     pub region: Option<String>,
+    /// Import-time provider evidence (insert only; not sent over IPC).
+    #[serde(skip)]
+    pub evidence: SourceEvidence,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +229,9 @@ pub struct VodItem {
     /// Provider-claimed TMDB movie ID, entity-resolution evidence only.
     #[serde(skip)]
     pub provider_tmdb_id: Option<i64>,
+    /// Import-time provider evidence (insert only; not sent over IPC).
+    #[serde(skip)]
+    pub evidence: SourceEvidence,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +247,12 @@ pub struct SeriesEpisode {
     pub logo_url: Option<String>,
     pub stream_url: String,
     pub added_at: Option<i64>,
+    /// Whether `season`/`episode` are real or placeholders.
+    #[serde(default)]
+    pub numbering: EpisodeNumberingKind,
+    /// Import-time provider evidence (insert only; not sent over IPC).
+    #[serde(skip)]
+    pub evidence: SourceEvidence,
 }
 
 /// One live brand-family bundle (e.g. all `beIN Sports N`) returned by

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!: i64\", source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at\n             FROM series_episodes WHERE id = ?",
+  "query": "SELECT id as \"id!: i64\", source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, numbering\n             FROM series_episodes WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -52,6 +52,11 @@
         "name": "added_at",
         "ordinal": 9,
         "type_info": "Integer"
+      },
+      {
+        "name": "numbering",
+        "ordinal": 10,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -67,8 +72,9 @@
       true,
       true,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "f0c13415d14b6a89423022085a4b294655771329383298d6ccfa864172bf6f9f"
+  "hash": "4726a72a65cbea8c09d3a7106844ae287019aa81a9cecee447efe7119b4eafdc"
 }
