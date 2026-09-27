@@ -24,6 +24,7 @@ import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
 import { fetchChannelsInGroup, type BrowseItem } from "./queries";
 import type { CanonicalMediaDetail } from "@/types";
+import { Artwork } from "@/components/Artwork";
 
 /// Preferred audio language choices. `null` = keep the stream's original track.
 const AUDIO_LANGS: { value: string | null; label: string }[] = [
@@ -89,14 +90,12 @@ function LiveBundleDetail({
         <ArrowLeft className="h-4 w-4" /> Back
       </Button>
       <div className="mt-4 flex items-center gap-4">
-        {item.posterUrl && (
-          <img
-            src={item.posterUrl}
-            alt=""
-            decoding="async"
-            className="h-16 w-28 rounded-lg object-contain bg-neutral-900 p-2"
-          />
-        )}
+        <Artwork
+          src={item.posterUrl}
+          alt=""
+          decoding="async"
+          className="h-16 w-28 rounded-lg object-contain bg-neutral-900 p-2"
+        />
         <div>
           <h1 className="font-display text-2xl font-semibold">{item.title}</h1>
           <p className="mt-1 text-sm text-white/55">
@@ -117,17 +116,14 @@ function LiveBundleDetail({
               className="flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-center transition-colors hover:bg-white/10"
             >
               <div className="flex h-16 w-full items-center justify-center">
-                {c.posterUrl ? (
-                  <img
-                    src={c.posterUrl}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    className="max-h-16 max-w-full object-contain"
-                  />
-                ) : (
-                  <Play className="h-6 w-6 text-white/40" />
-                )}
+                <Artwork
+                  src={c.posterUrl}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  className="max-h-16 max-w-full object-contain"
+                  fallback={<Play className="h-6 w-6 text-white/40" />}
+                />
               </div>
               <span className="line-clamp-2 text-xs font-medium text-white/85">{c.title}</span>
             </button>
@@ -240,15 +236,13 @@ export function ContentDetail({
         </Button>
 
         <div className="mt-[34vh] flex items-end gap-5">
-          {item.posterUrl && (
-            <img
-              src={item.posterUrl}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className="hidden h-52 w-36 shrink-0 rounded-xl object-cover shadow-2xl sm:block"
-            />
-          )}
+          <Artwork
+            src={item.posterUrl}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="hidden h-52 w-36 shrink-0 rounded-xl object-cover shadow-2xl sm:block"
+          />
           <div className="min-w-0 max-w-2xl">
             <h1 className="font-display text-3xl font-semibold tracking-tight drop-shadow-lg md:text-4xl">
               {item.title}

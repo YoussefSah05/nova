@@ -19,6 +19,7 @@ import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
 import { PosterFallback } from "./PosterFallback";
 import type { BrowseItem } from "./queries";
+import { Artwork } from "@/components/Artwork";
 
 export interface PosterCardHandlers {
   onActivate: (item: BrowseItem) => void;
@@ -70,17 +71,14 @@ export const PosterCard = memo(function PosterCard({
             )}
             aria-label={item.title}
           >
-            {item.posterUrl ? (
-              <img
-                src={item.posterUrl}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                className={cn("h-full w-full", live ? "object-contain p-3" : "object-cover")}
-              />
-            ) : (
-              <PosterFallback title={item.title} live={live} />
-            )}
+            <Artwork
+              src={item.posterUrl}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className={cn("h-full w-full", live ? "object-contain p-3" : "object-cover")}
+              fallback={<PosterFallback title={item.title} live={live} />}
+            />
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
             {item.memberCount && item.memberCount > 1 ? (
               <span className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm">

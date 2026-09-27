@@ -16,6 +16,7 @@ import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
 import { PosterFallback } from "./PosterFallback";
 import type { BrowseItem } from "./queries";
+import { Artwork } from "@/components/Artwork";
 
 /// Module-level scroll suppression: previews never open within this window of the
 /// last scroll, so fast scrolling past cards can't spawn (then immediately tear
@@ -108,16 +109,13 @@ export function HoverPreview({
         <div
           className={cn("relative w-full overflow-hidden", live ? "aspect-video" : "aspect-video")}
         >
-          {backdrop ? (
-            <img
-              src={backdrop}
-              alt=""
-              decoding="async"
-              className={cn("h-full w-full", live ? "object-contain p-4" : "object-cover")}
-            />
-          ) : (
-            <PosterFallback title={item.title} live={live} />
-          )}
+          <Artwork
+            src={backdrop}
+            alt=""
+            decoding="async"
+            className={cn("h-full w-full", live ? "object-contain p-4" : "object-cover")}
+            fallback={<PosterFallback title={item.title} live={live} />}
+          />
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
         </div>
       </button>

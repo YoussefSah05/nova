@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import type { SeriesEpisode } from "@/types";
 import type { PlayMedia } from "./PlayerModal";
 import { episodeLabel, episodeToMedia } from "./episodeMedia";
+import { Artwork } from "@/components/Artwork";
 
 export function CinemaEpisodeBrowser({
   profileId,
@@ -128,14 +129,12 @@ export function CinemaEpisodeBrowser({
                 )}
               >
                 <div className="relative aspect-video w-full overflow-hidden rounded bg-neutral-800">
-                  {ep.logoUrl && (
-                    <img
-                      src={ep.logoUrl}
-                      alt=""
-                      loading="lazy"
-                      className="h-full w-full object-cover"
-                    />
-                  )}
+                  <Artwork
+                    src={ep.logoUrl}
+                    alt=""
+                    loading="lazy"
+                    className="h-full w-full object-cover"
+                  />
                   <div
                     className={cn(
                       "absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition-opacity",

@@ -37,6 +37,7 @@ import {
   type BrowseTab,
 } from "./queries";
 import { PosterFallback } from "./PosterFallback";
+import { Artwork } from "@/components/Artwork";
 
 export interface CommandPaletteProps {
   open: boolean;
@@ -292,17 +293,14 @@ function Thumb({ item }: { item: BrowseItem }) {
     <span
       className={cn("flex h-9 shrink-0 overflow-hidden rounded-md bg-muted", live ? "w-14" : "w-6")}
     >
-      {item.posterUrl ? (
-        <img
-          src={item.posterUrl}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          className={cn("h-full w-full", live ? "object-contain p-0.5" : "object-cover")}
-        />
-      ) : (
-        <PosterFallback title={item.title} live={live} />
-      )}
+      <Artwork
+        src={item.posterUrl}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        className={cn("h-full w-full", live ? "object-contain p-0.5" : "object-cover")}
+        fallback={<PosterFallback title={item.title} live={live} />}
+      />
     </span>
   );
 }

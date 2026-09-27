@@ -8,6 +8,7 @@ import { FavoriteButton } from "@/features/browse/FavoriteButton";
 import { WatchlistButton } from "@/features/browse/WatchlistButton";
 import { PosterFallback } from "@/features/browse/PosterFallback";
 import { episodeLabel } from "@/features/player/episodeMedia";
+import { Artwork } from "@/components/Artwork";
 
 interface SeriesDetailProps {
   profileId: string;
@@ -88,17 +89,14 @@ export function SeriesDetail({
 
       <div className="flex items-start gap-4">
         <div className="h-28 w-20 flex-shrink-0 overflow-hidden rounded-lg">
-          {series.posterUrl ? (
-            <img
-              src={series.posterUrl}
-              alt={series.seriesTitle}
-              loading="lazy"
-              decoding="async"
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <PosterFallback title={series.displayTitle} />
-          )}
+          <Artwork
+            src={series.posterUrl}
+            alt={series.seriesTitle}
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover"
+            fallback={<PosterFallback title={series.displayTitle} />}
+          />
         </div>
         <div className="flex flex-1 items-start justify-between gap-3">
           <div className="min-w-0">
@@ -204,17 +202,16 @@ export function SeriesDetail({
                           className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-white/[0.04] focus:outline-none focus:bg-white/[0.04]"
                           aria-label={`Play ${series.seriesTitle} S${season} E${ep.episode}`}
                         >
-                          {ep.logoUrl ? (
-                            <img
-                              src={ep.logoUrl}
-                              alt=""
-                              loading="lazy"
-                              decoding="async"
-                              className="w-16 h-9 object-cover rounded flex-shrink-0 bg-neutral-800"
-                            />
-                          ) : (
-                            <div className="w-16 h-9 rounded bg-neutral-800 flex-shrink-0" />
-                          )}
+                          <Artwork
+                            src={ep.logoUrl}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                            className="w-16 h-9 object-cover rounded flex-shrink-0 bg-neutral-800"
+                            fallback={
+                              <div className="w-16 h-9 rounded bg-neutral-800 flex-shrink-0" />
+                            }
+                          />
                           <span className="text-sm text-white/80">{episodeLabel(ep, false)}</span>
                         </button>
                       ))}

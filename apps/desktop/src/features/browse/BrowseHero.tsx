@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RECENTLY_ADDED_RAIL, useRail, type BrowseItem, type BrowseTab } from "./queries";
 import type { PosterCardHandlers } from "./PosterCard";
+import { useArtworkSrc } from "@/lib/artwork";
 
 const KIND_LABEL: Record<BrowseTab, string> = {
   live: "Live channel",
@@ -42,8 +43,9 @@ export function BrowseHero({
       featured.posterUrl)
     : null;
 
+  const [usableHeroImage, onHeroImageError] = useArtworkSrc(heroImage);
   const reduce = useReducedMotion();
-  const ambient = useAmbientColor(live ? null : heroImage);
+  const ambient = useAmbientColor(live ? null : usableHeroImage);
 
   if (isLoading || !data) {
     return <Skeleton className="h-[42vh] min-h-[300px] w-full rounded-2xl" />;
@@ -56,10 +58,11 @@ export function BrowseHero({
       key={featured.key}
       className="relative h-[42vh] min-h-[300px] w-full overflow-hidden rounded-2xl border border-border bg-card"
     >
-      {heroImage && !live ? (
+      {usableHeroImage && !live ? (
         <motion.img
-          src={heroImage}
+          src={usableHeroImage}
           alt=""
+          onError={onHeroImageError}
           decoding="async"
           className="absolute inset-0 h-full w-full object-cover object-top"
           initial={reduce ? false : { scale: 1.08 }}

@@ -55,6 +55,7 @@ import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
 import { useCaptionStyle } from "./useCaptionStyle";
 import { useAirPlay } from "./useAirPlay";
 import { AirPlayButton, AirPlayOverlay } from "./AirPlay";
+import { Artwork } from "@/components/Artwork";
 
 export type PlayMediaKind = "live" | "vod" | "episode";
 
@@ -1988,14 +1989,12 @@ function CinemaPanel({
       ) : (
         <div className="flex h-full items-center gap-5 px-8">
           <div className="aspect-[2/3] h-40 shrink-0 overflow-hidden rounded-lg bg-neutral-800">
-            {media.posterUrl && (
-              <img
-                src={media.posterUrl}
-                alt=""
-                className="h-full w-full object-cover"
-                loading="lazy"
-              />
-            )}
+            <Artwork
+              src={media.posterUrl}
+              alt=""
+              className="h-full w-full object-cover"
+              loading="lazy"
+            />
           </div>
           <div className="min-w-0">
             <p className="text-lg font-semibold text-white">{media.title}</p>
@@ -2030,16 +2029,13 @@ function ChannelTile({
       )}
     >
       <div className="flex h-16 w-full items-center justify-center overflow-hidden rounded bg-neutral-800">
-        {logoUrl ? (
-          <img
-            src={logoUrl}
-            alt=""
-            loading="lazy"
-            className="max-h-full max-w-full object-contain"
-          />
-        ) : (
-          <Radio className="h-5 w-5 text-white/40" />
-        )}
+        <Artwork
+          src={logoUrl}
+          alt=""
+          loading="lazy"
+          className="max-h-full max-w-full object-contain"
+          fallback={<Radio className="h-5 w-5 text-white/40" />}
+        />
       </div>
       <span className="line-clamp-2 text-[11px] font-medium text-white/85">{title}</span>
     </button>
@@ -2279,13 +2275,11 @@ function NativePlaybackBackdrop({
 
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
-      {posterUrl && (
-        <img
-          src={posterUrl}
-          alt=""
-          className="absolute inset-0 h-full w-full object-cover opacity-25 blur-xl scale-110"
-        />
-      )}
+      <Artwork
+        src={posterUrl}
+        alt=""
+        className="absolute inset-0 h-full w-full object-cover opacity-25 blur-xl scale-110"
+      />
       <div className="absolute inset-0 bg-black/70" />
       <div className="absolute inset-0 flex items-center justify-center px-6">
         <div className="max-w-md text-center">
