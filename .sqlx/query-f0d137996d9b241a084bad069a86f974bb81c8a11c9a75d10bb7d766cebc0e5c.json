@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM pending_episode_history WHERE source_id = ? AND episode_key = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f0d137996d9b241a084bad069a86f974bb81c8a11c9a75d10bb7d766cebc0e5c"
+}

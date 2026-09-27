@@ -362,3 +362,24 @@ paths use the same order via `COALESCE`.
   are one film is decided by server-side entity resolution, and a merged entity
   lists its versions in the detail view. The legacy search path's grouping key
   now keeps the release year, so remakes never group.
+
+### Episode resume across refresh
+
+A refresh replaces a source's rows, and episode history is addressed by row ID.
+Refresh now snapshots episode history alongside movie and live history:
+
+- **Row back after the refresh** (M3U, where episodes are part of the catalog):
+  the history is restored onto the row with the same stream URL.
+- **Row not back yet** (Xtream, where episodes are re-fetched only when a series
+  is opened): the history is parked in `pending_episode_history` (migration
+  0029) under a durable, secret-free key,
+  `catalog::media::episode_binding_key`. For Xtream that key is the provider
+  episode ID, so it survives credential rotation; otherwise it's the locator
+  digest.
+- **Re-attach:** parked history is re-attached by key whenever episode rows are
+  inserted: after an import's restore, and after a lazy episode fetch. A newer
+  history row is never overwritten.
+- **Continue Watching:** after a published refresh, up to 10 series with parked
+  history (most recent first) are re-fetched in the background, so their
+  episodes reappear without opening each series. A failed re-fetch leaves the
+  history parked until the series is opened.

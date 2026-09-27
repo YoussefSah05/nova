@@ -302,16 +302,47 @@ pub(crate) async fn run_source_import(
         });
     }
 
-    run_import(
+    let published = run_import(
         source_id,
         rx,
-        pool,
+        std::sync::Arc::clone(&pool),
         |progress| {
             let _ = app.emit("playlist:import:progress", progress);
         },
         mode,
     )
-    .await
+    .await;
+    if published && mode == ImportMode::Replace {
+        refetch_series_with_parked_history(pool, source_id);
+    }
+    published
+}
+
+/// Series whose episode history a refresh had to park (Xtream episodes only
+/// come back when re-fetched) are re-fetched in the background, so their
+/// resume points reappear in Continue Watching without opening each series.
+const MAX_BACKGROUND_SERIES_REFETCH: i64 = 10;
+
+fn refetch_series_with_parked_history(pool: std::sync::Arc<sqlx::SqlitePool>, source_id: i64) {
+    tokio::spawn(async move {
+        let titles = match WatchHistoryRepository::new(&pool)
+            .series_with_pending_episodes(source_id, MAX_BACKGROUND_SERIES_REFETCH)
+            .await
+        {
+            Ok(titles) => titles,
+            Err(e) => {
+                tracing::warn!(source_id, error = %e, "could not list series to re-fetch");
+                return;
+            }
+        };
+        for title in titles {
+            // Best effort: a failure leaves the history parked until the
+            // series is opened.
+            if let Err(e) = fetch_series_episodes(&pool, source_id, &title).await {
+                tracing::debug!(source_id, error = ?e, "background episode re-fetch failed");
+            }
+        }
+    });
 }
 
 // ── Browse commands (Phase 2) ─────────────────────────────────────────────────
@@ -1408,6 +1439,9 @@ async fn restore_user_state(
     VodRepository::restore_flags_tx(tx, source_id, &snap.vod_flags).await?;
     SeriesRepository::apply_series_flags_tx(tx, source_id, &snap.series_flags).await?;
     WatchHistoryRepository::restore_tx(tx, source_id, &snap.watch).await?;
+    // Episodes that came back under a different URL (M3U credential change)
+    // pick up their parked history by durable key.
+    WatchHistoryRepository::reattach_pending_for_source_tx(tx, source_id).await?;
     Ok(())
 }
 
@@ -1980,6 +2014,163 @@ mod stabilization_tests {
             .unwrap();
         assert_eq!(active.id, active_id);
         assert_eq!(active.counts.movie, 60);
+    }
+
+    fn episode_entry(series: &str, season: u32, episode: u32, url: &str) -> ParsedEntry {
+        ParsedEntry {
+            kind: MediaKind::Series,
+            series_title: Some(series.into()),
+            clean_title: series.into(),
+            season: Some(season),
+            episode: Some(episode),
+            stream_url: url.into(),
+            ..entry(series)
+        }
+    }
+
+    async fn episode_id(pool: &sqlx::SqlitePool, url: &str) -> i64 {
+        sqlx::query_scalar("SELECT id FROM series_episodes WHERE stream_url = ?")
+            .bind(url)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn m3u_episode_resume_survives_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("m3u", "test", "https://example.invalid/list.m3u")
+            .await
+            .unwrap()
+            .id;
+        let rows = || {
+            vec![
+                Ok(entry("A newer title listed first")),
+                Ok(episode_entry(
+                    "Dark",
+                    1,
+                    1,
+                    "https://cdn.example/dark/s01e01.mp4",
+                )),
+                Ok(episode_entry(
+                    "Dark",
+                    1,
+                    2,
+                    "https://cdn.example/dark/s01e02.mp4",
+                )),
+            ]
+        };
+        import(pool.clone(), id, rows(), ImportMode::Append).await;
+        let history = WatchHistoryRepository::new(&pool);
+        let e2 = episode_id(&pool, "https://cdn.example/dark/s01e02.mp4").await;
+        history
+            .record_progress("episode", e2, 1234.0, Some(3000.0), false, None)
+            .await
+            .unwrap();
+
+        let ok = import(pool.clone(), id, rows(), ImportMode::Replace).await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+        let e2_new = episode_id(&pool, "https://cdn.example/dark/s01e02.mp4").await;
+        let resume = history.resume_position("episode", e2_new).await.unwrap();
+        assert_eq!(
+            resume.map(|r| r.position_sec),
+            Some(1234.0),
+            "resume survives refresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn xtream_episode_resume_is_parked_then_reattached_after_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create(
+                "xtream",
+                "test",
+                "http://h:80/get.php?username=u&password=old",
+            )
+            .await
+            .unwrap()
+            .id;
+        let sentinel = || vec![Ok(episode_entry("Show", 0, 0, "xtream://series/42"))];
+        import(pool.clone(), id, sentinel(), ImportMode::Append).await;
+        // The series is opened: episodes are fetched lazily (simulated).
+        let fetched = |password: &str| {
+            let url = format!("http://h:80/series/u/{password}/293257.mkv");
+            vec![SeriesEpisode {
+                id: 0,
+                source_id: id,
+                series_title: "Show".into(),
+                category: None,
+                season: 1,
+                episode: 3,
+                episode_title: Some("Pilot".into()),
+                logo_url: None,
+                stream_url: url,
+                added_at: None,
+                numbering: nova_core::EpisodeNumberingKind::SeasonEpisode,
+                evidence: SourceEvidence::default(),
+            }]
+        };
+        let series = SeriesRepository::new(&pool);
+        series
+            .replace_series_episodes(id, "Show", &fetched("old"))
+            .await
+            .unwrap();
+        let history = WatchHistoryRepository::new(&pool);
+        let ep = episode_id(&pool, "http://h:80/series/u/old/293257.mkv").await;
+        history
+            .record_progress("episode", ep, 600.0, Some(2400.0), false, Some("source"))
+            .await
+            .unwrap();
+
+        // Refresh: only the sentinel comes back, so the history is parked.
+        let ok = import(pool.clone(), id, sentinel(), ImportMode::Replace).await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+        let parked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_episode_history")
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(parked, 1);
+        assert_eq!(
+            history.series_with_pending_episodes(id, 10).await.unwrap(),
+            vec!["Show".to_string()],
+            "queued for the background re-fetch"
+        );
+        let stored: Vec<String> =
+            sqlx::query_scalar("SELECT episode_key FROM pending_episode_history")
+                .fetch_all(&*pool)
+                .await
+                .unwrap();
+        assert!(
+            !stored[0].contains("old"),
+            "no credentials in the parking table"
+        );
+
+        // Re-fetched after a credential rotation: the durable key still matches.
+        series
+            .replace_series_episodes(id, "Show", &fetched("new"))
+            .await
+            .unwrap();
+        let ep_new = episode_id(&pool, "http://h:80/series/u/new/293257.mkv").await;
+        let resume = history
+            .resume_position("episode", ep_new)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resume.position_sec, 600.0);
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_episode_history")
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 0, "re-attached exactly once");
+        let cw = history.list_continue_watching(10).await.unwrap();
+        assert!(
+            cw.iter().any(|c| c.media_id == ep_new),
+            "back in Continue Watching"
+        );
     }
 
     #[tokio::test]

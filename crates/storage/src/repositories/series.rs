@@ -236,6 +236,8 @@ impl<'a> SeriesRepository<'a> {
             .execute(&mut *tx)
             .await?;
         }
+        // Episode history parked by a refresh comes back with its episodes.
+        crate::WatchHistoryRepository::reattach_pending_for_source_tx(&mut tx, source_id).await?;
         tx.commit().await?;
         Ok(())
     }

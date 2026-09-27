@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT position_sec as \"position_sec!: f64\",\n                          duration_sec as \"duration_sec?: f64\",\n                          watched_at as \"watched_at!: i64\",\n                          completed as \"completed!: i64\",\n                          caption_mode as \"caption_mode?: String\"\n                   FROM pending_episode_history WHERE source_id = ? AND episode_key = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "position_sec!: f64",
+        "ordinal": 0,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "watched_at!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "completed!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "caption_mode?: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "1f8f43d41e995bf3100154660e9b604aeea4a854102008399369b8508bec744b"
+}

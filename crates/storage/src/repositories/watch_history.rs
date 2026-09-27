@@ -1,3 +1,4 @@
+use nova_core::catalog::media::episode_binding_key;
 use nova_core::{now_ts, ContinueWatchingItem};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
@@ -6,12 +7,14 @@ use crate::repositories::canonical::CanonicalRepository;
 
 /// A `watch_history` row captured before a refresh, keyed by the media's
 /// `stream_url` so it can be re-pointed at the new row IDs after re-import.
-/// Only `vod`/`live` are snapshot — episodes are lazy-fetched and get new IDs,
-/// so their resume can't be remapped.
+/// Episodes whose rows are not back after the refresh (Xtream episodes are
+/// re-fetched lazily) are parked in `pending_episode_history` instead.
 #[derive(Debug, Clone)]
 pub struct WatchSnapshot {
     pub media_kind: String,
     pub stream_url: String,
+    /// The series an episode belonged to (episodes only).
+    pub series_title: Option<String>,
     pub position_sec: f64,
     pub duration_sec: Option<f64>,
     pub completed: bool,
@@ -97,8 +100,8 @@ impl<'a> WatchHistoryRepository<'a> {
         Ok(())
     }
 
-    /// Snapshot resume state for a source's `vod`/`live` media, keyed by
-    /// `stream_url`, so refresh can restore it onto the re-imported rows.
+    /// Snapshot resume state for a source's `vod`/`live`/`episode` media,
+    /// keyed by `stream_url`, so refresh can restore it onto the new rows.
     pub async fn snapshot_for_source_tx(
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
@@ -111,11 +114,15 @@ impl<'a> WatchHistoryRepository<'a> {
                 wh.completed    as "completed!: i64",
                 wh.watched_at   as "watched_at!: i64",
                 wh.caption_mode as "caption_mode?: String",
-                COALESCE(v.stream_url, c.stream_url) as "stream_url!: String"
+                COALESCE(v.stream_url, c.stream_url, e.stream_url) as "stream_url!: String",
+                e.series_title  as "series_title?: String"
                FROM watch_history wh
                LEFT JOIN vod_items v ON wh.media_kind = 'vod'  AND v.id = wh.media_id AND v.source_id = ?
                LEFT JOIN channels  c ON wh.media_kind = 'live' AND c.id = wh.media_id AND c.source_id = ?
-               WHERE v.id IS NOT NULL OR c.id IS NOT NULL"#,
+               LEFT JOIN series_episodes e
+                 ON wh.media_kind = 'episode' AND e.id = wh.media_id AND e.source_id = ?
+               WHERE v.id IS NOT NULL OR c.id IS NOT NULL OR e.id IS NOT NULL"#,
+            source_id,
             source_id,
             source_id,
         )
@@ -126,6 +133,7 @@ impl<'a> WatchHistoryRepository<'a> {
             .map(|r| WatchSnapshot {
                 media_kind: r.media_kind,
                 stream_url: r.stream_url,
+                series_title: r.series_title,
                 position_sec: r.position_sec,
                 duration_sec: r.duration_sec,
                 completed: r.completed != 0,
@@ -137,7 +145,7 @@ impl<'a> WatchHistoryRepository<'a> {
 
     /// Delete a source's `watch_history` rows (vod/live/episode) ahead of a
     /// re-import. Must run while the media rows still exist (the subqueries
-    /// resolve `media_id`). Episodes are cleared (can't be remapped).
+    /// resolve `media_id`); take [`Self::snapshot_for_source_tx`] first.
     pub async fn delete_for_source_media_tx(
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
@@ -157,8 +165,10 @@ impl<'a> WatchHistoryRepository<'a> {
     }
 
     /// Re-insert snapshot rows, resolving the new `media_id` from the
-    /// re-imported `vod_items`/`channels` row with the same `stream_url`.
-    /// Rows whose URL no longer exists (removed upstream) are skipped.
+    /// re-imported row with the same `stream_url`. Movie/live rows whose URL
+    /// no longer exists (removed upstream) are skipped. An episode whose row is
+    /// not back yet is parked under its durable key and re-attached when the
+    /// series' episodes are re-fetched ([`Self::reattach_pending_episodes_tx`]).
     pub async fn restore_tx(
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
@@ -182,9 +192,22 @@ impl<'a> WatchHistoryRepository<'a> {
                 .fetch_optional(&mut **tx)
                 .await?
                 .flatten(),
+                "episode" => sqlx::query_scalar!(
+                    "SELECT id FROM series_episodes WHERE source_id = ? AND stream_url = ? LIMIT 1",
+                    source_id,
+                    r.stream_url,
+                )
+                .fetch_optional(&mut **tx)
+                .await?
+                .flatten(),
                 _ => None,
             };
-            let Some(media_id) = new_id else { continue };
+            let Some(media_id) = new_id else {
+                if r.media_kind == "episode" {
+                    Self::park_episode_tx(tx, source_id, r).await?;
+                }
+                continue;
+            };
             let completed_flag: i64 = if r.completed { 1 } else { 0 };
             sqlx::query!(
                 r#"INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed, caption_mode)
@@ -207,6 +230,148 @@ impl<'a> WatchHistoryRepository<'a> {
             .await?;
         }
         Ok(())
+    }
+
+    async fn park_episode_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+        r: &WatchSnapshot,
+    ) -> Result<(), StorageError> {
+        let key = episode_binding_key(&r.stream_url);
+        let series = r.series_title.as_deref().unwrap_or("");
+        let completed: i64 = r.completed.into();
+        sqlx::query!(
+            r#"INSERT INTO pending_episode_history
+                   (source_id, episode_key, series_title, position_sec, duration_sec,
+                    watched_at, completed, caption_mode)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source_id, episode_key) DO UPDATE SET
+                   series_title = excluded.series_title,
+                   position_sec = excluded.position_sec,
+                   duration_sec = excluded.duration_sec,
+                   watched_at   = excluded.watched_at,
+                   completed    = excluded.completed,
+                   caption_mode = excluded.caption_mode
+               WHERE excluded.watched_at >= pending_episode_history.watched_at"#,
+            source_id,
+            key,
+            series,
+            r.position_sec,
+            r.duration_sec,
+            r.watched_at,
+            completed,
+            r.caption_mode,
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// Re-attach parked episode history to freshly inserted episode rows
+    /// (`(row id, stream_url)`), matching on the durable episode key. A newer
+    /// history row for the episode (watched since) is never overwritten.
+    pub async fn reattach_pending_episodes_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+        episodes: &[(i64, String)],
+    ) -> Result<u64, StorageError> {
+        let mut attached = 0;
+        for (media_id, stream_url) in episodes {
+            let key = episode_binding_key(stream_url);
+            let Some(p) = sqlx::query!(
+                r#"SELECT position_sec as "position_sec!: f64",
+                          duration_sec as "duration_sec?: f64",
+                          watched_at as "watched_at!: i64",
+                          completed as "completed!: i64",
+                          caption_mode as "caption_mode?: String"
+                   FROM pending_episode_history WHERE source_id = ? AND episode_key = ?"#,
+                source_id,
+                key,
+            )
+            .fetch_optional(&mut **tx)
+            .await?
+            else {
+                continue;
+            };
+            sqlx::query!(
+                r#"INSERT INTO watch_history
+                       (media_kind, media_id, position_sec, duration_sec, watched_at, completed, caption_mode)
+                   VALUES ('episode', ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(media_kind, media_id) DO UPDATE SET
+                       position_sec = excluded.position_sec,
+                       duration_sec = excluded.duration_sec,
+                       watched_at   = excluded.watched_at,
+                       completed    = excluded.completed,
+                       caption_mode = excluded.caption_mode
+                   WHERE excluded.watched_at > watch_history.watched_at"#,
+                media_id,
+                p.position_sec,
+                p.duration_sec,
+                p.watched_at,
+                p.completed,
+                p.caption_mode,
+            )
+            .execute(&mut **tx)
+            .await?;
+            sqlx::query!(
+                "DELETE FROM pending_episode_history WHERE source_id = ? AND episode_key = ?",
+                source_id,
+                key,
+            )
+            .execute(&mut **tx)
+            .await?;
+            attached += 1;
+        }
+        Ok(attached)
+    }
+
+    /// Re-attach any parked episode history of a source to its current
+    /// episode rows. Cheap no-op when nothing is parked (the common case).
+    pub async fn reattach_pending_for_source_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+    ) -> Result<u64, StorageError> {
+        let pending = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) as "n!: i64" FROM pending_episode_history WHERE source_id = ?"#,
+            source_id,
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+        if pending == 0 {
+            return Ok(0);
+        }
+        let rows: Vec<(i64, String)> = sqlx::query!(
+            r#"SELECT id as "id!: i64", stream_url as "stream_url!: String"
+               FROM series_episodes WHERE source_id = ? AND season > 0"#,
+            source_id,
+        )
+        .fetch_all(&mut **tx)
+        .await?
+        .into_iter()
+        .map(|r| (r.id, r.stream_url))
+        .collect();
+        Self::reattach_pending_episodes_tx(tx, source_id, &rows).await
+    }
+
+    /// Series of a source with parked episode history, most recent first:
+    /// the ones worth re-fetching so Continue Watching refills after refresh.
+    pub async fn series_with_pending_episodes(
+        &self,
+        source_id: i64,
+        limit: i64,
+    ) -> Result<Vec<String>, StorageError> {
+        let rows = sqlx::query_scalar!(
+            r#"SELECT series_title as "t!: String" FROM pending_episode_history
+               WHERE source_id = ? AND series_title <> ''
+               GROUP BY series_title
+               ORDER BY MAX(watched_at) DESC
+               LIMIT ?"#,
+            source_id,
+            limit,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows)
     }
 
     /// Returns the latest position for a (kind, id) - used when opening the

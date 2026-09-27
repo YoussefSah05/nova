@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id FROM series_episodes WHERE source_id = ? AND stream_url = ? LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "d8ea1fecfd8a6033277816ac3b5c58483e1c2fbaf70ec04da52bcc49f74c05c3"
+}

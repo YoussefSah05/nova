@@ -36,6 +36,22 @@ pub fn binding_key(upstream_id: Option<&str>, locator: &str) -> String {
     }
 }
 
+/// Durable, secret-free key for an episode stream, stable across refreshes.
+/// Xtream episode URLs (`…/series/<user>/<pass>/<episode_id>.<ext>`) key on
+/// the provider's episode ID, so a credential rotation keeps the key; any
+/// other URL keys on its locator digest.
+pub fn episode_binding_key(stream_url: &str) -> String {
+    let path = stream_url.split(['?', '#']).next().unwrap_or(stream_url);
+    let segments: Vec<&str> = path.rsplit('/').take(4).collect();
+    if let [file, _pass, _user, "series"] = segments[..] {
+        let id = file.split('.').next().unwrap_or("");
+        if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) {
+            return upstream_binding_key(&format!("xtream:episode:{id}"));
+        }
+    }
+    locator_binding_key(stream_url)
+}
+
 /// A canonical media card. Artwork URLs are public display assets.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,6 +136,25 @@ mod tests {
         // Namespaces never collide even for identical input bytes.
         assert_ne!(upstream_binding_key("x"), locator_binding_key("x"));
         assert_eq!(binding_key(Some("  "), url), locator);
+    }
+
+    #[test]
+    fn episode_keys_survive_credential_rotation_and_hide_secrets() {
+        let old = episode_binding_key("http://h:80/series/alice/s3cret/293257.mkv");
+        let rotated = episode_binding_key("http://h:80/series/alice/n3w/293257.mkv");
+        assert_eq!(old, rotated);
+        assert_ne!(
+            old,
+            episode_binding_key("http://h:80/series/alice/s3cret/293258.mkv")
+        );
+        assert!(!old.contains("s3cret") && old.starts_with("u1-"));
+        // Not an Xtream episode URL: keyed on the whole locator.
+        let m3u = episode_binding_key("https://cdn.example/show/s01e02.mp4");
+        assert!(m3u.starts_with("l1-"));
+        assert_eq!(
+            m3u,
+            episode_binding_key("https://cdn.example/show/s01e02.mp4")
+        );
     }
 
     #[test]

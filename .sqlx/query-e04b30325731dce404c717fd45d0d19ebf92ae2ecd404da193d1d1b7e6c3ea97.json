@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO watch_history\n                       (media_kind, media_id, position_sec, duration_sec, watched_at, completed, caption_mode)\n                   VALUES ('episode', ?, ?, ?, ?, ?, ?)\n                   ON CONFLICT(media_kind, media_id) DO UPDATE SET\n                       position_sec = excluded.position_sec,\n                       duration_sec = excluded.duration_sec,\n                       watched_at   = excluded.watched_at,\n                       completed    = excluded.completed,\n                       caption_mode = excluded.caption_mode\n                   WHERE excluded.watched_at > watch_history.watched_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "e04b30325731dce404c717fd45d0d19ebf92ae2ecd404da193d1d1b7e6c3ea97"
+}

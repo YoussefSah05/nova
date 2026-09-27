@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT series_title as \"t!: String\" FROM pending_episode_history\n               WHERE source_id = ? AND series_title <> ''\n               GROUP BY series_title\n               ORDER BY MAX(watched_at) DESC\n               LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "t!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2e03c650ec9da9771539be78f05d8ff537eb03331e86985341b4504657e34dad"
+}
