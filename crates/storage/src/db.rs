@@ -31,6 +31,10 @@ pub async fn init_profile_db(path: &str) -> Result<SqlitePool, StorageError> {
     // Entity resolution (0023): resolve once for profiles that predate it or
     // were last resolved by an older rule set; a no-op otherwise.
     canonical.ensure_movies_resolved().await?;
+    // Canonical search projection (0030): built once, rebuilt on version bumps.
+    crate::repositories::CatalogSearchRepository::new(&pool)
+        .ensure_movies()
+        .await?;
     Ok(pool)
 }
 

@@ -15,16 +15,16 @@ pub mod snapshots;
 pub use db::{init_app_db, init_profile_db};
 pub use error::StorageError;
 pub use repositories::{
-    from_blob, to_blob, CanonicalRepository, CaptionStyleRepository, ChannelRepository,
-    CompileStats, EmbeddingRepository, EnrichUpdate, EpgSource, EpgSourcesRepository,
-    ExternalLibraryRecord, ExternalMatch, ExternalMatchRepository, ExternalMatchWrite,
-    ExternalRegisteredModel, FailedAttempt, FailureStatus, Job, JobRepository, LineageEntry,
-    MatchMethod, MatchPriority, MatchedMetadata, ModelRepository, MovieFilters, MovieMatchWork,
-    NowAndNext, PlaybackRepository, ProfileRepository, ProfileSettingsRepository,
-    ProgramsRepository, Publication, PublicationMode, PublicationRepository, RegisteredModel,
-    ResolutionReport, ResolvedStreamUrl, ResumePosition, SearchHit, SearchRepository,
-    SeriesFlagSnapshot, SeriesRepository, SeriesTmdbQuery, SeriesTmdbWrite, SourceRepository,
-    SourceSegment, StoredTranscript, TmdbCacheRepository, TranscriptLine, TranscriptRepository,
-    TranslationRepository, TranslationRow, UnenrichedRow, VodRepository, WatchHistoryRepository,
-    WatchSnapshot, TMDB_MOVIE,
+    from_blob, to_blob, CanonicalRepository, CaptionStyleRepository, CatalogSearchRepository,
+    ChannelRepository, CompileStats, EmbeddingRepository, EnrichUpdate, EpgSource,
+    EpgSourcesRepository, ExternalLibraryRecord, ExternalMatch, ExternalMatchRepository,
+    ExternalMatchWrite, ExternalRegisteredModel, FailedAttempt, FailureStatus, Job, JobRepository,
+    LineageEntry, MatchMethod, MatchPriority, MatchedMetadata, ModelRepository, MovieFilters,
+    MovieMatchWork, MovieSearchCandidate, NowAndNext, PlaybackRepository, ProfileRepository,
+    ProfileSettingsRepository, ProgramsRepository, Publication, PublicationMode,
+    PublicationRepository, RegisteredModel, ResolutionReport, ResolvedStreamUrl, ResumePosition,
+    SearchHit, SearchRepository, SeriesFlagSnapshot, SeriesRepository, SeriesTmdbQuery,
+    SeriesTmdbWrite, SourceRepository, SourceSegment, StoredTranscript, TmdbCacheRepository,
+    TranscriptLine, TranscriptRepository, TranslationRepository, TranslationRow, UnenrichedRow,
+    VodRepository, WatchHistoryRepository, WatchSnapshot, TMDB_MOVIE,
 };

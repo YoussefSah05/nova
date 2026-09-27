@@ -413,7 +413,8 @@ impl TmdbRequest {
 
     fn base_key(&self) -> String {
         match self {
-            Self::MovieDetails(id) => format!("movie-details::{id}"),
+            // v2: details now include credits and keywords.
+            Self::MovieDetails(id) => format!("movie-details-v2::{id}"),
             Self::SearchMovie { query, year } => match year {
                 Some(y) => format!("movie::{}::{y}", query.to_lowercase()),
                 None => format!("movie::{}::noyear", query.to_lowercase()),
@@ -587,6 +588,8 @@ fn matched_metadata(m: TmdbMatch, language: &str) -> MatchedMetadata {
         backdrop_url: m.backdrop_url,
         overview: m.overview,
         genres: canonicalize_genres(&m.genres),
+        people: m.people,
+        keywords: m.keywords,
     }
 }
 
@@ -699,7 +702,20 @@ async fn match_movie(
     Ok(match decide(&ranked) {
         Decision::Matched(i) => {
             evidence.outcome = "matched".into();
-            let m = TmdbMatch::from_item(&ranked[i].item, &work.title, genres);
+            let mut m = TmdbMatch::from_item(&ranked[i].item, &work.title, genres);
+            // Search results carry no credits or keywords: one details request
+            // (cached) adds them for search. Best effort: a failure keeps the
+            // match without them.
+            let details = TmdbRequest::MovieDetails(m.tmdb_id);
+            evidence.requests.push(details.cache_key(tmdb.language()));
+            if let Ok(Some(body)) = tmdb.fetch(&details).await {
+                if let Ok(item) = parse_details(&body) {
+                    let full = TmdbMatch::from_item(&item, &work.title, genres);
+                    m.people = full.people;
+                    m.keywords = full.keywords;
+                    m.original_title = m.original_title.or(full.original_title);
+                }
+            }
             let bp = nova_enrich::tmdb::score_bp(ranked[i].score);
             write(Some(m), MatchMethod::Search, Some(bp), &evidence)
         }
@@ -933,7 +949,7 @@ mod tmdb_matching_tests {
 
     #[tokio::test]
     async fn a_corroborated_trusted_id_matches_without_searching() {
-        let tmdb = Fixture::default().with("movie-details::238", GODFATHER);
+        let tmdb = Fixture::default().with("movie-details-v2::238", GODFATHER);
         let w = match_movie(
             &tmdb,
             &work("Le Parrain", Some(1972), &[238]),
@@ -941,7 +957,7 @@ mod tmdb_matching_tests {
         )
         .await
         .unwrap();
-        assert_eq!(tmdb.requested(), vec!["movie-details::238"]);
+        assert_eq!(tmdb.requested(), vec!["movie-details-v2::238"]);
         assert_eq!(w.method, MatchMethod::TrustedId);
         assert_eq!(w.confidence_bp, Some(10_000));
         let m = w.matched.as_ref().unwrap();
@@ -960,7 +976,7 @@ mod tmdb_matching_tests {
             r#"{"results": [{"id": 238, "title": "The Godfather", "release_date": "1972-03-14"}]}"#;
         // The provider ID points at a 1972 film, but the catalog says 1990.
         let tmdb = Fixture::default()
-            .with("movie-details::238", GODFATHER)
+            .with("movie-details-v2::238", GODFATHER)
             .with("movie::le parrain::1990", EMPTY)
             .with("movie::le parrain::noyear", EMPTY)
             .with("multi::le parrain", EMPTY);
@@ -990,8 +1006,12 @@ mod tmdb_matching_tests {
         assert!(e["trustedId"]["check"].is_null());
         assert_eq!(
             tmdb.requested(),
-            vec!["movie-details::999", "movie::the godfather::1972"],
-            "the cascade stops at the first decisive search"
+            vec![
+                "movie-details-v2::999",
+                "movie::the godfather::1972",
+                "movie-details-v2::238"
+            ],
+            "the cascade stops at the first decisive search, then fetches details"
         );
     }
 
@@ -1017,7 +1037,10 @@ mod tmdb_matching_tests {
         assert_eq!(evidence(&w)["language"], "fr-FR");
         assert_eq!(
             tmdb.requested(),
-            vec!["movie::le parrain::1972::fr-FR"],
+            vec![
+                "movie::le parrain::1972::fr-FR",
+                "movie-details-v2::238::fr-FR"
+            ],
             "non-default languages get their own cache keys"
         );
         assert_eq!(

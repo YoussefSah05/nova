@@ -765,6 +765,23 @@ async fn scale_probe_compile_30k() {
         .unwrap();
     tx.rollback().await.unwrap();
     eprintln!("publish validation {:?}", started.elapsed());
+    let started = std::time::Instant::now();
+    let mut tx = db.pool.begin().await.unwrap();
+    crate::CatalogSearchRepository::rebuild_movies_tx(&mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let rebuild = started.elapsed();
+    let started = std::time::Instant::now();
+    let hits = crate::CatalogSearchRepository::new(&db.pool)
+        .movie_candidates(db.source_id, "\"film\"* \"2999\"*", 300)
+        .await
+        .unwrap();
+    eprintln!(
+        "search index rebuild {rebuild:?}, query {:?} ({} hits)",
+        started.elapsed(),
+        hits.len()
+    );
     eprintln!("full refresh (delete+insert+compile) {refresh:?}, page {list:?} ({}), entity lookup {lookup:?}, reopen backfill {reopen:?}, resolution {resolution:?} ({report:?})", page.len());
 }
 

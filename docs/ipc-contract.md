@@ -447,3 +447,15 @@ committed batch of matches, and clients may refresh on it.
 language of TMDB titles and overviews. It is read and written through
 `get_profile_settings` / `set_profile_settings` like other settings, and
 invalid tags fall back to `en-US`.
+
+## Canonical movie search (P12)
+
+`search_movies { profileId, sourceId, query, limit? } -> CanonicalMediaSummary[]`
+
+- It returns canonical entities, one per entity, among those with an available
+  variant in `sourceId`.
+- Order: exact title first, then title prefix, title words, aliases and
+  metadata (genres, keywords, people). The optional semantic leg never outranks
+  a title match.
+- It replaces `semantic_search_catalog` in the browse search and the Command
+  palette. `semantic_search_catalog` still exists but is unused by the UI.

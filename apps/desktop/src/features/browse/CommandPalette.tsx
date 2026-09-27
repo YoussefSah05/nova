@@ -26,13 +26,13 @@ import {
   Tv,
   Users,
 } from "lucide-react";
-import type { ChannelGroup, SeriesSummary, VodItem } from "@/types";
+import type { CanonicalMediaSummary, ChannelGroup, SeriesSummary } from "@/types";
 import { motion, AnimatePresence, useReducedMotion } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import {
   channelGroupToItem,
   seriesToItem,
-  vodToItem,
+  movieToItem,
   type BrowseItem,
   type BrowseTab,
 } from "./queries";
@@ -89,13 +89,13 @@ export function CommandPalette(props: CommandPaletteProps) {
       const base = { profileId, sourceId, query: q, limit: PER_TYPE };
       const [live, movies, series] = await Promise.all([
         invoke<ChannelGroup[]>("semantic_search_channels", base).catch(() => []),
-        invoke<VodItem[]>("semantic_search_catalog", base).catch(() => []),
+        invoke<CanonicalMediaSummary[]>("search_movies", base).catch(() => []),
         invoke<SeriesSummary[]>("semantic_search_series", base).catch(() => []),
       ]);
       if (cancelled) return;
       setResults({
         live: live.slice(0, PER_TYPE).map(channelGroupToItem),
-        movies: movies.slice(0, PER_TYPE).map(vodToItem),
+        movies: movies.slice(0, PER_TYPE).map(movieToItem),
         series: series.slice(0, PER_TYPE).map(seriesToItem),
       });
       setLoading(false);

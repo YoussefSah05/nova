@@ -1,5 +1,6 @@
 pub mod canonical;
 pub mod caption_style;
+pub mod catalog_search;
 pub mod channels;
 pub mod embeddings;
 pub mod enrich;
@@ -26,6 +27,7 @@ pub use canonical::{
     MAX_REDIRECT_HOPS,
 };
 pub use caption_style::CaptionStyleRepository;
+pub use catalog_search::{CatalogSearchRepository, MovieSearchCandidate, MOVIE_SEARCH_VERSION};
 pub use channels::ChannelRepository;
 pub use embeddings::{from_blob, to_blob, EmbeddingRepository};
 pub use enrich::{EnrichUpdate, SeriesTmdbQuery, SeriesTmdbWrite, UnenrichedRow};

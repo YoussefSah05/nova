@@ -224,27 +224,24 @@ async function fetchItems(
     );
   }
   if (tab === "movies") {
-    // A free-text search with no other restrictive filter goes through hybrid
-    // (semantic + keyword) retrieval so concept queries — "space adventure" —
-    // surface thematically-matching films, not just literal substring matches.
-    // It returns one fused, ranked set (no pagination), so serve it on page 0
-    // only. Category / favourites / watchlist searches stay on the lexical path
-    // (the semantic command doesn't apply those filters).
+    // A free-text search with no other restrictive filter goes through the
+    // canonical search; category / favourites / watchlist searches stay on the
+    // filtered list path.
     const q = filters.query?.trim();
     const plainSearch =
       !!q && !filters.category && !filters.favoritesOnly && !filters.watchlistOnly;
     if (plainSearch) {
+      // Canonical search: one card per entity, exact titles first, then
+      // aliases and metadata (genres, keywords, people); the semantic leg is
+      // optional and never outranks a title match. One ranked set, page 0.
       if (offset > 0) return [];
-      const hits = await invoke<VodItem[]>("semantic_search_catalog", {
+      const hits = await invoke<CanonicalMediaSummary[]>("search_movies", {
         profileId,
         sourceId,
         query: q,
         limit,
       });
-      return collapseByKey(
-        hits.map(vodToItem),
-        (item) => movieVersionKey(item) ?? item.dedupGroup ?? null
-      );
+      return hits.map(movieToItem);
     }
     // Canonical movies: one card per entity. Which copies are the same film
     // is decided server-side by entity resolution (evidence-based, never on a
@@ -314,90 +311,6 @@ function seriesGroupKey(item: BrowseItem): string | null {
     .replace(/\s+/g, " ")
     .trim();
   return key || null;
-}
-
-/// Quality/codec/source junk dropped anywhere in a movie title.
-const MOVIE_JUNK = new Set([
-  "hd",
-  "fhd",
-  "uhd",
-  "sd",
-  "hq",
-  "4k",
-  "8k",
-  "hdr",
-  "sdr",
-  "hevc",
-  "avc",
-  "h264",
-  "h265",
-  "x264",
-  "x265",
-  "aac",
-  "ac3",
-  "dts",
-  "multi",
-  "dual",
-  "vostfr",
-  "vost",
-  "webdl",
-  "webrip",
-  "hdtv",
-  "bluray",
-  "brrip",
-  "bdrip",
-  "hdrip",
-  "dvdrip",
-  "remux",
-  "truefrench",
-]);
-/// Language tags stripped only at the END of the title (where providers append
-/// them, e.g. "… Fr"); never mid-title so "Un Homme en colère" keeps "en".
-const TRAILING_LANG = new Set([
-  "fr",
-  "en",
-  "ar",
-  "eng",
-  "ara",
-  "fra",
-  "vo",
-  "vf",
-  "vff",
-  "vfq",
-  "es",
-  "esp",
-  "de",
-  "it",
-  "pt",
-  "tr",
-]);
-
-/// Grouping key for legacy (non-canonical) search results' language/source
-/// versions, derived from the RAW name. Drops the provider prefix, bracketed
-/// groups, quality junk and a trailing language tag; keeps numbers so
-/// sequels/parts stay distinct, and **keeps the release year** so remakes never
-/// group (`Scarface (1932)` vs `Scarface (1983)`), matching the server-side
-/// rule that a missing or different year never merges. `null` when no real
-/// title remains (e.g. year-only names) so those never group.
-function movieVersionKey(item: BrowseItem): string | null {
-  const raw = item.movie?.sourceTitle ?? item.vod?.name ?? item.title;
-  const year = item.movie?.year ?? item.vod?.year ?? raw.match(/\b(?:19|20)\d{2}\b/)?.[0] ?? null;
-  // Everything after the last '|' drops "FR|", "EN-AR|", "NF-FR| FR|" prefixes.
-  const afterPipe = raw.includes("|") ? raw.slice(raw.lastIndexOf("|") + 1) : raw;
-  const unbracketed = afterPipe.replace(/[([{][^)\]}]*[)\]}]/g, " ");
-  const tokens = unbracketed
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter(Boolean)
-    .filter((t) => !MOVIE_JUNK.has(t))
-    .filter((t) => !/^(?:19|20)\d{2}$/.test(t));
-  // Strip trailing language tags (one or more).
-  while (tokens.length > 1 && TRAILING_LANG.has(tokens[tokens.length - 1])) {
-    tokens.pop();
-  }
-  const key = tokens.join(" ").trim();
-  // Require some alphabetic content — never group year/number-only names.
-  return key && /\p{L}/u.test(key) ? `${key}|${year ?? "?"}` : null;
 }
 
 async function fetchCount(

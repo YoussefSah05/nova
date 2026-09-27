@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM movie_search WHERE ? IS NULL OR entity_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "62b4e779f8d908b83de08bbc21bcabf14fed336259bdb108ff2fdd124a73b2b2"
+}

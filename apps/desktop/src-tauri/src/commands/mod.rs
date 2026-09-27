@@ -4,8 +4,8 @@ use nova_core::{
     MediaKind, ParsedEntry, Profile, SeriesEpisode, SeriesSummary, Source, SourceEvidence, VodItem,
 };
 use nova_storage::{
-    init_profile_db, CanonicalRepository, ChannelRepository, EpgSourcesRepository,
-    ExternalMatchRepository, FailedAttempt, FailureStatus, ProfileRepository,
+    init_profile_db, CanonicalRepository, CatalogSearchRepository, ChannelRepository,
+    EpgSourcesRepository, ExternalMatchRepository, FailedAttempt, FailureStatus, ProfileRepository,
     ProfileSettingsRepository, PublicationMode, PublicationRepository, SeriesRepository,
     SourceRepository, VodRepository, WatchHistoryRepository, WatchSnapshot,
 };
@@ -1223,6 +1223,11 @@ async fn build_candidate(
     // Entity-owned TMDB matches survive the refresh: re-mirror them onto the
     // new rows instead of re-matching.
     ExternalMatchRepository::mirror_movies_for_source_tx(tx, source_id)
+        .await
+        .map_err(ImportFailure::storage)?;
+    // The search projection follows the resolved identities (merges, new
+    // entities, new provider titles) and publishes atomically with them.
+    CatalogSearchRepository::rebuild_movies_tx(tx)
         .await
         .map_err(ImportFailure::storage)?;
 

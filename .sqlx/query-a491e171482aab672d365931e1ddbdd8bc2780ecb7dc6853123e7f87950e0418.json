@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT movie_version as \"v!: i64\" FROM search_index_state WHERE id = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "v!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a491e171482aab672d365931e1ddbdd8bc2780ecb7dc6853123e7f87950e0418"
+}

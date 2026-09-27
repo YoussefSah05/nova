@@ -173,6 +173,7 @@ pub fn run() {
             commands::search::search_transcript,
             // Semantic / hybrid search (catalog discovery)
             commands::search::semantic_search_catalog,
+            commands::search::search_movies,
             commands::search::semantic_search_channels,
             commands::search::semantic_search_series,
             // Phase 6.2 — per-profile caption styling

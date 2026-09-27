@@ -76,6 +76,10 @@ pub struct MatchedMetadata {
     pub overview: Option<String>,
     /// Canonical genre names, primary first.
     pub genres: Vec<String>,
+    /// Directors then top-billed cast (searchable metadata).
+    pub people: Vec<String>,
+    /// TMDB keywords (searchable metadata).
+    pub keywords: Vec<String>,
 }
 
 /// One decision to persist. `matched: None` records an unresolved title.
@@ -209,6 +213,12 @@ impl<'a> ExternalMatchRepository<'a> {
             let external_id = m.map(|m| m.external_id.as_str());
             let title = m.map(|m| m.canonical_title.as_str());
             let original_title = m.and_then(|m| m.original_title.as_deref());
+            let people = m
+                .filter(|m| !m.people.is_empty())
+                .map(|m| m.people.join(", "));
+            let keywords = m
+                .filter(|m| !m.keywords.is_empty())
+                .map(|m| m.keywords.join(", "));
             let title_language = m.map(|m| m.title_language.as_str());
             let poster = m.and_then(|m| m.poster_url.as_deref());
             let backdrop = m.and_then(|m| m.backdrop_url.as_deref());
@@ -222,8 +232,8 @@ impl<'a> ExternalMatchRepository<'a> {
                        (entity_id, namespace, status, external_id, method, confidence_bp,
                         matcher_version, evidence_json, canonical_title, poster_url,
                         backdrop_url, overview, genres, primary_genre, checked_at,
-                        original_title, title_language)
-                   VALUES (?, 'tmdb:movie', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        original_title, title_language, people, keywords)
+                   VALUES (?, 'tmdb:movie', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(entity_id, namespace) DO UPDATE SET
                        status = excluded.status,
                        external_id = excluded.external_id,
@@ -239,7 +249,9 @@ impl<'a> ExternalMatchRepository<'a> {
                        primary_genre = excluded.primary_genre,
                        checked_at = excluded.checked_at,
                        original_title = excluded.original_title,
-                       title_language = excluded.title_language"#,
+                       title_language = excluded.title_language,
+                       people = excluded.people,
+                       keywords = excluded.keywords"#,
                 entity,
                 status,
                 external_id,
@@ -256,6 +268,8 @@ impl<'a> ExternalMatchRepository<'a> {
                 now,
                 original_title,
                 title_language,
+                people,
+                keywords,
             )
             .execute(&mut *tx)
             .await?;
@@ -302,6 +316,9 @@ impl<'a> ExternalMatchRepository<'a> {
             .execute(&mut *tx)
             .await?;
         }
+        // Search documents carry TMDB titles, genres, keywords and people.
+        let entities: Vec<EntityId> = writes.iter().map(|w| w.entity_id.clone()).collect();
+        crate::CatalogSearchRepository::refresh_movies_tx(&mut tx, &entities).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -482,6 +499,8 @@ mod tests {
                 backdrop_url: None,
                 overview: Some("Overview".into()),
                 genres: vec!["Drama".into(), "Crime".into()],
+                people: Vec::new(),
+                keywords: Vec::new(),
                 original_title: Some(title.into()),
                 title_language: "en-US".into(),
             }),

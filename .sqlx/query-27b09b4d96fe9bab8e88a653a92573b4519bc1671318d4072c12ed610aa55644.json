@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as \"n!: i64\" FROM (\n                SELECT series_title\n                FROM series_episodes\n                WHERE source_id = ?\n                  AND (? IS NULL OR category = ?)\n                  AND (? IS NULL OR series_title LIKE ? OR EXISTS (\n                      SELECT 1 FROM series_meta sm\n                      WHERE sm.source_id = series_episodes.source_id\n                        AND sm.series_title = series_episodes.series_title\n                        AND (sm.canonical_title LIKE ? OR sm.original_title LIKE ?)))\n                GROUP BY series_title\n                HAVING (? = 0 OR MAX(is_favorite) = 1)\n                   AND (? = 0 OR MAX(is_in_watchlist) = 1)\n              )",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "27b09b4d96fe9bab8e88a653a92573b4519bc1671318d4072c12ed610aa55644"
+}

@@ -434,6 +434,73 @@ impl<'a> CanonicalRepository<'a> {
             .collect()
     }
 
+    /// Cards for specific entities in `source_id`, in the order given
+    /// (search results). Entities without an available variant there are
+    /// skipped.
+    pub async fn movies_by_ids(
+        &self,
+        source_id: i64,
+        ids: &[EntityId],
+    ) -> Result<Vec<CanonicalMediaSummary>, StorageError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let json = serde_json::to_string(&ids.iter().map(EntityId::as_str).collect::<Vec<_>>())?;
+        let rows = sqlx::query!(
+            r#"SELECT e.id as "entity_id!: String",
+                      COALESCE(v.canonical_title, e.title, v.name) as "title!: String",
+                      v.name as "source_title!: String",
+                      v.year as "year?: i64",
+                      v.category as "category?: String",
+                      COALESCE(v.poster_url, v.logo_url) as "poster_url?: String",
+                      v.backdrop_url as "backdrop_url?: String",
+                      v.overview as "overview?: String",
+                      e.is_favorite as "is_favorite!: i64",
+                      e.is_in_watchlist as "is_in_watchlist!: i64",
+                      v.added_at as "added_at?: i64",
+                      v.dedup_group as "dedup_group?: String"
+               FROM stream_variants s
+               JOIN canonical_entities e ON e.id = s.entity_id
+               JOIN vod_items v ON v.id = s.vod_item_id
+               WHERE s.source_id = ?
+                 AND s.entity_id IN (SELECT value FROM json_each(?))
+                 AND s.vod_item_id = (
+                   SELECT MIN(r.vod_item_id) FROM stream_variants r
+                   WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)"#,
+            source_id,
+            json,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        let mut by_id: std::collections::HashMap<String, CanonicalMediaSummary> =
+            std::collections::HashMap::new();
+        for r in rows {
+            let entity_id = parse_entity(r.entity_id.clone())?;
+            by_id.insert(
+                r.entity_id,
+                CanonicalMediaSummary {
+                    entity_id,
+                    kind: ContentKind::Movie,
+                    title: r.title,
+                    source_title: r.source_title,
+                    year: r.year,
+                    category: r.category,
+                    poster_url: r.poster_url,
+                    backdrop_url: r.backdrop_url,
+                    overview: r.overview,
+                    is_favorite: r.is_favorite != 0,
+                    is_in_watchlist: r.is_in_watchlist != 0,
+                    added_at: r.added_at,
+                    dedup_group: r.dedup_group,
+                },
+            );
+        }
+        Ok(ids
+            .iter()
+            .filter_map(|id| by_id.remove(id.as_str()))
+            .collect())
+    }
+
     pub async fn count_movies(
         &self,
         source_id: i64,

@@ -33,13 +33,17 @@ const REQUEST_SPACING: Duration = Duration::from_millis(25);
 
 /// Version of the matching rules. Bump when scoring, thresholds or query
 /// building change: every stored result with an older version is re-matched.
-pub const MATCHER_VERSION: u32 = 2;
+pub const MATCHER_VERSION: u32 = 3;
 /// A search candidate must score at least this to be accepted.
 pub const MIN_CONFIDENCE: f32 = 0.6;
 /// Two *different* titles scoring this close are ambiguous: neither is taken.
 pub const AMBIGUITY_MARGIN: f32 = 0.05;
 /// Candidates kept as evidence per decision.
 pub const MAX_EVIDENCE_CANDIDATES: usize = 5;
+/// Top-billed cast members kept per title (plus directors), for search.
+pub const MAX_CAST: usize = 8;
+/// Keywords kept per title, for search.
+pub const MAX_KEYWORDS: usize = 20;
 
 // ── API response shapes ─────────────────────────────────────────────────────
 
@@ -59,6 +63,35 @@ struct GenreResponse {
 pub struct GenreEntry {
     pub id: i64,
     pub name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct Credits {
+    #[serde(default)]
+    cast: Vec<CastMember>,
+    #[serde(default)]
+    crew: Vec<CrewMember>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CastMember {
+    name: String,
+    #[serde(default)]
+    order: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CrewMember {
+    name: String,
+    #[serde(default)]
+    job: String,
+}
+
+/// `keywords` on movie details is `{keywords: [...]}` (TV uses `results`).
+#[derive(Debug, Clone, Default, Deserialize)]
+struct Keywords {
+    #[serde(default, alias = "results")]
+    keywords: Vec<GenreEntry>,
 }
 
 /// A search result or a details body (the shared fields).
@@ -92,6 +125,11 @@ pub struct TmdbItem {
     /// Present on `/search/multi` results (`movie` | `tv` | `person`).
     #[serde(default)]
     media_type: Option<String>,
+    /// Details only, with `append_to_response=credits,keywords`.
+    #[serde(default)]
+    credits: Option<Credits>,
+    #[serde(default)]
+    keywords: Option<Keywords>,
 }
 
 impl TmdbItem {
@@ -129,6 +167,10 @@ pub struct TmdbMatch {
     pub overview: Option<String>,
     /// Genre names (TMDB's), in TMDB's order.
     pub genres: Vec<String>,
+    /// Directors, then top-billed cast (details only; empty from search).
+    pub people: Vec<String>,
+    /// TMDB keywords (details only; empty from search).
+    pub keywords: Vec<String>,
 }
 
 impl TmdbMatch {
@@ -149,8 +191,42 @@ impl TmdbMatch {
             backdrop_url: image_url(&item.backdrop_path, "w1280"),
             overview: item.overview.clone().filter(|o| !o.trim().is_empty()),
             genres: names,
+            people: people_of(item),
+            keywords: item
+                .keywords
+                .as_ref()
+                .map(|k| {
+                    k.keywords
+                        .iter()
+                        .take(MAX_KEYWORDS)
+                        .map(|k| k.name.clone())
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
+}
+
+/// Directors first, then cast by billing order; de-duplicated.
+fn people_of(item: &TmdbItem) -> Vec<String> {
+    let Some(credits) = &item.credits else {
+        return Vec::new();
+    };
+    let mut cast: Vec<&CastMember> = credits.cast.iter().collect();
+    cast.sort_by_key(|c| c.order);
+    let mut out: Vec<String> = Vec::new();
+    let names = credits
+        .crew
+        .iter()
+        .filter(|c| c.job == "Director")
+        .map(|c| &c.name)
+        .chain(cast.into_iter().take(MAX_CAST).map(|c| &c.name));
+    for name in names {
+        if !name.trim().is_empty() && !out.contains(name) {
+            out.push(name.clone());
+        }
+    }
+    out
 }
 
 // ── Client ──────────────────────────────────────────────────────────────────
@@ -253,9 +329,11 @@ impl TmdbClient {
             .ok_or_else(|| EnrichError::Http("TMDB 404 Not Found".into()))
     }
 
-    /// `/movie/{id}` details; `None` when TMDB doesn't know the ID.
+    /// `/movie/{id}` details with credits and keywords appended (one
+    /// request); `None` when TMDB doesn't know the ID.
     pub async fn movie_details(&self, id: i64) -> Result<Option<String>, EnrichError> {
-        self.get_optional(&format!("/movie/{id}"), &[], &self.language)
+        let params = [("append_to_response", "credits,keywords".to_string())];
+        self.get_optional(&format!("/movie/{id}"), &params, &self.language)
             .await
     }
 
@@ -762,6 +840,32 @@ mod tests {
     }
 
     #[test]
+    fn details_yield_directors_cast_and_keywords() {
+        let body = r#"{"id": 238, "title": "The Godfather", "release_date": "1972-03-14",
+            "credits": {
+                "cast": [{"name": "James Caan", "order": 2}, {"name": "Marlon Brando", "order": 0},
+                         {"name": "Al Pacino", "order": 1}],
+                "crew": [{"name": "Francis Ford Coppola", "job": "Director"},
+                         {"name": "Mario Puzo", "job": "Screenplay"}]},
+            "keywords": {"keywords": [{"id": 1, "name": "mafia"}, {"id": 2, "name": "crime family"}]}}"#;
+        let m = TmdbMatch::from_item(&parse_details(body).unwrap(), "x", &HashMap::new());
+        assert_eq!(
+            m.people,
+            vec![
+                "Francis Ford Coppola",
+                "Marlon Brando",
+                "Al Pacino",
+                "James Caan"
+            ]
+        );
+        assert_eq!(m.keywords, vec!["mafia", "crime family"]);
+        // Search results carry neither.
+        let from_search = rank("The Matrix", Some(1999), parse_search(MOVIE_BODY).unwrap());
+        let m = TmdbMatch::from_item(&from_search[0].item, "x", &HashMap::new());
+        assert!(m.people.is_empty() && m.keywords.is_empty());
+    }
+
+    #[test]
     fn credentials_are_detected_and_never_printed() {
         let token = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJ4In0.c2lnbmF0dXJl";
         assert!(matches!(
@@ -784,7 +888,7 @@ mod tests {
         evidence.candidates = ranked.iter().map(CandidateEvidence::of).collect();
         evidence.outcome = "matched".into();
         let json = serde_json::to_string(&evidence).unwrap();
-        assert!(json.contains("\"matcherVersion\":2"));
+        assert!(json.contains("\"matcherVersion\":3"));
         assert!(json.contains("\"scoreBp\":10000"));
         assert!(!json.contains("api_key") && !json.contains("http"));
     }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO search_index_state (id, movie_version, built_at) VALUES (1, ?, ?)\n               ON CONFLICT(id) DO UPDATE SET\n                   movie_version = excluded.movie_version,\n                   built_at = excluded.built_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b89d15829700dbf40a7f8bdae6111278fca9fbdcb2e2336e6d2fcd678b284df0"
+}

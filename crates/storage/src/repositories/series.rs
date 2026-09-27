@@ -280,7 +280,8 @@ impl<'a> SeriesRepository<'a> {
                    ON sm.source_id = se.source_id AND sm.series_title = se.series_title
                  WHERE se.source_id = ?
                    AND (? IS NULL OR se.category = ?)
-                   AND (? IS NULL OR se.series_title LIKE ?)
+                   AND (? IS NULL OR se.series_title LIKE ? OR sm.canonical_title LIKE ?
+                        OR sm.original_title LIKE ?)
                  GROUP BY se.series_title
                  HAVING (? = 0 OR MAX(se.is_favorite) = 1)
                     AND (? = 0 OR MAX(se.is_in_watchlist) = 1)
@@ -289,6 +290,8 @@ impl<'a> SeriesRepository<'a> {
                 source_id,
                 category,
                 category,
+                search,
+                search,
                 search,
                 search,
                 fav_flag,
@@ -335,7 +338,8 @@ impl<'a> SeriesRepository<'a> {
                    ON sm.source_id = se.source_id AND sm.series_title = se.series_title
                  WHERE se.source_id = ?
                    AND (? IS NULL OR se.category = ?)
-                   AND (? IS NULL OR se.series_title LIKE ?)
+                   AND (? IS NULL OR se.series_title LIKE ? OR sm.canonical_title LIKE ?
+                        OR sm.original_title LIKE ?)
                  GROUP BY se.series_title
                  HAVING (? = 0 OR MAX(se.is_favorite) = 1)
                     AND (? = 0 OR MAX(se.is_in_watchlist) = 1)
@@ -344,6 +348,8 @@ impl<'a> SeriesRepository<'a> {
                 source_id,
                 category,
                 category,
+                search,
+                search,
                 search,
                 search,
                 fav_flag,
@@ -456,7 +462,11 @@ impl<'a> SeriesRepository<'a> {
                 FROM series_episodes
                 WHERE source_id = ?
                   AND (? IS NULL OR category = ?)
-                  AND (? IS NULL OR series_title LIKE ?)
+                  AND (? IS NULL OR series_title LIKE ? OR EXISTS (
+                      SELECT 1 FROM series_meta sm
+                      WHERE sm.source_id = series_episodes.source_id
+                        AND sm.series_title = series_episodes.series_title
+                        AND (sm.canonical_title LIKE ? OR sm.original_title LIKE ?)))
                 GROUP BY series_title
                 HAVING (? = 0 OR MAX(is_favorite) = 1)
                    AND (? = 0 OR MAX(is_in_watchlist) = 1)
@@ -464,6 +474,8 @@ impl<'a> SeriesRepository<'a> {
             source_id,
             category,
             category,
+            search,
+            search,
             search,
             search,
             fav_flag,

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ms.entity_id as \"entity_id!: String\",\n                      ms.titles as \"titles!: String\",\n                      ms.aliases as \"aliases!: String\",\n                      ms.metadata as \"metadata!: String\"\n               FROM movie_search ms\n               WHERE movie_search MATCH ?\n                 AND EXISTS (SELECT 1 FROM stream_variants s\n                             WHERE s.entity_id = ms.entity_id AND s.source_id = ?\n                               AND s.vod_item_id IS NOT NULL)\n               ORDER BY bm25(movie_search, 0.0, 10.0, 4.0, 1.0)\n               LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "entity_id!: String",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "titles!: String",
+        "ordinal": 1,
+        "type_info": "Null"
+      },
+      {
+        "name": "aliases!: String",
+        "ordinal": 2,
+        "type_info": "Null"
+      },
+      {
+        "name": "metadata!: String",
+        "ordinal": 3,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "50e25b62b2cdc87f557db0891a964e962182f9ad711c464663458a5be2a54157"
+}

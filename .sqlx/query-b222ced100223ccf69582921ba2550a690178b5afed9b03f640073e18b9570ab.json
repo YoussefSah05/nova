@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO movie_search (entity_id, titles, aliases, metadata)\n               SELECT e.id,\n                      COALESCE(m.canonical_title, '') || char(10)\n                          || COALESCE(m.original_title, '') || char(10) || e.title,\n                      COALESCE((\n                          SELECT group_concat(x, char(10)) FROM (\n                              SELECT v.name AS x FROM stream_variants s\n                              JOIN vod_items v ON v.id = s.vod_item_id\n                              WHERE s.entity_id = e.id\n                              UNION\n                              SELECT v.clean_title FROM stream_variants s\n                              JOIN vod_items v ON v.id = s.vod_item_id\n                              WHERE s.entity_id = e.id AND v.clean_title IS NOT NULL\n                              UNION\n                              SELECT a.value FROM entity_aliases a\n                              WHERE a.entity_id = e.id AND a.alias_kind = 'title')), ''),\n                      COALESCE(m.genres, '') || char(10) || COALESCE(m.keywords, '')\n                          || char(10) || COALESCE(m.people, '') || char(10)\n                          || COALESCE((SELECT group_concat(DISTINCT v.genre)\n                                       FROM stream_variants s\n                                       JOIN vod_items v ON v.id = s.vod_item_id\n                                       WHERE s.entity_id = e.id), '')\n               FROM canonical_entities e\n               LEFT JOIN entity_external_matches m\n                 ON m.entity_id = e.id AND m.namespace = 'tmdb:movie' AND m.status = 'matched'\n               WHERE e.kind = 'movie' AND e.state = 'active'\n                 AND (? IS NULL OR e.id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b222ced100223ccf69582921ba2550a690178b5afed9b03f640073e18b9570ab"
+}

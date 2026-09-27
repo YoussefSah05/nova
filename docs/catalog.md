@@ -383,3 +383,37 @@ Refresh now snapshots episode history alongside movie and live history:
   history (most recent first) are re-fetched in the background, so their
   episodes reappear without opening each series. A failed re-fetch leaves the
   history parked until the series is opened.
+
+### Canonical search (P12)
+
+Movie search returns **canonical entities**, one result per entity and never
+one per provider row, from a disposable FTS5 projection, `movie_search`
+(migration 0030, `CatalogSearchRepository`). There is one document per active
+movie entity:
+
+- **titles:** the display title (confident TMDB title in the metadata language),
+  the original title, and the stable entity title;
+- **aliases:** provider titles, parsed titles and alias title keys;
+- **metadata:** genres, TMDB keywords and people (directors plus the top 8 cast).
+  People and keywords come from TMDB details with `append_to_response=
+  credits,keywords`. `MATCHER_VERSION` 3 re-queues existing matches to collect
+  them, mostly from cache.
+
+The index is rebuilt in the import transaction after resolution (about 160 ms
+at 30k movies), refreshed per entity when TMDB matches change, and rebuilt once
+on open when `MOVIE_SEARCH_VERSION` changes. It is never an identity store.
+
+**Ranking** (`nova_search::rank`, pure and deterministic):
+
+- **Retrieval:** FTS requires every query word as a prefix in any field
+  (`fts_all_words`, input escaped), BM25-weighted titles > aliases > metadata.
+- **Order:** candidates are placed in tiers: exact title (case, accents and
+  punctuation normalized) > title prefix > all title words > alias > metadata.
+  Within a tier, BM25 rank decides, then the entity ID.
+- **Semantic leg:** optional, used when the embedding model and vectors exist.
+  It is fused by RRF **only below the title tiers**, so it can never displace an
+  exact title. Without a model, search is purely lexical.
+
+`search_movies` serves the browse search and the Command palette. Series search
+also matches TMDB and original titles, and title-tier matches are moved first
+after fusion.

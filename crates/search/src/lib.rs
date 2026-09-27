@@ -8,6 +8,8 @@
 //! prefix-matches — i.e. live typeahead: `prof` → `"prof"*` matches "profit".
 //! The storage layer binds the result to `text MATCH ?`.
 
+pub mod rank;
+
 /// Build a safe FTS5 phrase-prefix MATCH expression from raw user input.
 /// Returns an empty string for blank input — callers must treat that as "no
 /// query" and skip the search (an empty MATCH is a syntax error in FTS5).
