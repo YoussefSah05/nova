@@ -10,6 +10,7 @@ pub mod playback;
 pub mod profile_settings;
 pub mod profiles;
 pub mod programs;
+pub mod publication;
 pub mod search;
 pub mod series;
 pub mod sources;
@@ -38,6 +39,9 @@ pub use playback::{PlaybackRepository, ResolvedStreamUrl};
 pub use profile_settings::ProfileSettingsRepository;
 pub use profiles::ProfileRepository;
 pub use programs::{NowAndNext, ProgramsRepository};
+pub use publication::{
+    FailedAttempt, FailureStatus, Publication, PublicationMode, PublicationRepository,
+};
 pub use search::{SearchHit, SearchRepository};
 pub use series::SeriesRepository;
 pub use sources::SourceRepository;

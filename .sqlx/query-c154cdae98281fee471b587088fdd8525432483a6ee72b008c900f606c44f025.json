@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                 (SELECT COUNT(*) FROM channels WHERE source_id = ?) as \"live!: i64\",\n                 (SELECT COUNT(*) FROM vod_items WHERE source_id = ?) as \"movie!: i64\",\n                 (SELECT COUNT(DISTINCT series_title) FROM series_episodes\n                  WHERE source_id = ?) as \"series!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "live!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "movie!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "series!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c154cdae98281fee471b587088fdd8525432483a6ee72b008c900f606c44f025"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO catalog_publications\n                   (source_id, mode, status, live_count, movie_count, series_count,\n                    started_at, finished_at)\n               VALUES (?, ?, 'published', ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "d80f6b13e2197554b28a47098951cea07043b6ccb67e59c513216de0c0abc858"
+}

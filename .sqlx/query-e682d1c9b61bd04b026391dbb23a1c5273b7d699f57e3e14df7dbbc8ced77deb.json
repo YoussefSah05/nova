@@ -1,0 +1,80 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\", source_id as \"source_id!: i64\", mode as \"mode!: String\",\n                      status as \"status!: String\", reason_code, reason,\n                      live_count as \"live_count!: i64\", movie_count as \"movie_count!: i64\",\n                      series_count as \"series_count!: i64\",\n                      started_at as \"started_at!: i64\", finished_at as \"finished_at!: i64\"\n               FROM catalog_publications\n               WHERE source_id = ?\n               ORDER BY id DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "mode!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "status!: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "reason_code",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "reason",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "live_count!: i64",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "movie_count!: i64",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "series_count!: i64",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "started_at!: i64",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "finished_at!: i64",
+        "ordinal": 10,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e682d1c9b61bd04b026391dbb23a1c5273b7d699f57e3e14df7dbbc8ced77deb"
+}

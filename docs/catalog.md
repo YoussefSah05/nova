@@ -178,3 +178,30 @@ Provider-claimed TMDB IDs (Xtream `tmdb`) are stored in
 enrichment, and persisted as `external` aliases so they keep blocking false
 merges after their row disappears. `record_cannot_link` records a user's "these
 are different" correction; it has no UI yet.
+
+### Compile → validate → atomic publish (P10)
+
+Every import builds one **candidate** generation per source in a single
+transaction, then validates it before it can replace the active one.
+
+- **Build:** a refresh first measures the active catalog, then snapshots user
+  state and clears the source's rows. It inserts the received entries, restores
+  user state, and compiles and resolves canonical entities. Other connections keep
+  reading the active generation (WAL) until commit.
+- **Validate** (`nova_core::catalog::publish`, measured by
+  `PublicationRepository::{measure_tx, candidate_report_tx}`):
+  - *Integrity:* persisted rows equal received rows per kind, no movie row lacks
+    a canonical variant, no variant belongs to a merged entity, and every merged
+    entity redirects to an active one.
+  - *Destructive collapse* (refresh only): a kind with at least 50 items that
+    would keep under 10% is rejected. An endpoint answering `[]` or a truncated
+    list without an error is not allowed to delete a library.
+- **Publish:** `touch_refreshed_tx` and a `published` row in `catalog_publications`
+  (migration 0024) are written in the same transaction and commit atomically. The
+  source's active generation is its latest published row.
+
+Any failure (storage error, endpoint error or stall on refresh, no entries,
+rejected candidate) rolls the transaction back explicitly. After that, it is
+logged as a `failed`/`rejected` row with a secret-free `reason_code` and summary.
+Failures never change the active generation or `last_refreshed_at`. A candidate
+abandoned mid-build (app killed during refresh) is discarded by SQLite on reopen.

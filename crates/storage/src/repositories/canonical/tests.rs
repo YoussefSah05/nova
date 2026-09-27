@@ -754,6 +754,16 @@ async fn scale_probe_compile_30k() {
     let started = std::time::Instant::now();
     let report = resolve(&db).await;
     let resolution = started.elapsed();
+    let started = std::time::Instant::now();
+    let mut tx = db.pool.begin().await.unwrap();
+    crate::PublicationRepository::measure_tx(&mut tx, db.source_id)
+        .await
+        .unwrap();
+    crate::PublicationRepository::candidate_report_tx(&mut tx, db.source_id)
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    eprintln!("publish validation {:?}", started.elapsed());
     eprintln!("full refresh (delete+insert+compile) {refresh:?}, page {list:?} ({}), entity lookup {lookup:?}, reopen backfill {reopen:?}, resolution {resolution:?} ({report:?})", page.len());
 }
 

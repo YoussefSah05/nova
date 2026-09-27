@@ -1,11 +1,13 @@
+use nova_core::catalog::publish::{check_collapse, check_integrity, PublishRejection};
 use nova_core::{
     Channel, ContentSort, ContinueWatchingItem, ImportProgress, ImportStage, MediaKind,
     ParsedEntry, Profile, SeriesEpisode, SeriesSummary, Source, VodItem,
 };
 use nova_storage::{
-    init_profile_db, CanonicalRepository, ChannelRepository, EpgSourcesRepository,
-    ProfileRepository, ProfileSettingsRepository, SeriesRepository, SourceRepository,
-    VodRepository, WatchHistoryRepository, WatchSnapshot,
+    init_profile_db, CanonicalRepository, ChannelRepository, EpgSourcesRepository, FailedAttempt,
+    FailureStatus, ProfileRepository, ProfileSettingsRepository, PublicationMode,
+    PublicationRepository, SeriesRepository, SourceRepository, VodRepository,
+    WatchHistoryRepository, WatchSnapshot,
 };
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, State};
@@ -830,14 +832,66 @@ pub async fn list_continue_watching(
 const BATCH: usize = 1_000;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Why a candidate was not published. The candidate's transaction is always
+/// rolled back before this is reported, so the prior active catalog is intact.
+struct ImportFailure {
+    status: FailureStatus,
+    /// Stable, secret-free code persisted with the attempt.
+    code: &'static str,
+    /// Secret-free summary persisted with the attempt.
+    reason: String,
+    /// Shown to the user (may carry the provider's summarized error).
+    message: String,
+    warning: Option<String>,
+}
+
+impl ImportFailure {
+    fn storage(e: impl std::fmt::Display) -> Self {
+        Self {
+            status: FailureStatus::Failed,
+            code: "storage_error",
+            reason: "database error while building the catalog".into(),
+            message: e.to_string(),
+            warning: None,
+        }
+    }
+
+    fn rejected(rejection: PublishRejection, mode: ImportMode) -> Self {
+        let retained = if mode == ImportMode::Replace {
+            "; previous catalog retained"
+        } else {
+            ""
+        };
+        Self {
+            status: FailureStatus::Rejected,
+            code: rejection.code(),
+            reason: rejection.to_string(),
+            message: format!("Refresh rejected: {rejection}{retained}"),
+            warning: None,
+        }
+    }
+}
+
+/// Import one source as a single candidate generation:
+///
+/// 1. **Build**: in one transaction, clear the source's rows (refresh), insert
+///    the received entries, restore user state, compile and resolve canonical
+///    entities. Readers keep seeing the previous catalog (WAL) meanwhile.
+/// 2. **Validate**: the candidate must hold every received row with every
+///    movie bound, and a refresh must not collapse a substantial content kind.
+/// 3. **Publish**: record the active generation and commit atomically.
+///
+/// Any failure rolls the transaction back explicitly and is then logged as a
+/// failed/rejected attempt, leaving the prior active catalog available.
 async fn run_import(
     source_id: i64,
-    mut rx: tokio::sync::mpsc::Receiver<Result<ParsedEntry, String>>,
+    rx: tokio::sync::mpsc::Receiver<Result<ParsedEntry, String>>,
     pool: std::sync::Arc<sqlx::SqlitePool>,
     emit: impl Fn(ImportProgress),
     mode: ImportMode,
 ) -> bool {
     let started_at = Instant::now();
+    let started_ts = nova_core::now_ts();
     let mut stats = ImportStats::default();
     let mut errors: Vec<String> = Vec::new();
 
@@ -853,47 +907,145 @@ async fn run_import(
         false,
     );
 
-    let mut live_buf: Vec<Channel> = Vec::with_capacity(BATCH);
-    let mut vod_buf: Vec<VodItem> = Vec::with_capacity(BATCH);
-    let mut series_buf: Vec<SeriesEpisode> = Vec::with_capacity(BATCH);
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
+    let result = match pool.begin().await {
+        Err(e) => Err(ImportFailure::storage(e)),
+        Ok(mut tx) => {
+            let built = build_candidate(
+                &mut tx,
+                source_id,
+                rx,
+                &emit,
+                mode,
+                started_ts,
+                &mut stats,
+                &mut errors,
+                started_at,
+            )
+            .await;
+            match built {
+                Ok(()) => {
+                    let commit_started = Instant::now();
+                    let committed = tx.commit().await.map_err(ImportFailure::storage);
+                    stats.persist_ms += commit_started.elapsed().as_millis() as u64;
+                    committed
+                }
+                Err(failure) => {
+                    // Roll back before anything else touches the database, so
+                    // the failure record never waits on this write lock.
+                    if let Err(e) = tx.rollback().await {
+                        tracing::warn!(source_id, error = %e, "candidate rollback failed");
+                    }
+                    Err(failure)
+                }
+            }
+        }
+    };
+    stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(()) => {
+            tracing::info!(
+                source_id,
+                total_ms = stats.elapsed_ms,
+                fetch_parse_wait_ms = stats.receive_wait_ms,
+                db_persist_ms = stats.persist_ms,
+                post_processing_ms = 0_u64,
+                parsed = stats.parsed,
+                inserted = stats.inserted,
+                live = stats.live_count,
+                movies = stats.movie_count,
+                series = stats.series_count,
+                failed = stats.failed_count,
+                skipped = stats.skipped_count,
+                "playlist import published"
+            );
+            emit_import_progress(
+                &emit,
+                source_id,
+                ImportStage::Complete,
+                &stats,
+                None,
+                warning_from_errors(&errors),
+                true,
+            );
+            true
+        }
+        Err(failure) => {
+            tracing::warn!(
+                source_id,
+                code = failure.code,
+                parsed = stats.parsed,
+                "catalog candidate not published: {}",
+                failure.reason
+            );
+            let publication_mode = match mode {
+                ImportMode::Append => PublicationMode::Append,
+                ImportMode::Replace => PublicationMode::Replace,
+            };
+            let received = nova_core::catalog::publish::KindCounts {
+                live: stats.live_count,
+                movie: stats.movie_count,
+                series: stats.series_count,
+            };
+            if let Err(e) = PublicationRepository::new(&pool)
+                .record_failure(&FailedAttempt {
+                    source_id,
+                    mode: publication_mode,
+                    status: failure.status,
+                    reason_code: failure.code,
+                    reason: &failure.reason,
+                    counts: received,
+                    started_at: started_ts,
+                })
+                .await
+            {
+                tracing::warn!(source_id, error = %e, "failed to record import failure");
+            }
             emit_import_progress(
                 &emit,
                 source_id,
                 ImportStage::Failed,
                 &stats,
-                Some(e.to_string()),
-                None,
+                Some(failure.message),
+                failure.warning,
                 true,
             );
-            return false;
+            false
         }
-    };
+    }
+}
 
-    // Refresh: snapshot user state and clear the source's rows up front, inside
-    // this transaction, so the old catalog stays visible to the UI until commit.
-    let replace_snapshot = if mode == ImportMode::Replace {
-        match snapshot_and_clear(&mut tx, source_id).await {
-            Ok(snap) => Some(snap),
-            Err(e) => {
-                stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-                emit_import_progress(
-                    &emit,
-                    source_id,
-                    ImportStage::Failed,
-                    &stats,
-                    Some(e.to_string()),
-                    None,
-                    true,
-                );
-                return false;
-            }
-        }
+/// Steps 1-2 (build + validate) and the in-transaction half of step 3. The
+/// caller commits on `Ok` and rolls back on `Err`.
+#[allow(clippy::too_many_arguments)]
+async fn build_candidate(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    source_id: i64,
+    mut rx: tokio::sync::mpsc::Receiver<Result<ParsedEntry, String>>,
+    emit: &impl Fn(ImportProgress),
+    mode: ImportMode,
+    started_ts: i64,
+    stats: &mut ImportStats,
+    errors: &mut Vec<String>,
+    started_at: Instant,
+) -> Result<(), ImportFailure> {
+    let mut live_buf: Vec<Channel> = Vec::with_capacity(BATCH);
+    let mut vod_buf: Vec<VodItem> = Vec::with_capacity(BATCH);
+    let mut series_buf: Vec<SeriesEpisode> = Vec::with_capacity(BATCH);
+
+    // Refresh: measure the active catalog (for the collapse check), then
+    // snapshot user state and clear the source's rows inside this transaction.
+    // Readers keep seeing the active catalog until commit.
+    let (previous, replace_snapshot) = if mode == ImportMode::Replace {
+        let previous = PublicationRepository::measure_tx(tx, source_id)
+            .await
+            .map_err(ImportFailure::storage)?;
+        let snap = snapshot_and_clear(tx, source_id)
+            .await
+            .map_err(ImportFailure::storage)?;
+        (Some(previous), Some(snap))
     } else {
-        None
+        (None, None)
     };
 
     loop {
@@ -904,7 +1056,6 @@ async fn run_import(
             Err(_) => {
                 stats.receive_wait_ms += wait_started.elapsed().as_millis() as u64;
                 stats.failed_count += 1;
-                stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
                 let msg = format!(
                     "import stalled after {}s with no new data",
                     IDLE_TIMEOUT.as_secs()
@@ -929,10 +1080,10 @@ async fn run_import(
                 errors.push(e.clone());
                 stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
                 emit_import_progress(
-                    &emit,
+                    emit,
                     source_id,
                     ImportStage::Receiving,
-                    &stats,
+                    stats,
                     None,
                     Some(e),
                     false,
@@ -954,220 +1105,118 @@ async fn run_import(
             &mut series_buf,
         );
 
-        if let Err(e) = flush_ready_buffers(
-            &mut tx,
-            &mut live_buf,
-            &mut vod_buf,
-            &mut series_buf,
-            &mut stats,
-        )
-        .await
-        {
-            stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-            emit_import_progress(
-                &emit,
-                source_id,
-                ImportStage::Failed,
-                &stats,
-                Some(e.to_string()),
-                None,
-                true,
-            );
-            return false;
-        }
+        flush_ready_buffers(tx, &mut live_buf, &mut vod_buf, &mut series_buf, stats)
+            .await
+            .map_err(ImportFailure::storage)?;
 
         // Emit progress every 500 entries for responsive feedback without
         // saturating the frontend event bridge on very large playlists.
         if stats.parsed.is_multiple_of(500) {
             stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
             emit_import_progress(
-                &emit,
+                emit,
                 source_id,
                 ImportStage::Receiving,
-                &stats,
+                stats,
                 None,
-                warning_from_errors(&errors),
+                warning_from_errors(errors),
                 false,
             );
         }
     }
 
     // Any endpoint failure or receive timeout makes a replacement incomplete.
-    // Dropping this transaction keeps the previous catalog and user state intact.
     if mode == ImportMode::Replace && !errors.is_empty() {
-        stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-        emit_import_progress(
-            &emit,
-            source_id,
-            ImportStage::Failed,
-            &stats,
-            Some("Refresh incomplete; previous catalog retained".to_string()),
-            warning_from_errors(&errors),
-            true,
-        );
-        return false;
+        return Err(ImportFailure {
+            status: FailureStatus::Failed,
+            code: "incomplete_refresh",
+            reason: "a provider endpoint failed or stalled".into(),
+            message: "Refresh incomplete; previous catalog retained".into(),
+            warning: warning_from_errors(errors),
+        });
     }
 
     if stats.parsed == 0 {
-        let error = if errors.is_empty() {
+        let message = if errors.is_empty() {
             "import completed without any playlist entries".to_string()
         } else {
             errors.join("; ")
         };
-        stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-        emit_import_progress(
-            &emit,
-            source_id,
-            ImportStage::Failed,
-            &stats,
-            Some(error),
-            None,
-            true,
-        );
-        return false;
+        return Err(ImportFailure {
+            status: FailureStatus::Failed,
+            code: "no_entries",
+            reason: "the provider returned no playlist entries".into(),
+            message,
+            warning: None,
+        });
     }
 
     stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
     emit_import_progress(
-        &emit,
+        emit,
         source_id,
         ImportStage::Persisting,
-        &stats,
+        stats,
         None,
-        warning_from_errors(&errors),
+        warning_from_errors(errors),
         false,
     );
 
-    if let Err(e) = flush_all_buffers(
-        &mut tx,
-        &mut live_buf,
-        &mut vod_buf,
-        &mut series_buf,
-        &mut stats,
-    )
-    .await
-    {
-        stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-        emit_import_progress(
-            &emit,
-            source_id,
-            ImportStage::Failed,
-            &stats,
-            Some(e.to_string()),
-            None,
-            true,
-        );
-        return false;
-    }
+    flush_all_buffers(tx, &mut live_buf, &mut vod_buf, &mut series_buf, stats)
+        .await
+        .map_err(ImportFailure::storage)?;
 
     // Refresh: re-apply the snapshotted user state onto the new rows.
     if let Some(snap) = replace_snapshot {
-        if let Err(e) = restore_user_state(&mut tx, source_id, &snap).await {
-            stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-            emit_import_progress(
-                &emit,
-                source_id,
-                ImportStage::Failed,
-                &stats,
-                Some(e.to_string()),
-                None,
-                true,
-            );
-            return false;
-        }
+        restore_user_state(tx, source_id, &snap)
+            .await
+            .map_err(ImportFailure::storage)?;
     }
 
     // Catalog compiler: bind this generation's movie records to canonical
-    // entities in the same transaction, so a failed import leaves the previous
-    // bindings (and all entity-owned user state) intact.
-    if let Err(e) = CanonicalRepository::compile_movies_tx(&mut tx, source_id).await {
-        stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-        emit_import_progress(
-            &emit,
-            source_id,
-            ImportStage::Failed,
-            &stats,
-            Some(e.to_string()),
-            None,
-            true,
-        );
-        return false;
+    // entities, then resolve identities across every source of the profile.
+    CanonicalRepository::compile_movies_tx(tx, source_id)
+        .await
+        .map_err(ImportFailure::storage)?;
+    CanonicalRepository::resolve_movies_tx(tx)
+        .await
+        .map_err(ImportFailure::storage)?;
+
+    // Validate the compiled candidate before it can become active.
+    let received = nova_core::catalog::publish::KindCounts {
+        live: stats.live_count,
+        movie: stats.movie_count,
+        series: stats.series_count,
+    };
+    let report = PublicationRepository::candidate_report_tx(tx, source_id)
+        .await
+        .map_err(ImportFailure::storage)?;
+    check_integrity(received, &report).map_err(|r| ImportFailure::rejected(r, mode))?;
+    let candidate = PublicationRepository::measure_tx(tx, source_id)
+        .await
+        .map_err(ImportFailure::storage)?;
+    if let Some(previous) = previous {
+        check_collapse(previous, candidate).map_err(|r| ImportFailure::rejected(r, mode))?;
     }
 
-    // Deterministic entity resolution across every source of the profile,
-    // still in the import transaction: new or re-listed records merge into
-    // the entity (and user state) they provably belong to, or stay separate.
-    if let Err(e) = CanonicalRepository::resolve_movies_tx(&mut tx).await {
-        stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-        emit_import_progress(
-            &emit,
-            source_id,
-            ImportStage::Failed,
-            &stats,
-            Some(e.to_string()),
-            None,
-            true,
-        );
-        return false;
-    }
-
-    if let Err(e) = SourceRepository::touch_refreshed_tx(&mut tx, source_id).await {
-        stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-        emit_import_progress(
-            &emit,
-            source_id,
-            ImportStage::Failed,
-            &stats,
-            Some(e.to_string()),
-            None,
-            true,
-        );
-        return false;
-    }
-
-    let commit_started = Instant::now();
-    if let Err(e) = tx.commit().await {
-        stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-        emit_import_progress(
-            &emit,
-            source_id,
-            ImportStage::Failed,
-            &stats,
-            Some(e.to_string()),
-            None,
-            true,
-        );
-        return false;
-    }
-    stats.persist_ms += commit_started.elapsed().as_millis() as u64;
-    stats.elapsed_ms = started_at.elapsed().as_millis() as u64;
-
-    tracing::info!(
+    // Publish: mark this generation active in the same transaction.
+    SourceRepository::touch_refreshed_tx(tx, source_id)
+        .await
+        .map_err(ImportFailure::storage)?;
+    let publication_mode = match mode {
+        ImportMode::Append => PublicationMode::Append,
+        ImportMode::Replace => PublicationMode::Replace,
+    };
+    PublicationRepository::record_published_tx(
+        tx,
         source_id,
-        total_ms = stats.elapsed_ms,
-        fetch_parse_wait_ms = stats.receive_wait_ms,
-        db_persist_ms = stats.persist_ms,
-        post_processing_ms = 0_u64,
-        parsed = stats.parsed,
-        inserted = stats.inserted,
-        live = stats.live_count,
-        movies = stats.movie_count,
-        series = stats.series_count,
-        failed = stats.failed_count,
-        skipped = stats.skipped_count,
-        "playlist import complete"
-    );
-
-    emit_import_progress(
-        &emit,
-        source_id,
-        ImportStage::Complete,
-        &stats,
-        None,
-        warning_from_errors(&errors),
-        true,
-    );
-    true
+        publication_mode,
+        candidate,
+        started_ts,
+    )
+    .await
+    .map_err(ImportFailure::storage)?;
+    Ok(())
 }
 
 #[derive(Default)]
@@ -1823,6 +1872,332 @@ mod stabilization_tests {
         .await
         .unwrap();
         assert_eq!(aliases, vec!["tmdb:movie:949"]);
+    }
+
+    // ── P10: compile → validate → atomic publish ────────────────────────────
+
+    async fn open_db(path: &std::path::Path) -> Arc<sqlx::SqlitePool> {
+        Arc::new(init_profile_db(path.to_str().unwrap()).await.unwrap())
+    }
+
+    fn movies(range: std::ops::Range<u32>) -> Vec<Result<ParsedEntry, String>> {
+        range
+            .map(|i| Ok(xtream_movie(&format!("Film {i}"), i, "p")))
+            .collect()
+    }
+
+    fn live(name: &str) -> ParsedEntry {
+        ParsedEntry {
+            kind: MediaKind::Live,
+            ..entry(name)
+        }
+    }
+
+    async fn vod_count(pool: &sqlx::SqlitePool, source: i64) -> i64 {
+        VodRepository::new(pool)
+            .count_filtered(source, None, None, false, false)
+            .await
+            .unwrap()
+    }
+
+    /// A profile with one published source of 60 movies, one of them a
+    /// favourite with resume progress. Returns (pool, source, entity).
+    async fn published_library(
+        path: &std::path::Path,
+    ) -> (Arc<sqlx::SqlitePool>, i64, nova_core::catalog::EntityId) {
+        let pool = open_db(path).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let first = import(pool.clone(), id, movies(0..60), ImportMode::Append).await;
+        assert!(matches!(first.stage, ImportStage::Complete));
+        let canonical = CanonicalRepository::new(&pool);
+        let entity = canonical
+            .list_movies(id, 1, 0, &Default::default(), ContentSort::Default)
+            .await
+            .unwrap()[0]
+            .entity_id
+            .clone();
+        canonical.set_favorite(&entity, true).await.unwrap();
+        canonical
+            .record_progress(&entity, 42.0, Some(100.0), false, None)
+            .await
+            .unwrap();
+        (pool, id, entity)
+    }
+
+    /// The prior generation is fully intact: rows, entity state, active publication.
+    async fn assert_prior_generation(
+        pool: &sqlx::SqlitePool,
+        source: i64,
+        entity: &nova_core::catalog::EntityId,
+        active_id: i64,
+    ) {
+        assert_eq!(vod_count(pool, source).await, 60);
+        let canonical = CanonicalRepository::new(pool);
+        let detail = canonical.movie_detail(entity).await.unwrap().unwrap();
+        assert!(detail.summary.is_favorite);
+        assert_eq!(detail.resume.unwrap().position_sec, 42.0);
+        assert!(canonical
+            .resolve_playback(entity, None)
+            .await
+            .unwrap()
+            .is_some());
+        let active = PublicationRepository::new(pool)
+            .active(source)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(active.id, active_id);
+        assert_eq!(active.counts.movie, 60);
+    }
+
+    #[tokio::test]
+    async fn successful_imports_publish_an_active_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let (pool, id, _) = published_library(&dir.path().join("p.db")).await;
+        let publications = PublicationRepository::new(&pool);
+        let first = publications.active(id).await.unwrap().unwrap();
+        assert_eq!(
+            (first.mode.as_str(), first.status.as_str()),
+            ("append", "published")
+        );
+        assert_eq!(first.counts.movie, 60);
+        let mut next = movies(0..70);
+        next.push(Ok(live("News 24")));
+        let ok = import(pool.clone(), id, next, ImportMode::Replace).await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+        let second = publications.active(id).await.unwrap().unwrap();
+        assert!(second.id > first.id);
+        assert_eq!(second.mode, "replace");
+        assert_eq!((second.counts.movie, second.counts.live), (70, 1));
+    }
+
+    #[tokio::test]
+    async fn a_collapsed_refresh_is_rejected_and_the_prior_generation_stays_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let (pool, id, entity) = published_library(&dir.path().join("p.db")).await;
+        let active = PublicationRepository::new(&pool)
+            .active(id)
+            .await
+            .unwrap()
+            .unwrap();
+        sqlx::query("UPDATE sources SET last_refreshed_at = 0 WHERE id = ?")
+            .bind(id)
+            .execute(&*pool)
+            .await
+            .unwrap();
+
+        // The VOD endpoint answers with a truncated list and no error.
+        let failed = import(pool.clone(), id, movies(0..3), ImportMode::Replace).await;
+        assert!(matches!(failed.stage, ImportStage::Failed));
+        let message = failed.error.unwrap();
+        assert!(message.starts_with("Refresh rejected"), "{message}");
+        assert!(message.contains("previous catalog retained"), "{message}");
+
+        assert_prior_generation(&pool, id, &entity, active.id).await;
+        let source = SourceRepository::new(&pool).get(id).await.unwrap().unwrap();
+        assert_eq!(
+            source.last_refreshed_at,
+            Some(0),
+            "a rejected refresh is not a refresh"
+        );
+        let latest = &PublicationRepository::new(&pool)
+            .history(id, 1)
+            .await
+            .unwrap()[0];
+        assert_eq!(
+            (latest.status.as_str(), latest.reason_code.as_deref()),
+            ("rejected", Some("collapse"))
+        );
+        assert_eq!(latest.counts.movie, 3, "records what the provider sent");
+    }
+
+    #[tokio::test]
+    async fn every_failure_kind_leaves_the_prior_generation_and_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (pool, id, entity) = published_library(&dir.path().join("p.db")).await;
+        let active = PublicationRepository::new(&pool)
+            .active(id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // An endpoint error midway, after rows were already written.
+        let mut partial = movies(0..60);
+        partial.insert(30, Err("get_series: HTTP 502".into()));
+        let failed = import(pool.clone(), id, partial, ImportMode::Replace).await;
+        assert!(matches!(failed.stage, ImportStage::Failed));
+        // A provider that returns nothing at all.
+        let empty = import(pool.clone(), id, Vec::new(), ImportMode::Replace).await;
+        assert!(matches!(empty.stage, ImportStage::Failed));
+
+        assert_prior_generation(&pool, id, &entity, active.id).await;
+        let history = PublicationRepository::new(&pool)
+            .history(id, 10)
+            .await
+            .unwrap();
+        let codes: Vec<_> = history
+            .iter()
+            .map(|p| (p.status.as_str(), p.reason_code.as_deref()))
+            .collect();
+        assert_eq!(
+            codes,
+            vec![
+                ("failed", Some("no_entries")),
+                ("failed", Some("incomplete_refresh")),
+                ("published", None),
+            ]
+        );
+        // Persisted reasons are secret-free summaries, never provider text.
+        assert!(history
+            .iter()
+            .all(|p| !p.reason.as_deref().unwrap_or("").contains("502")));
+
+        // A good refresh afterwards publishes normally.
+        let ok = import(pool.clone(), id, movies(0..60), ImportMode::Replace).await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+        let now_active = PublicationRepository::new(&pool)
+            .active(id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(now_active.id > active.id);
+        assert!(
+            CanonicalRepository::new(&pool)
+                .movie_detail(&entity)
+                .await
+                .unwrap()
+                .unwrap()
+                .summary
+                .is_favorite
+        );
+    }
+
+    #[tokio::test]
+    async fn an_in_flight_candidate_is_invisible_until_it_publishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (pool, id, entity) = published_library(&dir.path().join("p.db")).await;
+        let active = PublicationRepository::new(&pool)
+            .active(id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let (entries, rx) = tokio::sync::mpsc::channel(2_000);
+        let (events, mut progress) = tokio::sync::mpsc::unbounded_channel();
+        let worker = tokio::spawn(run_import(
+            id,
+            rx,
+            pool.clone(),
+            move |p| {
+                let _ = events.send(p);
+            },
+            ImportMode::Replace,
+        ));
+        // 500 entries trigger a Receiving event, emitted only after the
+        // candidate has cleared the old rows and started writing.
+        for e in movies(1_000..1_500) {
+            entries.send(e).await.unwrap();
+        }
+        loop {
+            let p = progress.recv().await.unwrap();
+            if matches!(p.stage, ImportStage::Receiving) && p.parsed >= 500 {
+                break;
+            }
+        }
+        // Another connection still reads the active generation, intact.
+        assert_prior_generation(&pool, id, &entity, active.id).await;
+
+        for e in movies(1_500..1_600) {
+            entries.send(e).await.unwrap();
+        }
+        drop(entries);
+        assert!(worker.await.unwrap(), "candidate publishes");
+        assert_eq!(vod_count(&pool, id).await, 600);
+        let now_active = PublicationRepository::new(&pool)
+            .active(id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(now_active.counts.movie, 600);
+        // User state is entity-owned and survives the publish (the movie is
+        // gone from this source, but its entity keeps favourite and resume).
+        let resume = CanonicalRepository::new(&pool)
+            .resume(&entity)
+            .await
+            .unwrap();
+        assert_eq!(resume.unwrap().position_sec, 42.0);
+    }
+
+    #[tokio::test]
+    async fn rejected_and_abandoned_candidates_leave_the_prior_generation_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.db");
+        let (pool, id, entity) = published_library(&path).await;
+        let active = PublicationRepository::new(&pool)
+            .active(id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // 1. A rejected candidate, then reopen.
+        let failed = import(pool.clone(), id, movies(0..2), ImportMode::Replace).await;
+        assert!(matches!(failed.stage, ImportStage::Failed));
+        pool.close().await;
+        let pool = open_db(&path).await;
+        assert_prior_generation(&pool, id, &entity, active.id).await;
+
+        // 2. A candidate abandoned mid-build (app killed during refresh): the
+        //    worker is aborted with its transaction open, then the pool closes.
+        let (entries, rx) = tokio::sync::mpsc::channel(1_000);
+        let (events, mut progress) = tokio::sync::mpsc::unbounded_channel();
+        let worker = tokio::spawn(run_import(
+            id,
+            rx,
+            pool.clone(),
+            move |p| {
+                let _ = events.send(p);
+            },
+            ImportMode::Replace,
+        ));
+        for e in movies(5_000..5_500) {
+            entries.send(e).await.unwrap();
+        }
+        loop {
+            let p = progress.recv().await.unwrap();
+            if matches!(p.stage, ImportStage::Receiving) && p.parsed >= 500 {
+                break;
+            }
+        }
+        worker.abort();
+        let _ = worker.await;
+        drop(entries);
+        pool.close().await;
+
+        let pool = open_db(&path).await;
+        assert_prior_generation(&pool, id, &entity, active.id).await;
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(integrity, "ok");
+
+        // 3. The reopened profile publishes the next valid candidate.
+        let ok = import(pool.clone(), id, movies(0..61), ImportMode::Replace).await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+        pool.close().await;
+        let pool = open_db(&path).await;
+        let now_active = PublicationRepository::new(&pool)
+            .active(id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(now_active.id > active.id);
+        assert_eq!(now_active.counts.movie, 61);
+        assert_eq!(vod_count(&pool, id).await, 61);
     }
 
     /// Opt-in live check of the same fetch, import, and SQLite commit path used

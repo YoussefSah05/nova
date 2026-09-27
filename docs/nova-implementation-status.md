@@ -1357,3 +1357,72 @@ removed rather than isolated:
 
 **Not verified:** the running app (`just dev`) after the fix. The NLLB files
 (about 620 MB in `models/nllb`) remain on disk until the user deletes them.
+
+## P10 — compile → validate → atomic publish
+
+Branch `feat/p10-atomic-publish`, stacked on `fix/remove-translation` → P9 → P8.
+
+### Gaps closed
+
+- **Destructive collapse (data loss):** a refresh whose provider answered `[]`
+  or a truncated list *without an error* committed and wiped that kind, for
+  example every movie. Refreshes are now rejected when a kind of 50 or more
+  items would keep under 10%.
+- **No validation step:** the candidate went straight from compile to commit.
+  An integrity check now runs after compile and resolution. It covers
+  received-versus-persisted rows per kind, unbound movie rows, variants on
+  merged entities and dangling tombstones.
+- **No notion of an active generation:** `catalog_publications` (migration
+  0024) records a `published` row atomically with the catalog. Failed and
+  rejected attempts are logged after rollback and never become active.
+- **Implicit rollback:** a failed candidate relied on dropping the
+  transaction. It is now rolled back explicitly before the failure is recorded,
+  so the log write never waits on the candidate's write lock.
+- `run_import` is restructured: `build_candidate` returns a typed
+  `ImportFailure`, replacing ten copies of the failure-emitting code, and the
+  wrapper commits or rolls back, records the outcome and emits once.
+
+### Tests (12 new)
+
+- Core (4): empty endpoint collapse; the 10% threshold; growth, small libraries
+  and first imports pass; integrity codes.
+- Storage (3): uncompiled rows detected and then cleared by compile; variants on
+  merged entities and dangling tombstones detected; failures never become
+  active; published rows cannot carry a reason; a deleted source's failure is
+  skipped.
+- Desktop, through the real `run_import` (5):
+  - successful append and replace publish an advancing active generation;
+  - a collapsed refresh is rejected with a clear message, and the prior rows,
+    favourite, resume, playback, active publication and `last_refreshed_at` are
+    unchanged;
+  - endpoint-error and empty refreshes are recorded, no provider text is
+    persisted, and a later refresh publishes;
+  - an in-flight candidate stays invisible to another connection until it
+    publishes;
+  - after a rejected candidate plus reopen, and after an aborted mid-build
+    candidate plus reopen, the prior generation is intact, `integrity_check`
+    passes, and the next candidate publishes and survives another reopen.
+- Mutation check: with the collapse guard disabled, 2 desktop tests fail.
+  Concurrency tests passed 8 of 8 repeated runs.
+
+Validation costs about 29 ms per import at 30k movies (release scale probe).
+
+### Validation commands/results
+
+`just lint`, `just typecheck`, `just test` (407 Rust, 0 failed, 5 ignored; 28
+frontend), `cargo fmt --check`, `git diff --check`: pass. SQLx metadata was
+regenerated.
+
+### Remaining known gaps
+
+- Publication is per source. There is no profile-wide catalog generation or
+  generation-scoped rows yet, so a refresh still replaces rows in place (inside
+  its transaction) rather than switching a head pointer.
+- The collapse thresholds (50 items, 10%) are v1 and are not user-overridable.
+  A provider that genuinely removed most of a kind needs a code change, or two
+  refreshes of honest shrinkage.
+- First imports (Append) with partial endpoint errors still publish, with a
+  warning. There is no prior generation to protect.
+- The UI shows the failure message but not publication history. No command
+  exposes `catalog_publications` yet.
+- Not verified in the running app (`just dev`).

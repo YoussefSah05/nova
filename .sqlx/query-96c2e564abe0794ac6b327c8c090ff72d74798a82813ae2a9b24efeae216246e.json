@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO catalog_publications\n                   (source_id, mode, status, reason_code, reason, live_count, movie_count,\n                    series_count, started_at, finished_at)\n               SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?\n               WHERE EXISTS (SELECT 1 FROM sources WHERE id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "96c2e564abe0794ac6b327c8c090ff72d74798a82813ae2a9b24efeae216246e"
+}

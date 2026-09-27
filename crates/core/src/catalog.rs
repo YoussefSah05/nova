@@ -17,6 +17,7 @@ pub mod blocking;
 pub mod fingerprint;
 pub mod intelligence;
 pub mod media;
+pub mod publish;
 pub mod reconcile;
 pub mod resolution;
 pub mod snapshot;

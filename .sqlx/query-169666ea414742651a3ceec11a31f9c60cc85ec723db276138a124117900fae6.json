@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                 (SELECT COUNT(*) FROM channels WHERE source_id = ?) as \"live!: i64\",\n                 (SELECT COUNT(*) FROM vod_items WHERE source_id = ?) as \"movie!: i64\",\n                 (SELECT COUNT(*) FROM series_episodes WHERE source_id = ?) as \"series!: i64\",\n                 (SELECT COUNT(*) FROM vod_items v\n                  WHERE v.source_id = ? AND NOT EXISTS (\n                      SELECT 1 FROM stream_variants s\n                      WHERE s.source_id = v.source_id AND s.binding_key = v.binding_key))\n                     as \"unbound!: i64\",\n                 (SELECT COUNT(*) FROM stream_variants s\n                  JOIN canonical_entities e ON e.id = s.entity_id\n                  WHERE e.state <> 'active') as \"on_merged!: i64\",\n                 (SELECT COUNT(*) FROM canonical_entities e\n                  WHERE e.state = 'merged' AND NOT EXISTS (\n                      SELECT 1 FROM entity_redirects r\n                      JOIN canonical_entities t ON t.id = r.new_id AND t.state = 'active'\n                      WHERE r.old_id = e.id)) as \"dangling!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "live!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "movie!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "series!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "unbound!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "on_merged!: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "dangling!: i64",
+        "ordinal": 5,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "169666ea414742651a3ceec11a31f9c60cc85ec723db276138a124117900fae6"
+}
