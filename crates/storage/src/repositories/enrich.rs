@@ -8,8 +8,8 @@ pub struct UnenrichedRow {
     pub id: i64,
     /// Display text to embed (channel name / movie clean title).
     pub text: String,
-    /// Current category (empty/None → eligible for zero-shot genre fill).
-    pub category: Option<String>,
+    /// Current Nova genre (None → eligible for an inferred genre).
+    pub genre: Option<String>,
 }
 
 /// The enrichment result to write back for one row.
@@ -18,8 +18,9 @@ pub struct EnrichUpdate {
     pub id: i64,
     /// Cluster representative key (variants share one) — `None` if unique.
     pub dedup_group: Option<String>,
-    /// Zero-shot genre to fill — `None` leaves the existing category untouched.
-    pub category: Option<String>,
+    /// Inferred (embedding) genre. Stored only when the row has no genre yet,
+    /// with `genre_source = 'inferred'`; `None` leaves the genre untouched.
+    pub genre: Option<String>,
 }
 
 /// A series (keyed by title within a source) needing a TMDB pass.

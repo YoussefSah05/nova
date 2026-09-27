@@ -296,3 +296,26 @@ is insert-only (`#[serde(skip)]`), never sent over IPC, and not loaded on reads.
 `SeriesEpisode.numbering` is exposed. The UI's `episodeLabel` shows `S03E07`,
 `E1234` for absolute numbering, or only the episode title when numbering is
 unknown, never a fabricated S01E01.
+
+### Provider collection vs Nova genre (naming v1, step 3)
+
+Migration 0027 splits what `category` used to mix:
+
+- **`collection`:** the provider group label, normalized for browsing (the
+  untouched text is `raw_group`). It is provenance.
+- **`genre` + `genre_source`:** Nova's genre and its origin, strongest first:
+  - `tmdb`: the primary genre of a confident match;
+  - `provider`: a *specific* genre or topic in the provider label, via
+    `classify::provider_genre`. `"FR | FILMS ACTION"` → Action, `"UK | NEWS"` →
+    News. Generic buckets like `"FR MOVIES 4K"` and `"SERIES"` give none;
+  - `inferred`: an on-device embedding guess, only when no genre exists, and
+    never the generic buckets (`classify::specific_genres`).
+- **`category`:** stays the browse facet, so chips, rails and filters are
+  unchanged. It is now *derived* as `COALESCE(genre, collection)` and
+  recomputed by every writer (import, enrichment, TMDB mirror/apply, series
+  TMDB apply). An unresolved TMDB decision removes only a TMDB genre.
+
+Existing rows keep their old `category` as the collection with no genre claimed.
+A refresh recomputes all three. Known limit: when a TMDB genre is removed at
+runtime, the provider genre it replaced comes back on the next refresh (the
+facet shows the collection meanwhile).

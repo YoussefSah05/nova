@@ -34,9 +34,10 @@ impl<'a> SeriesRepository<'a> {
             let quality = SourceEvidence::csv(&ev.quality_hints);
             let language = SourceEvidence::csv(&ev.language_hints);
             let numbering = e.numbering.as_str();
+            let genre_source = ev.genre_source();
             sqlx::query!(
-                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, raw_name, raw_group, parser_version, quality_hints, language_hints, numbering)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, raw_name, raw_group, parser_version, quality_hints, language_hints, numbering, collection, genre, genre_source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 e.source_id,
                 e.series_title,
                 e.category,
@@ -52,6 +53,9 @@ impl<'a> SeriesRepository<'a> {
                 quality,
                 language,
                 numbering,
+                ev.collection,
+                ev.provider_genre,
+                genre_source,
             )
             .execute(&mut **tx)
             .await?;
@@ -135,6 +139,17 @@ impl<'a> SeriesRepository<'a> {
         .await?;
         let fav = flags.fav.unwrap_or(0);
         let wl = flags.wl.unwrap_or(0);
+        // Series-level provenance (collection, genre and its source) is kept
+        // across the replacement, like the user flags.
+        let taxonomy = sqlx::query!(
+            r#"SELECT MAX(collection) as "collection?: String", MAX(genre) as "genre?: String",
+                      MAX(genre_source) as "genre_source?: String"
+               FROM series_episodes WHERE source_id = ? AND series_title = ?"#,
+            source_id,
+            series_title,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
 
         sqlx::query!(
             "DELETE FROM series_episodes WHERE source_id = ? AND series_title = ?",
@@ -148,8 +163,8 @@ impl<'a> SeriesRepository<'a> {
         for e in episodes {
             let numbering = e.numbering.as_str();
             sqlx::query!(
-                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, is_favorite, is_in_watchlist, raw_name, numbering)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, is_favorite, is_in_watchlist, raw_name, numbering, collection, genre, genre_source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 e.source_id,
                 e.series_title,
                 e.category,
@@ -163,6 +178,9 @@ impl<'a> SeriesRepository<'a> {
                 wl,
                 e.evidence.raw_name,
                 numbering,
+                taxonomy.collection,
+                taxonomy.genre,
+                taxonomy.genre_source,
             )
             .execute(&mut *tx)
             .await?;
@@ -526,21 +544,37 @@ impl<'a> SeriesRepository<'a> {
             .execute(&mut *tx)
             .await?;
 
-            // Fill an *empty* episode category with the matched genre so the
-            // genre-rail path lights up for series (provider categories, when
-            // present, are preserved).
-            if let Some(genre) = u.primary_genre.as_deref() {
-                sqlx::query!(
-                    "UPDATE series_episodes
-                     SET category = COALESCE(NULLIF(TRIM(category), ''), ?)
-                     WHERE source_id = ? AND series_title = ?",
-                    genre,
-                    source_id,
-                    u.series_title,
-                )
-                .execute(&mut *tx)
-                .await?;
-            }
+            // Same genre precedence as movies: a confident TMDB genre wins, an
+            // unresolved decision removes only a TMDB genre, and the browse
+            // facet `category` is recomputed as COALESCE(genre, collection).
+            let genre = u.primary_genre.as_deref();
+            let matched_flag: i64 = u.matched.into();
+            sqlx::query!(
+                "UPDATE series_episodes
+                 SET genre = CASE WHEN ? IS NOT NULL THEN ?
+                                  WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
+                                  ELSE genre END,
+                     genre_source = CASE WHEN ? IS NOT NULL THEN 'tmdb'
+                                         WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
+                                         ELSE genre_source END,
+                     category = COALESCE(CASE WHEN ? IS NOT NULL THEN ?
+                                              WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
+                                              ELSE genre END,
+                                         collection, category)
+                 WHERE source_id = ? AND series_title = ?",
+                genre,
+                genre,
+                matched_flag,
+                genre,
+                matched_flag,
+                genre,
+                genre,
+                matched_flag,
+                source_id,
+                u.series_title,
+            )
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await?;
         Ok(())

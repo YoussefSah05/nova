@@ -263,7 +263,8 @@ pub(crate) async fn run_enrichment(
         emit("loading-model", 0, false);
         let mut lease = Some(acquire_embedder(&runtime, &model_root, cancellation).await?);
 
-        let genres: Vec<String> = nova_core::classify::genres()
+        // Generic buckets ("Movies", "Series") describe nothing; never infer them.
+        let genres: Vec<String> = nova_core::classify::specific_genres()
             .iter()
             .map(|g| g.to_string())
             .collect();
@@ -810,8 +811,10 @@ fn cluster_and_genre(
         .zip(vectors)
         .map(|(r, v)| {
             let rep = group_of.get(&r.id).copied().unwrap_or(r.id);
-            let needs_genre = r.category.as_deref().is_none_or(|c| c.trim().is_empty());
-            let category = if needs_genre {
+            // Inferred genres are the weakest evidence: only for rows with no
+            // genre yet (TMDB and provider genres always win).
+            let needs_genre = r.genre.as_deref().is_none_or(|g| g.trim().is_empty());
+            let genre = if needs_genre {
                 classifier
                     .classify(v, GENRE_THRESHOLD)
                     .map(|g| g.to_string())
@@ -821,7 +824,7 @@ fn cluster_and_genre(
             EnrichUpdate {
                 id: r.id,
                 dedup_group: Some(rep.to_string()),
-                category,
+                genre,
             }
         })
         .collect()

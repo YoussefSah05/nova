@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE vod_items\n               SET canonical_title = m.canonical_title,\n                   poster_url = m.poster_url,\n                   backdrop_url = m.backdrop_url,\n                   overview = m.overview,\n                   tmdb_genres = m.genres,\n                   tmdb_status = CASE m.status WHEN 'matched' THEN 'matched' ELSE 'unmatched' END,\n                   genre = COALESCE(CASE WHEN m.status = 'matched' THEN m.primary_genre END,\n                                    vod_items.genre),\n                   genre_source = CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL\n                                       THEN 'tmdb' ELSE vod_items.genre_source END,\n                   category = COALESCE(CASE WHEN m.status = 'matched' THEN m.primary_genre END,\n                                       vod_items.genre, vod_items.collection, vod_items.category)\n               FROM stream_variants s\n               JOIN entity_external_matches m\n                 ON m.entity_id = s.entity_id AND m.namespace = 'tmdb:movie'\n               WHERE vod_items.source_id = ?\n                 AND s.source_id = vod_items.source_id\n                 AND s.binding_key = vod_items.binding_key",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "482db738197bd89c1fed9305210357d954afcde9f5db942f50473fd5d9ee3cc4"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE vod_items\n                   SET canonical_title = ?, poster_url = ?, backdrop_url = ?, overview = ?,\n                       tmdb_genres = ?, tmdb_status = ?,\n                       genre = CASE WHEN ? IS NOT NULL THEN ?\n                                    WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL\n                                    ELSE genre END,\n                       genre_source = CASE WHEN ? IS NOT NULL THEN 'tmdb'\n                                           WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL\n                                           ELSE genre_source END,\n                       category = COALESCE(CASE WHEN ? IS NOT NULL THEN ?\n                                                WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL\n                                                ELSE genre END,\n                                           collection, category)\n                   WHERE id IN (\n                       SELECT v.id FROM vod_items v\n                       JOIN stream_variants s\n                         ON s.source_id = v.source_id AND s.binding_key = v.binding_key\n                       WHERE s.entity_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 15
+    },
+    "nullable": []
+  },
+  "hash": "3b0ffd17472c6b13235bebdfb135bca550004eef2154eed1e1d09622ed423499"
+}

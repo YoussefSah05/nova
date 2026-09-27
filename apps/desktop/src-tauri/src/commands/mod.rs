@@ -1418,6 +1418,7 @@ fn push_entry(
     vod: &mut Vec<VodItem>,
     series: &mut Vec<SeriesEpisode>,
 ) {
+    let evidence = SourceEvidence::from_entry(e);
     match e.kind {
         MediaKind::Live => {
             let name = nova_core::polish_title(&e.clean_title);
@@ -1433,7 +1434,7 @@ fn push_entry(
                 channel_group: Some(nova_core::clean::channel_brand(&name)),
                 name,
                 country: e.country_prefix.clone(),
-                category: e.category.clone(),
+                category: evidence.facet(),
                 raw_group: Some(e.group_title.clone()),
                 logo_url: e.logo_url.clone(),
                 stream_url: e.stream_url.clone(),
@@ -1443,7 +1444,7 @@ fn push_entry(
                 added_at: None,
                 dedup_group: None,
                 region,
-                evidence: SourceEvidence::from_entry(e),
+                evidence,
             })
         }
         MediaKind::Movie => vod.push(VodItem {
@@ -1454,7 +1455,7 @@ fn push_entry(
             year: e.year.map(|y| y as i64),
             logo_url: e.logo_url.clone(),
             stream_url: e.stream_url.clone(),
-            category: e.category.clone(),
+            category: evidence.facet(),
             is_favorite: false,
             is_in_watchlist: false,
             added_at: None,
@@ -1465,7 +1466,7 @@ fn push_entry(
             overview: None,
             upstream_id: e.upstream_id.clone(),
             provider_tmdb_id: e.provider_tmdb_id,
-            evidence: SourceEvidence::from_entry(e),
+            evidence,
         }),
         MediaKind::Series => series.push(SeriesEpisode {
             id: 0,
@@ -1473,7 +1474,7 @@ fn push_entry(
             series_title: nova_core::polish_title(
                 e.series_title.as_deref().unwrap_or(&e.clean_title),
             ),
-            category: e.category.clone(),
+            category: evidence.facet(),
             // Unknown parts are stored as placeholders (the columns are NOT
             // NULL; the Xtream sentinel keeps its 0/0) and flagged by
             // `numbering`, so they are never shown as a real S01E01.
@@ -1488,7 +1489,7 @@ fn push_entry(
             } else {
                 EpisodeNumberingKind::from_parsed(e.season, e.episode)
             },
-            evidence: SourceEvidence::from_entry(e),
+            evidence,
         }),
     }
 }
@@ -2013,6 +2014,7 @@ mod stabilization_tests {
                 quality_hints: p.quality_hints.clone(),
                 language_hints: p.language_hints.clone(),
                 parser_version: Some(nova_core::clean::PARSER_VERSION),
+                category: Some(nova_core::normalize_category(group)),
                 ..entry(raw)
             }
         };
@@ -2064,6 +2066,16 @@ mod stabilization_tests {
             (Some("4K"), Some("MULTI"))
         );
         assert_eq!(movie.5, Some(i64::from(nova_core::clean::PARSER_VERSION)));
+        // "FR| FILMS 4K" is a provider collection, never a Nova genre.
+        let taxonomy: (Option<String>, Option<String>, Option<String>) =
+            sqlx::query_as("SELECT collection, genre, category FROM vod_items")
+                .fetch_one(&*pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            taxonomy,
+            (Some("Movies".into()), None, Some("Movies".into()))
+        );
 
         let channel: (String, Option<String>, Option<String>) =
             sqlx::query_as("SELECT name, raw_name, quality_hints FROM channels")

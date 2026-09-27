@@ -202,6 +202,31 @@ const TAXONOMY: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// Catch-all buckets: they organize a provider's catalog but say nothing about
+/// what a title is, so they are never genre evidence.
+const GENERIC_BUCKETS: &[&str] = &["Movies", "Series", "Entertainment"];
+
+/// Nova genre evidence from a provider group label: only a *specific* genre or
+/// topic (`"FR | FILMS ACTION"` → `Action`, `"UK | NEWS"` → `News`). Generic
+/// buckets (`"FR MOVIES 4K"` → none) and adult labels give no genre. The label
+/// itself stays the provider collection; this is separate, weaker evidence.
+pub fn provider_genre(raw_group: &str) -> Option<&'static str> {
+    let cleaned = clean_label(raw_group);
+    if cleaned.is_empty() || is_adult(&cleaned) {
+        return None;
+    }
+    canonical_genre(&cleaned).filter(|g| !GENERIC_BUCKETS.contains(g))
+}
+
+/// Genre labels that describe content (taxonomy order, generic buckets
+/// excluded): the label set for inferred (embedding) genres.
+pub fn specific_genres() -> Vec<&'static str> {
+    genres()
+        .into_iter()
+        .filter(|g| !GENERIC_BUCKETS.contains(g))
+        .collect()
+}
+
 /// The canonical genre labels, in taxonomy order. Used as the zero-shot label
 /// set for embedding-based genre classification (Phase B enrichment).
 pub fn genres() -> Vec<&'static str> {
@@ -276,6 +301,26 @@ mod tests {
         assert_eq!(normalize_category("FR| INFO 24/7"), "News");
         assert_eq!(normalize_category("KIDS & CARTOON"), "Kids");
         assert_eq!(normalize_category("Discovery Channel"), "Documentary");
+    }
+
+    #[test]
+    fn only_specific_labels_are_genre_evidence() {
+        assert_eq!(provider_genre("FR | FILMS ACTION"), Some("Action"));
+        assert_eq!(provider_genre("UK | NEWS"), Some("News"));
+        assert_eq!(provider_genre("AR| اكشن"), Some("Action"));
+        for generic in [
+            "FR MOVIES 4K",
+            "DE| GERMANY MOVIES",
+            "SERIES",
+            "VOD | NETFLIX",
+            "",
+            "XXX ADULT",
+        ] {
+            assert_eq!(provider_genre(generic), None, "{generic}");
+        }
+        let labels = specific_genres();
+        assert!(labels.contains(&"Action") && labels.contains(&"News"));
+        assert!(!labels.contains(&"Movies") && !labels.contains(&"Entertainment"));
     }
 
     #[test]

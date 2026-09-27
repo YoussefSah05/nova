@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE vod_items\n                 SET dedup_group = ?,\n                     genre = COALESCE(genre, ?),\n                     genre_source = CASE WHEN genre IS NULL AND ? IS NOT NULL\n                                         THEN 'inferred' ELSE genre_source END,\n                     category = COALESCE(genre, ?, collection, category),\n                     enrich_status = 'done'\n                 WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "f950ffae335a5657a7651f6e2d902f4094e2b65c228a86decb1ac713bb14f112"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at, binding_key, locator_key, provider_tmdb_id, raw_group, parser_version, quality_hints, language_hints, collection, genre, genre_source)\n                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 18
+    },
+    "nullable": []
+  },
+  "hash": "ad2c01272d6a83d67925cc3a8889b2a129975c2a8c1e26af344fdd2709a12c1f"
+}

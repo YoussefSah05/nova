@@ -244,11 +244,24 @@ impl<'a> ExternalMatchRepository<'a> {
             .execute(&mut *tx)
             .await?;
             let row_status = if m.is_some() { "matched" } else { "unmatched" };
+            let matched: i64 = m.is_some().into();
+            // Genre: a confident TMDB genre wins over provider/inferred ones;
+            // an unresolved decision removes only a TMDB genre. `category`
+            // (the browse facet) is recomputed as COALESCE(genre, collection).
             sqlx::query!(
                 r#"UPDATE vod_items
                    SET canonical_title = ?, poster_url = ?, backdrop_url = ?, overview = ?,
                        tmdb_genres = ?, tmdb_status = ?,
-                       category = COALESCE(NULLIF(TRIM(category), ''), ?)
+                       genre = CASE WHEN ? IS NOT NULL THEN ?
+                                    WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
+                                    ELSE genre END,
+                       genre_source = CASE WHEN ? IS NOT NULL THEN 'tmdb'
+                                           WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
+                                           ELSE genre_source END,
+                       category = COALESCE(CASE WHEN ? IS NOT NULL THEN ?
+                                                WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
+                                                ELSE genre END,
+                                           collection, category)
                    WHERE id IN (
                        SELECT v.id FROM vod_items v
                        JOIN stream_variants s
@@ -261,6 +274,13 @@ impl<'a> ExternalMatchRepository<'a> {
                 genres,
                 row_status,
                 primary,
+                primary,
+                matched,
+                primary,
+                matched,
+                primary,
+                primary,
+                matched,
                 entity,
             )
             .execute(&mut *tx)
@@ -284,7 +304,12 @@ impl<'a> ExternalMatchRepository<'a> {
                    overview = m.overview,
                    tmdb_genres = m.genres,
                    tmdb_status = CASE m.status WHEN 'matched' THEN 'matched' ELSE 'unmatched' END,
-                   category = COALESCE(NULLIF(TRIM(vod_items.category), ''), m.primary_genre)
+                   genre = COALESCE(CASE WHEN m.status = 'matched' THEN m.primary_genre END,
+                                    vod_items.genre),
+                   genre_source = CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL
+                                       THEN 'tmdb' ELSE vod_items.genre_source END,
+                   category = COALESCE(CASE WHEN m.status = 'matched' THEN m.primary_genre END,
+                                       vod_items.genre, vod_items.collection, vod_items.category)
                FROM stream_variants s
                JOIN entity_external_matches m
                  ON m.entity_id = s.entity_id AND m.namespace = 'tmdb:movie'
@@ -663,6 +688,96 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(aliases, 0, "no identity alias from a search match");
+    }
+
+    #[tokio::test]
+    async fn genre_precedence_keeps_provider_collection_and_origin_separate() {
+        let db = db().await;
+        let with_group = |name: &str, n: u32, collection: &str, genre: Option<&str>| {
+            let mut m = movie(db.source, name, n, Some(2000));
+            m.evidence.collection = Some(collection.into());
+            m.evidence.provider_genre = genre.map(str::to_string);
+            m.category = m.evidence.facet();
+            m
+        };
+        // "FR | FILMS ACTION" carries genre evidence; "FR MOVIES 4K" does not.
+        import(
+            &db,
+            &[
+                with_group("Heat", 1, "Action", Some("Action")),
+                with_group("Alien", 2, "Movies", None),
+            ],
+            false,
+        )
+        .await;
+        let row = |title: &'static str| {
+            let pool = db.pool.clone();
+            async move {
+                sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>, Option<String>)>(
+                    "SELECT collection, genre, genre_source, category FROM vod_items WHERE name = ?",
+                )
+                .bind(title)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(
+            row("Heat").await,
+            (s("Action"), s("Action"), s("provider"), s("Action"))
+        );
+        assert_eq!(
+            row("Alien").await,
+            (s("Movies"), None, None, s("Movies")),
+            "no genre from a bucket"
+        );
+
+        // An inferred genre fills only a missing genre, never over provider evidence.
+        let ids: Vec<(i64, String)> = sqlx::query_as("SELECT id, name FROM vod_items")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        let updates: Vec<_> = ids
+            .iter()
+            .map(|(id, _)| crate::EnrichUpdate {
+                id: *id,
+                dedup_group: None,
+                genre: Some("Comedy".into()),
+            })
+            .collect();
+        VodRepository::new(&db.pool)
+            .apply_enrichment(&updates)
+            .await
+            .unwrap();
+        assert_eq!(row("Heat").await.1, s("Action"));
+        assert_eq!(
+            row("Alien").await,
+            (s("Movies"), s("Comedy"), s("inferred"), s("Comedy"))
+        );
+
+        // A confident TMDB genre wins; the provider collection is untouched.
+        let heat = entity_of(&db, "Heat").await;
+        let repo = ExternalMatchRepository::new(&db.pool);
+        repo.apply_movie_matches(&[matched(&heat, "949", "Heat")])
+            .await
+            .unwrap();
+        assert_eq!(
+            row("Heat").await,
+            (s("Action"), s("Drama"), s("tmdb"), s("Drama"))
+        );
+
+        // Unresolved removes only the TMDB genre; the facet falls back to the collection.
+        repo.apply_movie_matches(&[unresolved(&heat)])
+            .await
+            .unwrap();
+        assert_eq!(row("Heat").await, (s("Action"), None, None, s("Action")));
+        // An inferred genre is not touched by an unresolved TMDB decision.
+        let alien = entity_of(&db, "Alien").await;
+        repo.apply_movie_matches(&[unresolved(&alien)])
+            .await
+            .unwrap();
+        assert_eq!(row("Alien").await.2, s("inferred"));
     }
 
     #[tokio::test]

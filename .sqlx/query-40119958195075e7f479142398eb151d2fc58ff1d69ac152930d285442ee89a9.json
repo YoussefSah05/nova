@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!: i64\", name, clean_title, category\n               FROM vod_items\n               WHERE source_id = ? AND enrich_status IS NULL",
+  "query": "SELECT id as \"id!: i64\", name, genre\n               FROM channels\n               WHERE source_id = ? AND enrich_status IS NULL",
   "describe": {
     "columns": [
       {
@@ -14,13 +14,8 @@
         "type_info": "Text"
       },
       {
-        "name": "clean_title",
+        "name": "genre",
         "ordinal": 2,
-        "type_info": "Text"
-      },
-      {
-        "name": "category",
-        "ordinal": 3,
         "type_info": "Text"
       }
     ],
@@ -30,9 +25,8 @@
     "nullable": [
       true,
       false,
-      true,
       true
     ]
   },
-  "hash": "d6415b32d01e5b7705ee880cf15cd927563654c45765838ce89310ee00dabcc6"
+  "hash": "40119958195075e7f479142398eb151d2fc58ff1d69ac152930d285442ee89a9"
 }

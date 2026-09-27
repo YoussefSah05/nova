@@ -99,6 +99,10 @@ pub struct SourceEvidence {
     pub parser_version: Option<u32>,
     pub quality_hints: Vec<String>,
     pub language_hints: Vec<String>,
+    /// Provider collection: the group label normalized for browsing.
+    pub collection: Option<String>,
+    /// Nova genre evidenced by the provider label (specific genres only).
+    pub provider_genre: Option<String>,
 }
 
 impl SourceEvidence {
@@ -111,7 +115,22 @@ impl SourceEvidence {
             parser_version: e.parser_version,
             quality_hints: e.quality_hints.clone(),
             language_hints: e.language_hints.clone(),
+            collection: e.category.as_deref().and_then(non_empty),
+            provider_genre: classify::provider_genre(&e.group_title).map(str::to_string),
         }
+    }
+
+    /// The browse facet stored in `category`: genre when known, else the
+    /// provider collection.
+    pub fn facet(&self) -> Option<String> {
+        self.provider_genre
+            .clone()
+            .or_else(|| self.collection.clone())
+    }
+
+    /// `genre_source` for the stored provider genre.
+    pub fn genre_source(&self) -> Option<&'static str> {
+        self.provider_genre.as_ref().map(|_| "provider")
     }
 
     /// Stored form of a hint list: comma-separated, `None` when empty.

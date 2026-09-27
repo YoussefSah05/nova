@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(collection) as \"collection?: String\", MAX(genre) as \"genre?: String\",\n                      MAX(genre_source) as \"genre_source?: String\"\n               FROM series_episodes WHERE source_id = ? AND series_title = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "collection?: String",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "genre?: String",
+        "ordinal": 1,
+        "type_info": "Null"
+      },
+      {
+        "name": "genre_source?: String",
+        "ordinal": 2,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7b2713b8f18b9db8acf34cba844c52870db72509bbe15e8dadf208f529ad8c19"
+}

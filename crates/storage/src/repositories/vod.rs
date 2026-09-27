@@ -37,9 +37,10 @@ impl<'a> VodRepository<'a> {
             let parser_version = ev.parser_version.map(i64::from);
             let quality = SourceEvidence::csv(&ev.quality_hints);
             let language = SourceEvidence::csv(&ev.language_hints);
+            let genre_source = ev.genre_source();
             sqlx::query!(
-                "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at, binding_key, locator_key, provider_tmdb_id, raw_group, parser_version, quality_hints, language_hints)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at, binding_key, locator_key, provider_tmdb_id, raw_group, parser_version, quality_hints, language_hints, collection, genre, genre_source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 v.source_id,
                 v.name,
                 v.clean_title,
@@ -55,6 +56,9 @@ impl<'a> VodRepository<'a> {
                 parser_version,
                 quality,
                 language,
+                ev.collection,
+                ev.provider_genre,
+                genre_source,
             )
             .execute(&mut **tx)
             .await?;
@@ -376,7 +380,7 @@ impl<'a> VodRepository<'a> {
         source_id: i64,
     ) -> Result<Vec<UnenrichedRow>, StorageError> {
         let rows = sqlx::query!(
-            r#"SELECT id as "id!: i64", name, clean_title, category
+            r#"SELECT id as "id!: i64", name, clean_title, genre
                FROM vod_items
                WHERE source_id = ? AND enrich_status IS NULL"#,
             source_id,
@@ -388,7 +392,7 @@ impl<'a> VodRepository<'a> {
             .map(|r| UnenrichedRow {
                 id: r.id,
                 text: r.clean_title.unwrap_or(r.name),
-                category: r.category,
+                genre: r.genre,
             })
             .collect())
     }
@@ -399,10 +403,17 @@ impl<'a> VodRepository<'a> {
         for u in updates {
             sqlx::query!(
                 "UPDATE vod_items
-                 SET dedup_group = ?, category = COALESCE(?, category), enrich_status = 'done'
+                 SET dedup_group = ?,
+                     genre = COALESCE(genre, ?),
+                     genre_source = CASE WHEN genre IS NULL AND ? IS NOT NULL
+                                         THEN 'inferred' ELSE genre_source END,
+                     category = COALESCE(genre, ?, collection, category),
+                     enrich_status = 'done'
                  WHERE id = ?",
                 u.dedup_group,
-                u.category,
+                u.genre,
+                u.genre,
+                u.genre,
                 u.id,
             )
             .execute(&mut *tx)

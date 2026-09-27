@@ -31,9 +31,10 @@ impl<'a> ChannelRepository<'a> {
             let parser_version = ev.parser_version.map(i64::from);
             let quality = SourceEvidence::csv(&ev.quality_hints);
             let language = SourceEvidence::csv(&ev.language_hints);
+            let genre_source = ev.genre_source();
             sqlx::query!(
-                "INSERT INTO channels (source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, added_at, channel_group, region, raw_name, parser_version, quality_hints, language_hints)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO channels (source_id, tvg_id, name, country, category, raw_group, logo_url, stream_url, added_at, channel_group, region, raw_name, parser_version, quality_hints, language_hints, collection, genre, genre_source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 c.source_id,
                 c.tvg_id,
                 c.name,
@@ -49,6 +50,9 @@ impl<'a> ChannelRepository<'a> {
                 parser_version,
                 quality,
                 language,
+                ev.collection,
+                ev.provider_genre,
+                genre_source,
             )
             .execute(&mut **tx)
             .await?;
@@ -488,7 +492,7 @@ impl<'a> ChannelRepository<'a> {
         source_id: i64,
     ) -> Result<Vec<UnenrichedRow>, StorageError> {
         let rows = sqlx::query!(
-            r#"SELECT id as "id!: i64", name, category
+            r#"SELECT id as "id!: i64", name, genre
                FROM channels
                WHERE source_id = ? AND enrich_status IS NULL"#,
             source_id,
@@ -500,7 +504,7 @@ impl<'a> ChannelRepository<'a> {
             .map(|r| UnenrichedRow {
                 id: r.id,
                 text: r.name,
-                category: r.category,
+                genre: r.genre,
             })
             .collect())
     }
@@ -511,10 +515,17 @@ impl<'a> ChannelRepository<'a> {
         for u in updates {
             sqlx::query!(
                 "UPDATE channels
-                 SET dedup_group = ?, category = COALESCE(?, category), enrich_status = 'done'
+                 SET dedup_group = ?,
+                     genre = COALESCE(genre, ?),
+                     genre_source = CASE WHEN genre IS NULL AND ? IS NOT NULL
+                                         THEN 'inferred' ELSE genre_source END,
+                     category = COALESCE(genre, ?, collection, category),
+                     enrich_status = 'done'
                  WHERE id = ?",
                 u.dedup_group,
-                u.category,
+                u.genre,
+                u.genre,
+                u.genre,
                 u.id,
             )
             .execute(&mut *tx)
