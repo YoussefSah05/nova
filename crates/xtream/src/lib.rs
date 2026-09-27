@@ -220,8 +220,7 @@ fn push_episode(
         .map(str::to_owned);
     let still_url = ep["info"]["movie_image"]
         .as_str()
-        .filter(|s| has_image_extension(s))
-        .map(str::to_owned);
+        .and_then(nova_core::artwork::plausible_image_url);
     out.push(XtreamEpisode {
         season,
         episode,
@@ -595,8 +594,7 @@ fn to_live_entry(s: LiveStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
     let logo_url = s
         .stream_icon
         .as_deref()
-        .filter(|u| has_image_extension(u))
-        .map(str::to_owned);
+        .and_then(nova_core::artwork::plausible_image_url);
     let group_title = s.category_name.unwrap_or_default();
     let category = normalize_category(&group_title);
     ParsedEntry {
@@ -629,8 +627,7 @@ fn to_vod_entry(s: VodStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
     let logo_url = s
         .stream_icon
         .as_deref()
-        .filter(|u| has_image_extension(u))
-        .map(str::to_owned);
+        .and_then(nova_core::artwork::plausible_image_url);
     let ext = s.container_extension.as_deref().unwrap_or("mp4");
     let group_title = s.category_name.unwrap_or_default();
     let category = normalize_category(&group_title);
@@ -664,8 +661,7 @@ fn to_series_entry(s: SeriesJson, _creds: &XtreamCredentials) -> ParsedEntry {
     let logo_url = s
         .cover
         .as_deref()
-        .filter(|u| has_image_extension(u))
-        .map(str::to_owned);
+        .and_then(nova_core::artwork::plausible_image_url);
     let group_title = s.category_name.unwrap_or_default();
     let category = normalize_category(&group_title);
     // Catalog sentinel: one row per series carrying the series_id in its URL.
@@ -706,16 +702,6 @@ fn parse_tmdb_id(value: &serde_json::Value) -> Option<i64> {
         _ => return None,
     };
     (1..=999_999_999).contains(&id).then_some(id)
-}
-
-fn has_image_extension(url: &str) -> bool {
-    let path = url.split('?').next().unwrap_or(url);
-    let lower = path.to_lowercase();
-    lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".png")
-        || lower.ends_with(".webp")
-        || lower.ends_with(".gif")
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

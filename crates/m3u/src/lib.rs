@@ -349,23 +349,16 @@ fn parse_extinf(line: &str) -> ExtinfAttrs {
     }
 }
 
-fn has_image_extension(url: &str) -> bool {
-    let path = url.split('?').next().unwrap_or(url);
-    let lower = path.to_lowercase();
-    lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".png")
-        || lower.ends_with(".webp")
-        || lower.ends_with(".gif")
-}
-
 // ── Classification ────────────────────────────────────────────────────────────
 
 fn classify(attrs: ExtinfAttrs, stream_url: &str) -> ParsedEntry {
     let kind = detect_kind(stream_url, attrs.group_title.as_deref());
 
     // Validate logo URL regardless of how attrs were constructed
-    let logo_url = attrs.tvg_logo.filter(|u| has_image_extension(u));
+    let logo_url = attrs
+        .tvg_logo
+        .as_deref()
+        .and_then(nova_core::artwork::plausible_image_url);
 
     // One shared, versioned parser (`nova_core::clean::parse_source_title`)
     // extracts the display title and every clue; the raw name is kept as-is.
@@ -518,6 +511,17 @@ mod tests {
         let (attrs, url) = make_movie_no_logo();
         let e = classify(attrs, url);
         assert!(e.logo_url.is_none(), "bare TMDB base URL must be rejected");
+    }
+
+    #[test]
+    fn extensionless_cdn_logo_is_kept() {
+        let (mut attrs, url) = make_movie_no_logo();
+        attrs.tvg_logo = Some("https://logos.provider.tv/channel/1234".into());
+        let e = classify(attrs, url);
+        assert_eq!(
+            e.logo_url.as_deref(),
+            Some("https://logos.provider.tv/channel/1234")
+        );
     }
 
     #[test]
