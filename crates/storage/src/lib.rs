@@ -23,8 +23,8 @@ pub use repositories::{
     NowAndNext, PlaybackRepository, ProfileRepository, ProfileSettingsRepository,
     ProgramsRepository, Publication, PublicationMode, PublicationRepository, RegisteredModel,
     ResolutionReport, ResolvedStreamUrl, ResumePosition, SearchHit, SearchRepository,
-    SeriesRepository, SeriesTmdbQuery, SeriesTmdbWrite, SourceRepository, SourceSegment,
-    StoredTranscript, TmdbCacheRepository, TranscriptLine, TranscriptRepository,
+    SeriesFlagSnapshot, SeriesRepository, SeriesTmdbQuery, SeriesTmdbWrite, SourceRepository,
+    SourceSegment, StoredTranscript, TmdbCacheRepository, TranscriptLine, TranscriptRepository,
     TranslationRepository, TranslationRow, UnenrichedRow, VodRepository, WatchHistoryRepository,
     WatchSnapshot, TMDB_MOVIE,
 };

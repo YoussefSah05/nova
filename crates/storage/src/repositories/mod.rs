@@ -46,7 +46,7 @@ pub use publication::{
     FailedAttempt, FailureStatus, Publication, PublicationMode, PublicationRepository,
 };
 pub use search::{SearchHit, SearchRepository};
-pub use series::SeriesRepository;
+pub use series::{SeriesFlagSnapshot, SeriesRepository};
 pub use sources::SourceRepository;
 pub use tmdb_cache::TmdbCacheRepository;
 pub use transcripts::{SourceSegment, StoredTranscript, TranscriptLine, TranscriptRepository};

@@ -7,6 +7,16 @@ use crate::error::StorageError;
 use crate::repositories::embeddings::{from_blob, to_blob};
 use crate::repositories::enrich::{SeriesTmdbQuery, SeriesTmdbWrite};
 
+/// User flags of one series, captured before a refresh (see
+/// [`SeriesRepository::snapshot_series_flags_tx`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeriesFlagSnapshot {
+    pub series_title: String,
+    pub is_favorite: bool,
+    pub is_in_watchlist: bool,
+    pub stream_urls: Vec<String>,
+}
+
 pub struct SeriesRepository<'a> {
     pool: &'a SqlitePool,
 }
@@ -63,47 +73,88 @@ impl<'a> SeriesRepository<'a> {
         Ok(())
     }
 
-    /// Snapshot `(series_title, is_favorite, is_in_watchlist)` for marked
-    /// series of a source. Used by refresh to re-apply series-level flags.
+    /// Snapshot user flags of marked series before a refresh replaces the
+    /// source's rows. Each entry keeps the series' stream URLs as well as its
+    /// title: URLs are stable across refreshes (the Xtream catalog sentinel is
+    /// `xtream://series/<id>`), titles are not when parsing rules change.
     pub async fn snapshot_series_flags_tx(
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
-    ) -> Result<Vec<(String, bool, bool)>, StorageError> {
+    ) -> Result<Vec<SeriesFlagSnapshot>, StorageError> {
         let rows = sqlx::query!(
             r#"SELECT series_title as "series_title!: String",
-                      MAX(is_favorite) as "fav!: i64",
-                      MAX(is_in_watchlist) as "wl!: i64"
+                      stream_url as "stream_url!: String",
+                      is_favorite as "fav!: i64",
+                      is_in_watchlist as "wl!: i64"
                FROM series_episodes
-               WHERE source_id = ?
-               GROUP BY series_title
-               HAVING MAX(is_favorite) = 1 OR MAX(is_in_watchlist) = 1"#,
+               WHERE source_id = ? AND series_title IN (
+                   SELECT series_title FROM series_episodes
+                   WHERE source_id = ?
+                   GROUP BY series_title
+                   HAVING MAX(is_favorite) = 1 OR MAX(is_in_watchlist) = 1)
+               ORDER BY series_title"#,
+            source_id,
             source_id,
         )
         .fetch_all(&mut **tx)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| (r.series_title, r.fav != 0, r.wl != 0))
-            .collect())
+        let mut out: Vec<SeriesFlagSnapshot> = Vec::new();
+        for r in rows {
+            match out.last_mut() {
+                Some(last) if last.series_title == r.series_title => {
+                    last.is_favorite |= r.fav != 0;
+                    last.is_in_watchlist |= r.wl != 0;
+                    last.stream_urls.push(r.stream_url);
+                }
+                _ => out.push(SeriesFlagSnapshot {
+                    series_title: r.series_title,
+                    is_favorite: r.fav != 0,
+                    is_in_watchlist: r.wl != 0,
+                    stream_urls: vec![r.stream_url],
+                }),
+            }
+        }
+        Ok(out)
     }
 
+    /// Re-apply snapshotted flags to the refreshed rows: to every series that
+    /// now owns one of the snapshot's stream URLs (even if its parsed title
+    /// changed), or else still carries the old title.
     pub async fn apply_series_flags_tx(
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
-        flags: &[(String, bool, bool)],
+        flags: &[SeriesFlagSnapshot],
     ) -> Result<(), StorageError> {
-        for (title, fav, wl) in flags {
-            let f = *fav as i64;
-            let w = *wl as i64;
-            sqlx::query!(
-                "UPDATE series_episodes SET is_favorite = ?, is_in_watchlist = ? WHERE source_id = ? AND series_title = ?",
-                f,
-                w,
-                source_id,
-                title,
-            )
-            .execute(&mut **tx)
-            .await?;
+        for snap in flags {
+            let f = i64::from(snap.is_favorite);
+            let w = i64::from(snap.is_in_watchlist);
+            let mut titles = vec![snap.series_title.clone()];
+            for url in &snap.stream_urls {
+                if let Some(title) = sqlx::query_scalar!(
+                    r#"SELECT series_title as "t!: String" FROM series_episodes
+                       WHERE source_id = ? AND stream_url = ? LIMIT 1"#,
+                    source_id,
+                    url,
+                )
+                .fetch_optional(&mut **tx)
+                .await?
+                {
+                    if !titles.contains(&title) {
+                        titles.push(title);
+                    }
+                }
+            }
+            for title in titles {
+                sqlx::query!(
+                    "UPDATE series_episodes SET is_favorite = ?, is_in_watchlist = ? WHERE source_id = ? AND series_title = ?",
+                    f,
+                    w,
+                    source_id,
+                    title,
+                )
+                .execute(&mut **tx)
+                .await?;
+            }
         }
         Ok(())
     }

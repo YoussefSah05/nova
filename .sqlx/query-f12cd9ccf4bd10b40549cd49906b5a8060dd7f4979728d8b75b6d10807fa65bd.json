@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT series_title as \"series_title!: String\",\n                      stream_url as \"stream_url!: String\",\n                      is_favorite as \"fav!: i64\",\n                      is_in_watchlist as \"wl!: i64\"\n               FROM series_episodes\n               WHERE source_id = ? AND series_title IN (\n                   SELECT series_title FROM series_episodes\n                   WHERE source_id = ?\n                   GROUP BY series_title\n                   HAVING MAX(is_favorite) = 1 OR MAX(is_in_watchlist) = 1)\n               ORDER BY series_title",
+  "describe": {
+    "columns": [
+      {
+        "name": "series_title!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "stream_url!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "fav!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "wl!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f12cd9ccf4bd10b40549cd49906b5a8060dd7f4979728d8b75b6d10807fa65bd"
+}

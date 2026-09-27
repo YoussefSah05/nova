@@ -1369,7 +1369,7 @@ async fn flush_series(
 struct ReplaceSnapshot {
     channel_flags: Vec<(String, bool, bool)>,
     vod_flags: Vec<(String, bool, bool)>,
-    series_flags: Vec<(String, bool, bool)>,
+    series_flags: Vec<nova_storage::SeriesFlagSnapshot>,
     watch: Vec<WatchSnapshot>,
 }
 
@@ -1980,6 +1980,56 @@ mod stabilization_tests {
             .unwrap();
         assert_eq!(active.id, active_id);
         assert_eq!(active.counts.movie, 60);
+    }
+
+    #[tokio::test]
+    async fn series_flags_survive_a_refresh_that_changes_the_parsed_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let series = |title: &str| ParsedEntry {
+            kind: MediaKind::Series,
+            series_title: Some(title.into()),
+            clean_title: title.into(),
+            season: Some(0),
+            episode: Some(0),
+            stream_url: "xtream://series/42".into(),
+            ..entry("FR | Show")
+        };
+        // Stored under the title the previous parser produced...
+        import(
+            pool.clone(),
+            id,
+            vec![Ok(series("FR Show"))],
+            ImportMode::Append,
+        )
+        .await;
+        let repo = SeriesRepository::new(&pool);
+        repo.set_favorite(id, "FR Show", true).await.unwrap();
+        repo.set_in_watchlist(id, "FR Show", true).await.unwrap();
+        // ...then refreshed under the new parser's title.
+        let ok = import(
+            pool.clone(),
+            id,
+            vec![Ok(series("Show"))],
+            ImportMode::Replace,
+        )
+        .await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+        let list = repo
+            .list_series(id, None, None, false, false, ContentSort::Default, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].series_title, "Show");
+        assert!(
+            list[0].is_favorite && list[0].is_in_watchlist,
+            "flags followed the stream URL"
+        );
     }
 
     #[tokio::test]
