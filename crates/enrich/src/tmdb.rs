@@ -337,6 +337,21 @@ impl TmdbClient {
             .await
     }
 
+    /// `/{movie,tv}/{id}/images` limited to the metadata language, English and
+    /// language-neutral images (see `tmdb_art`); `None` when TMDB doesn't know
+    /// the ID.
+    pub async fn images(&self, kind: MediaKind, id: i64) -> Result<Option<String>, EnrichError> {
+        let path = match kind {
+            MediaKind::Movie => format!("/movie/{id}/images"),
+            MediaKind::Tv => format!("/tv/{id}/images"),
+        };
+        let params = [(
+            "include_image_language",
+            crate::tmdb_art::include_image_language(&self.language),
+        )];
+        self.get_optional(&path, &params, &self.language).await
+    }
+
     /// `/search/movie`.
     pub async fn search_movie(
         &self,

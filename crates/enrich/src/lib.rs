@@ -7,6 +7,7 @@ mod dedup;
 mod embed;
 mod taxonomy;
 pub mod tmdb;
+pub mod tmdb_art;
 
 pub use dedup::{cluster, Cluster, DedupItem};
 pub use embed::{Embedder, FastEmbedder, MODEL_ID};

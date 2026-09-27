@@ -25,6 +25,9 @@ import { WatchlistButton } from "./WatchlistButton";
 import { fetchChannelsInGroup, type BrowseItem } from "./queries";
 import type { CanonicalMediaDetail } from "@/types";
 import { Artwork } from "@/components/Artwork";
+import { useArtworkSrc } from "@/lib/artwork";
+import { TitleLogo } from "./TitleLogo";
+import { useTitleArt } from "./titleArt";
 
 /// Preferred audio language choices. `null` = keep the stream's original track.
 const AUDIO_LANGS: { value: string | null; label: string }[] = [
@@ -170,7 +173,11 @@ export function ContentDetail({
     staleTime: 0,
   });
   const movie = detail ?? item.movie;
-  const ambient = useAmbientColor(movie?.backdropUrl ?? item.vod?.backdropUrl ?? item.posterUrl);
+  const art = useTitleArt(profileId, item);
+  const backdrop =
+    art?.backdropUrl ?? movie?.backdropUrl ?? item.vod?.backdropUrl ?? item.posterUrl;
+  const [usableBackdrop, onBackdropError] = useArtworkSrc(backdrop);
+  const ambient = useAmbientColor(usableBackdrop);
 
   // Live brand bundle → channel grid; movies → the overview hero below.
   if (item.kind === "live") {
@@ -185,7 +192,6 @@ export function ContentDetail({
     );
   }
 
-  const backdrop = movie?.backdropUrl ?? item.vod?.backdropUrl ?? item.posterUrl;
   const overview = movie?.overview ?? item.vod?.overview ?? null;
   const resume = detail?.resume && !detail.resume.completed ? detail.resume : null;
   const playLabel = resume ? `Resume · ${formatClock(resume.positionSec)}` : "Play";
@@ -198,10 +204,11 @@ export function ContentDetail({
       <DragRegion />
       {/* Backdrop */}
       <div className="absolute inset-x-0 top-0 h-[60vh] overflow-hidden">
-        {backdrop ? (
+        {usableBackdrop ? (
           <motion.img
-            src={backdrop}
+            src={usableBackdrop}
             alt=""
+            onError={onBackdropError}
             decoding="async"
             className="h-full w-full object-cover object-top"
             initial={reduce ? false : { scale: 1.06, opacity: 0 }}
@@ -244,9 +251,11 @@ export function ContentDetail({
             className="hidden h-52 w-36 shrink-0 rounded-xl object-cover shadow-2xl sm:block"
           />
           <div className="min-w-0 max-w-2xl">
-            <h1 className="font-display text-3xl font-semibold tracking-tight drop-shadow-lg md:text-4xl">
-              {item.title}
-            </h1>
+            <TitleLogo
+              title={item.title}
+              logoUrl={art?.logoUrl}
+              className="font-display text-3xl font-semibold tracking-tight drop-shadow-lg md:text-4xl"
+            />
             {item.subtitle && <p className="mt-2 text-sm text-white/70">{item.subtitle}</p>}
             {overview && (
               <p className="mt-3 line-clamp-4 max-w-xl text-sm leading-6 text-white/75">

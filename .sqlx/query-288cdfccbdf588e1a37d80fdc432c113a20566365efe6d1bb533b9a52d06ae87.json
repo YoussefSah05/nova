@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO tmdb_title_art\n                 (media_type, tmdb_id, language, logo_url, logo_language, logo_width,\n                  logo_height, backdrop_url, artwork_version, fetched_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n             ON CONFLICT(media_type, tmdb_id) DO UPDATE SET\n                 language = excluded.language,\n                 logo_url = excluded.logo_url,\n                 logo_language = excluded.logo_language,\n                 logo_width = excluded.logo_width,\n                 logo_height = excluded.logo_height,\n                 backdrop_url = excluded.backdrop_url,\n                 artwork_version = excluded.artwork_version,\n                 fetched_at = excluded.fetched_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "288cdfccbdf588e1a37d80fdc432c113a20566365efe6d1bb533b9a52d06ae87"
+}

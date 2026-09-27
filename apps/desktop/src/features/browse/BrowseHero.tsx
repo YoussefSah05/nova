@@ -14,6 +14,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { RECENTLY_ADDED_RAIL, useRail, type BrowseItem, type BrowseTab } from "./queries";
 import type { PosterCardHandlers } from "./PosterCard";
 import { useArtworkSrc } from "@/lib/artwork";
+import { TitleLogo } from "./TitleLogo";
+import { useTitleArt } from "./titleArt";
 
 const KIND_LABEL: Record<BrowseTab, string> = {
   live: "Live channel",
@@ -36,8 +38,10 @@ export function BrowseHero({
   const featured: BrowseItem | undefined = data?.find((i) => i.posterUrl) ?? data?.[0];
   const live = tab === "live";
   // A wide TMDB backdrop suits the full-bleed hero better than a portrait poster.
+  const art = useTitleArt(profileId, featured);
   const heroImage = featured
-    ? (featured.movie?.backdropUrl ??
+    ? (art?.backdropUrl ??
+      featured.movie?.backdropUrl ??
       featured.vod?.backdropUrl ??
       featured.series?.backdropUrl ??
       featured.posterUrl)
@@ -86,9 +90,12 @@ export function BrowseHero({
           </Badge>
         </StaggerItem>
         <StaggerItem>
-          <h2 className="font-display line-clamp-2 text-3xl font-semibold tracking-tight text-white drop-shadow-lg md:text-4xl">
-            {featured.title}
-          </h2>
+          <TitleLogo
+            as="h2"
+            title={featured.title}
+            logoUrl={live ? null : art?.logoUrl}
+            className="font-display line-clamp-2 text-3xl font-semibold tracking-tight text-white drop-shadow-lg md:text-4xl"
+          />
         </StaggerItem>
         {featured.subtitle && (
           <StaggerItem>

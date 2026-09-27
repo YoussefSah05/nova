@@ -356,3 +356,15 @@ export type ApiError =
   | { kind: "Conflict"; message: string }
   | { kind: "InvalidInput"; message: string }
   | { kind: "Internal"; message: string };
+
+/// TMDB title artwork (artwork v1), fetched on demand for the title on screen.
+/// Mirrors `commands::title_art::TitleArtView`.
+export interface TitleArt {
+  logoUrl: string | null;
+  /** ISO 639-1 of the logo's text; null when language-neutral. */
+  logoLanguage: string | null;
+  logoWidth: number | null;
+  logoHeight: number | null;
+  /** Text-free backdrop; null keeps the title's existing backdrop. */
+  backdropUrl: string | null;
+}

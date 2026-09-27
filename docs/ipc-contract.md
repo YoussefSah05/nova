@@ -86,6 +86,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `clear_transcription_cache` | `{ profileId }` | `void` | cleanup |
 | `get_artwork_cache_stats` | `{}` | `{ files, bytes }` | artwork v1 — the shared on-disk artwork cache behind the `nova-art://` protocol |
 | `clear_artwork_cache` | `{}` | `void` | artwork v1 |
+| `get_title_art` | `{ profileId, subject: { kind: "movie", entityId } \| { kind: "series", sourceId, seriesTitle } }` | `{ logoUrl, logoLanguage, logoWidth, logoHeight, backdropUrl }` | artwork v1 — TMDB title logo (metadata language → English → neutral) + text-free backdrop; stored per TMDB work, fetched on demand only when TMDB is enabled, never fails (empty when unknown) |
 | `get_app_info` | `{}` | `{ version, dataDir, transcriptsBytes, modelsBytes }` | cleanup |
 | `enqueue_translation` | `{ transcript_id: number, target_lang: string, backend: TranslationBackend }` | `JobId` | 7 |
 | `get_transcript` | `{ transcript_id: number }` | `Transcript` | 6 |

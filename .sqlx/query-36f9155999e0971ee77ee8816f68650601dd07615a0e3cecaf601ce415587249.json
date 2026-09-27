@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT external_id as \"external_id!: String\" FROM entity_external_matches\n               WHERE entity_id = ? AND namespace = 'tmdb:movie' AND status = 'matched'",
+  "describe": {
+    "columns": [
+      {
+        "name": "external_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "36f9155999e0971ee77ee8816f68650601dd07615a0e3cecaf601ce415587249"
+}

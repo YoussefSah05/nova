@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT tmdb_id as \"tmdb_id!: i64\" FROM series_meta\n               WHERE source_id = ? AND series_title = ?\n                 AND tmdb_status = 'matched' AND tmdb_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "tmdb_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "0be9b6b62f3f64b5e5622666e57be68e8db75a31437b18895e523bb17860315e"
+}

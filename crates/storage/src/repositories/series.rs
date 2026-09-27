@@ -558,7 +558,8 @@ impl<'a> SeriesRepository<'a> {
                       OR sm.matcher_version < ?
                       OR (sm.tmdb_status = 'unmatched' AND sm.checked_at < ?)
                       OR (sm.tmdb_status = 'matched'
-                          AND COALESCE(sm.title_language, 'en-US') <> ?))"#,
+                          AND (sm.tmdb_id IS NULL
+                               OR COALESCE(sm.title_language, 'en-US') <> ?)))"#,
             source_id,
             version,
             retry_unresolved_before,
@@ -590,9 +591,10 @@ impl<'a> SeriesRepository<'a> {
                 "INSERT INTO series_meta
                    (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,
                     tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,
-                    evidence_json, checked_at, original_title, title_language)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    evidence_json, checked_at, original_title, title_language, tmdb_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(source_id, series_title) DO UPDATE SET
+                   tmdb_id = excluded.tmdb_id,
                    canonical_title = excluded.canonical_title,
                    poster_url = excluded.poster_url,
                    backdrop_url = excluded.backdrop_url,
@@ -621,6 +623,7 @@ impl<'a> SeriesRepository<'a> {
                 now,
                 u.original_title,
                 u.title_language,
+                u.tmdb_id,
             )
             .execute(&mut *tx)
             .await?;
@@ -855,6 +858,7 @@ mod tests {
         repo.apply_tmdb(
             source,
             &[SeriesTmdbWrite {
+                tmdb_id: Some(1396),
                 series_title: "BREAKING BAD".into(),
                 canonical_title: Some("Breaking Bad".into()),
                 original_title: Some("Breaking Bad".into()),
@@ -868,6 +872,14 @@ mod tests {
         )
         .await
         .unwrap();
+        assert_eq!(
+            crate::TitleArtRepository::new(&pool)
+                .series_tmdb_id(source, "BREAKING BAD")
+                .await
+                .unwrap(),
+            Some(1396),
+            "a series match keeps its TMDB id"
+        );
         let list = repo
             .list_series(
                 source,

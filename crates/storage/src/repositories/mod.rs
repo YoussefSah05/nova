@@ -16,6 +16,7 @@ pub mod publication;
 pub mod search;
 pub mod series;
 pub mod sources;
+pub mod title_art;
 pub mod tmdb_cache;
 pub mod transcripts;
 pub mod translations;
@@ -50,6 +51,7 @@ pub use publication::{
 pub use search::{SearchHit, SearchRepository};
 pub use series::{SeriesFlagSnapshot, SeriesRepository};
 pub use sources::SourceRepository;
+pub use title_art::{StoredTitleArt, TitleArtMedia, TitleArtRepository};
 pub use tmdb_cache::TmdbCacheRepository;
 pub use transcripts::{SourceSegment, StoredTranscript, TranscriptLine, TranscriptRepository};
 pub use translations::{TranslationRepository, TranslationRow};

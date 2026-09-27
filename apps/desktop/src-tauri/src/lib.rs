@@ -204,6 +204,7 @@ pub fn run() {
             commands::enrich::get_enrich_model_status,
             commands::enrich::download_enrich_models,
             commands::enrich::start_enrichment,
+            commands::title_art::get_title_art,
             // Cleanup — per-profile viewing settings + player episode list
             commands::profile_settings::get_profile_settings,
             commands::profile_settings::set_profile_settings,

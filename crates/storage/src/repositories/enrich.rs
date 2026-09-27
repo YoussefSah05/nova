@@ -33,6 +33,9 @@ pub struct SeriesTmdbQuery {
 #[derive(Debug, Clone, Default)]
 pub struct SeriesTmdbWrite {
     pub series_title: String,
+    /// The matched TMDB TV id (a foreign key, never a Nova ID); `None` when
+    /// unmatched.
+    pub tmdb_id: Option<i64>,
     pub canonical_title: Option<String>,
     /// Original-language title, kept apart from the (localized) display title.
     pub original_title: Option<String>,

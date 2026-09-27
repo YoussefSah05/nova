@@ -391,9 +391,14 @@ const TMDB_BATCH: usize = 25;
 const RETRY_UNRESOLVED_SECS: i64 = 7 * 24 * 3600;
 
 /// One TMDB request, identified by its response-cache key.
-enum TmdbRequest {
+pub(crate) enum TmdbRequest {
     MovieDetails(i64),
-    SearchMovie { query: String, year: Option<i32> },
+    /// `/{movie,tv}/{id}/images` for title artwork.
+    Images(TmdbMediaKind, i64),
+    SearchMovie {
+        query: String,
+        year: Option<i32>,
+    },
     SearchTv(String),
     SearchMulti(String),
 }
@@ -402,7 +407,7 @@ impl TmdbRequest {
     /// Stable cache key. TMDB bodies differ by metadata language, so the key
     /// carries it, except for `en-US`, whose keys are unchanged from Phase C
     /// so existing cached bodies are reused.
-    fn cache_key(&self, language: &str) -> String {
+    pub(crate) fn cache_key(&self, language: &str) -> String {
         let key = self.base_key();
         if language == nova_core::DEFAULT_METADATA_LANGUAGE {
             key
@@ -415,6 +420,8 @@ impl TmdbRequest {
         match self {
             // v2: details now include credits and keywords.
             Self::MovieDetails(id) => format!("movie-details-v2::{id}"),
+            Self::Images(TmdbMediaKind::Movie, id) => format!("movie-images-v1::{id}"),
+            Self::Images(TmdbMediaKind::Tv, id) => format!("tv-images-v1::{id}"),
             Self::SearchMovie { query, year } => match year {
                 Some(y) => format!("movie::{}::{y}", query.to_lowercase()),
                 None => format!("movie::{}::noyear", query.to_lowercase()),
@@ -427,15 +434,15 @@ impl TmdbRequest {
 
 /// Where TMDB bodies come from: the cached network client in the app, a fixture
 /// map in tests. `Ok(None)` means TMDB answered 404.
-trait TmdbFetch {
+pub(crate) trait TmdbFetch {
     async fn fetch(&self, request: &TmdbRequest) -> Result<Option<String>, ApiError>;
     /// Metadata language of the fetched bodies (BCP-47).
     fn language(&self) -> &str;
 }
 
-struct CachedTmdb<'a> {
-    client: &'a TmdbClient,
-    cache: &'a TmdbCacheRepository<'a>,
+pub(crate) struct CachedTmdb<'a> {
+    pub(crate) client: &'a TmdbClient,
+    pub(crate) cache: &'a TmdbCacheRepository<'a>,
 }
 
 impl TmdbFetch for CachedTmdb<'_> {
@@ -451,6 +458,7 @@ impl TmdbFetch for CachedTmdb<'_> {
         }
         let fetched = match request {
             TmdbRequest::MovieDetails(id) => self.client.movie_details(*id).await,
+            TmdbRequest::Images(kind, id) => self.client.images(*kind, *id).await,
             TmdbRequest::SearchMovie { query, year } => {
                 self.client.search_movie(query, *year).await.map(Some)
             }
@@ -748,6 +756,7 @@ async fn match_series(
             let genres = canonicalize_genres(&m.genres);
             SeriesTmdbWrite {
                 series_title: q.series_title.clone(),
+                tmdb_id: Some(m.tmdb_id),
                 canonical_title: Some(m.canonical_title),
                 original_title: m.original_title,
                 title_language: Some(tmdb.language().to_string()),
@@ -767,6 +776,7 @@ async fn match_series(
             evidence.outcome = outcome_name(reason).into();
             SeriesTmdbWrite {
                 series_title: q.series_title.clone(),
+                tmdb_id: None,
                 canonical_title: None,
                 original_title: None,
                 title_language: None,
