@@ -725,7 +725,10 @@ async fn fetch_series_episodes(
         .await
         .map_err(|e| ApiError::Internal(format!("failed to load episodes: {e}")))?;
 
+    let series_facts = fetched.facts.clone();
+    let series_tmdb_id = fetched.tmdb_id;
     let rows: Vec<SeriesEpisode> = fetched
+        .episodes
         .into_iter()
         .map(|ep| SeriesEpisode {
             id: 0,
@@ -747,8 +750,12 @@ async fn fetch_series_episodes(
             } else {
                 EpisodeNumberingKind::Unknown
             },
-            // Provider fields are stored verbatim (the episode title is raw).
-            evidence: SourceEvidence::default(),
+            // Provider fields are stored verbatim (the episode title is raw);
+            // the episode's `info` facts (plot, runtime, air date) ride along.
+            evidence: SourceEvidence {
+                provider_facts: ep.facts,
+                ..SourceEvidence::default()
+            },
         })
         .collect();
 
@@ -758,8 +765,14 @@ async fn fetch_series_episodes(
         return Ok(Vec::new());
     }
 
-    repo.replace_series_episodes(source_id, series_title, &rows)
-        .await?;
+    repo.replace_series_episodes(
+        source_id,
+        series_title,
+        &rows,
+        series_facts.as_ref(),
+        series_tmdb_id,
+    )
+    .await?;
     repo.list_episodes(source_id, series_title)
         .await
         .map_err(Into::into)
@@ -1609,6 +1622,7 @@ mod stabilization_tests {
             quality_hints: Vec::new(),
             language_hints: Vec::new(),
             parser_version: None,
+            provider_facts: None,
         }
     }
 
@@ -2125,7 +2139,7 @@ mod stabilization_tests {
         };
         let series = SeriesRepository::new(&pool);
         series
-            .replace_series_episodes(id, "Show", &fetched("old"))
+            .replace_series_episodes(id, "Show", &fetched("old"), None, None)
             .await
             .unwrap();
         let history = WatchHistoryRepository::new(&pool);
@@ -2160,7 +2174,7 @@ mod stabilization_tests {
 
         // Re-fetched after a credential rotation: the durable key still matches.
         series
-            .replace_series_episodes(id, "Show", &fetched("new"))
+            .replace_series_episodes(id, "Show", &fetched("new"), None, None)
             .await
             .unwrap();
         let ep_new = episode_id(&pool, "http://h:80/series/u/new/293257.mkv").await;

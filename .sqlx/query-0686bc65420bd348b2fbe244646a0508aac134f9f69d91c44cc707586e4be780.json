@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\", provider_facts as \"facts!: String\"\n               FROM series_episodes\n               WHERE source_id = ? AND series_title = ? AND provider_facts IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "facts!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "0686bc65420bd348b2fbe244646a0508aac134f9f69d91c44cc707586e4be780"
+}

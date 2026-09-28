@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT facts as \"facts?: String\" FROM series_provider_facts\n               WHERE source_id = ? AND series_title = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "facts?: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ac2a21c52259b52bd43d04ba8d76f264bdc287ea9a22d8263fb144dda9940017"
+}

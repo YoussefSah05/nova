@@ -1,5 +1,6 @@
 use nova_core::catalog::media::{binding_key, locator_binding_key};
 use nova_core::catalog::EntityId;
+use nova_core::ProviderFacts;
 use nova_core::{now_ts, ContentSort, SourceEvidence, VodItem};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
@@ -38,9 +39,10 @@ impl<'a> VodRepository<'a> {
             let quality = SourceEvidence::csv(&ev.quality_hints);
             let language = SourceEvidence::csv(&ev.language_hints);
             let genre_source = ev.genre_source();
+            let facts = ev.facts_json();
             sqlx::query!(
-                "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at, binding_key, locator_key, provider_tmdb_id, raw_group, parser_version, quality_hints, language_hints, collection, genre, genre_source)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO vod_items (source_id, name, clean_title, year, logo_url, stream_url, category, added_at, binding_key, locator_key, provider_tmdb_id, raw_group, parser_version, quality_hints, language_hints, collection, genre, genre_source, provider_facts)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 v.source_id,
                 v.name,
                 v.clean_title,
@@ -59,10 +61,46 @@ impl<'a> VodRepository<'a> {
                 ev.collection,
                 ev.provider_genre,
                 genre_source,
+                facts,
             )
             .execute(&mut **tx)
             .await?;
         }
+        Ok(())
+    }
+
+    /// Provider facts of a movie row (bulk-list facts, or `get_vod_info`
+    /// details once fetched).
+    pub async fn provider_facts(&self, vod_id: i64) -> Result<Option<ProviderFacts>, StorageError> {
+        let json = sqlx::query_scalar!(
+            r#"SELECT provider_facts as "facts?: String" FROM vod_items WHERE id = ?"#,
+            vod_id
+        )
+        .fetch_optional(self.pool)
+        .await?
+        .flatten();
+        Ok(json.as_deref().and_then(ProviderFacts::from_json))
+    }
+
+    /// Store richer facts for a movie row (e.g. from `get_vod_info`), filling
+    /// gaps from what the row already had.
+    pub async fn merge_provider_facts(
+        &self,
+        vod_id: i64,
+        facts: &ProviderFacts,
+    ) -> Result<(), StorageError> {
+        let merged = match self.provider_facts(vod_id).await? {
+            Some(existing) => facts.clone().or(existing),
+            None => facts.clone(),
+        };
+        let json = merged.non_empty().map(|f| f.to_json());
+        sqlx::query!(
+            "UPDATE vod_items SET provider_facts = ? WHERE id = ?",
+            json,
+            vod_id
+        )
+        .execute(self.pool)
+        .await?;
         Ok(())
     }
 

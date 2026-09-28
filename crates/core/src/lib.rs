@@ -8,9 +8,11 @@ pub mod classify;
 pub mod clean;
 pub mod models;
 pub mod naming;
+pub mod provider_facts;
 pub mod region;
 pub use classify::normalize_category;
 pub use clean::polish_title;
+pub use provider_facts::ProviderFacts;
 pub use region::region_of;
 
 // ── Profiles ─────────────────────────────────────────────────────────────────
@@ -79,8 +81,9 @@ pub struct ParsedEntry {
     /// Provider-scoped stable item ID (e.g. `xtream:vod:123`) when the
     /// provider has one. Never a URL; consumed only by the catalog compiler.
     pub upstream_id: Option<String>,
-    /// Provider-claimed TMDB movie ID (Xtream `tmdb`). Identity evidence for
-    /// entity resolution, never displayed; `None` when absent or invalid.
+    /// Provider-claimed TMDB ID of the entry's kind (a movie id for movies, a
+    /// TV id for series; Xtream `tmdb`). Identity evidence, never displayed;
+    /// `None` when absent or invalid.
     pub provider_tmdb_id: Option<i64>,
     /// Tags the parser removed from the title (see `clean::ParsedTitle`).
     pub quality_hints: Vec<String>,
@@ -88,13 +91,16 @@ pub struct ParsedEntry {
     /// `clean::PARSER_VERSION` that produced the parsed fields; `None` when
     /// the fields were not parsed from a provider title.
     pub parser_version: Option<u32>,
+    /// Descriptive facts the provider shipped with the entry (plot, cast,
+    /// rating, trailer…); `None` when it sent nothing usable.
+    pub provider_facts: Option<ProviderFacts>,
 }
 
 /// Provider evidence captured at import and persisted next to a catalog row:
 /// the untouched title and group label, the parser that produced the display
 /// values, and the tags it removed. Insert-side only: never serialized over IPC
 /// and not loaded on read paths.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SourceEvidence {
     pub raw_name: Option<String>,
     pub raw_group: Option<String>,
@@ -105,6 +111,11 @@ pub struct SourceEvidence {
     pub collection: Option<String>,
     /// Nova genre evidenced by the provider label (specific genres only).
     pub provider_genre: Option<String>,
+    /// Provider-shipped descriptive facts (see `provider_facts`).
+    pub provider_facts: Option<ProviderFacts>,
+    /// Provider-claimed TMDB id of the entry's kind (series rows use it; VOD
+    /// rows also keep it on `VodItem::provider_tmdb_id`).
+    pub provider_tmdb_id: Option<i64>,
 }
 
 impl SourceEvidence {
@@ -119,7 +130,14 @@ impl SourceEvidence {
             language_hints: e.language_hints.clone(),
             collection: e.category.as_deref().and_then(non_empty),
             provider_genre: classify::provider_genre(&e.group_title).map(str::to_string),
+            provider_facts: e.provider_facts.clone(),
+            provider_tmdb_id: e.provider_tmdb_id,
         }
+    }
+
+    /// Stored form of the provider facts (`None` when there are none).
+    pub fn facts_json(&self) -> Option<String> {
+        self.provider_facts.as_ref().map(ProviderFacts::to_json)
     }
 
     /// The browse facet stored in `category`: genre when known, else the

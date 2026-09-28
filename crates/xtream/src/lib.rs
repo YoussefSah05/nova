@@ -8,6 +8,7 @@
 //! so entries are emitted as bytes arrive — no buffering of the full response.
 
 use nova_core::clean::{parse_source_title, TitleKind, PARSER_VERSION};
+use nova_core::provider_facts::{self as facts, ProviderFacts};
 use nova_core::{normalize_category, MediaKind, ParsedEntry};
 use serde::de::{DeserializeOwned, SeqAccess, Visitor};
 use serde::Deserialize;
@@ -130,13 +131,32 @@ pub fn detect(url: &str) -> bool {
 }
 
 /// One episode of a series, resolved from `get_series_info`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct XtreamEpisode {
     pub season: i64,
     pub episode: i64,
     pub title: Option<String>,
     pub stream_url: String,
     pub still_url: Option<String>,
+    /// Plot, runtime, rating, air date from the episode's `info`.
+    pub facts: Option<ProviderFacts>,
+}
+
+/// A `get_series_info` response: the episodes plus the series-level `info`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct XtreamSeriesInfo {
+    pub episodes: Vec<XtreamEpisode>,
+    pub facts: Option<ProviderFacts>,
+    /// Provider-claimed TMDB TV id.
+    pub tmdb_id: Option<i64>,
+}
+
+/// A `get_vod_info` response's descriptive part.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct XtreamVodInfo {
+    pub facts: Option<ProviderFacts>,
+    /// Provider-claimed TMDB movie id.
+    pub tmdb_id: Option<i64>,
 }
 
 /// Fetch the full season/episode list for one series via the `get_series_info`
@@ -146,12 +166,29 @@ pub struct XtreamEpisode {
 pub async fn fetch_series_info(
     creds: &XtreamCredentials,
     series_id: i64,
-) -> Result<Vec<XtreamEpisode>, String> {
+) -> Result<XtreamSeriesInfo, String> {
     let url = format!(
         "{}&series_id={}",
         creds.api_url("get_series_info"),
         series_id
     );
+    let body = fetch_object(&url, "get_series_info").await?;
+    Ok(parse_series_info(&body, creds))
+}
+
+/// Fetch one movie's details via `get_vod_info` (plot, cast, director,
+/// runtime, trailer, TMDB id). Called lazily when a movie's page opens.
+pub async fn fetch_vod_info(
+    creds: &XtreamCredentials,
+    vod_id: i64,
+) -> Result<XtreamVodInfo, String> {
+    let url = format!("{}&vod_id={}", creds.api_url("get_vod_info"), vod_id);
+    let body = fetch_object(&url, "get_vod_info").await?;
+    Ok(parse_vod_info(&body))
+}
+
+/// GET a small JSON object from the panel (single response, not streamed).
+async fn fetch_object(url: &str, action: &str) -> Result<Value, String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(45))
@@ -160,26 +197,96 @@ pub async fn fetch_series_info(
         .map_err(|e| reqwest_error_summary(&e).to_string())?;
 
     let resp = client
-        .get(&url)
+        .get(url)
         .header(reqwest::header::ACCEPT_ENCODING, "identity")
         .send()
         .await
         .map_err(|e| reqwest_error_summary(&e).to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("get_series_info: HTTP {}", resp.status()));
+        return Err(format!("{action}: HTTP {}", resp.status()));
     }
-    let body: Value = resp
-        .json()
+    resp.json()
         .await
-        .map_err(|e| reqwest_error_summary(&e).to_string())?;
-    Ok(parse_series_info(&body, creds))
+        .map_err(|e| reqwest_error_summary(&e).to_string())
+}
+
+/// Pure parser for a `get_vod_info` body (`info` holds the details).
+fn parse_vod_info(body: &Value) -> XtreamVodInfo {
+    let info = &body["info"];
+    XtreamVodInfo {
+        facts: facts_from_json(info),
+        tmdb_id: parse_tmdb_id(&info["tmdb_id"]).or_else(|| parse_tmdb_id(&info["tmdb"])),
+    }
+}
+
+/// A JSON field as text, whether the panel sent a string or a number.
+fn text_field(v: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|k| match &v[*k] {
+        Value::String(s) => facts::clean_text(s),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    })
+}
+
+/// Normalized provider facts from an Xtream object (a series/VOD list item or
+/// an `info` block). Key aliases cover the panels seen in the wild.
+fn facts_from_json(v: &Value) -> Option<ProviderFacts> {
+    if !v.is_object() {
+        return None;
+    }
+    let rating = text_field(v, &["rating"])
+        .and_then(|r| facts::rating(&r, false))
+        .or_else(|| text_field(v, &["rating_5based"]).and_then(|r| facts::rating(&r, true)));
+    let duration_sec = text_field(v, &["duration_secs"])
+        .and_then(|d| facts::duration_sec(&d))
+        .or_else(|| text_field(v, &["duration"]).and_then(|d| facts::duration_sec(&d)))
+        .or_else(|| {
+            // Series report a typical episode runtime in minutes.
+            text_field(v, &["episode_run_time"])
+                .and_then(|m| m.parse::<i64>().ok())
+                .and_then(|m| facts::duration_sec(&(m * 60).to_string()))
+        });
+    let backdrop_url = match &v["backdrop_path"] {
+        Value::Array(list) => list
+            .iter()
+            .filter_map(Value::as_str)
+            .find_map(nova_core::artwork::plausible_image_url),
+        Value::String(s) => nova_core::artwork::plausible_image_url(s),
+        _ => None,
+    };
+    ProviderFacts {
+        plot: text_field(v, &["plot", "description"]),
+        cast: text_field(v, &["cast", "actors"]),
+        director: text_field(v, &["director"]),
+        genre: text_field(v, &["genre"]),
+        release_date: text_field(
+            v,
+            &["releaseDate", "releasedate", "release_date", "air_date"],
+        )
+        .and_then(|d| facts::release_date(&d)),
+        rating,
+        duration_sec,
+        trailer_youtube: text_field(v, &["youtube_trailer", "trailer"])
+            .and_then(|t| facts::youtube_id(&t)),
+        backdrop_url,
+    }
+    .non_empty()
 }
 
 /// Pure parser for a `get_series_info` body. The `episodes` field is normally an
 /// object keyed by season number (`{"1":[…],"2":[…]}`); some providers send a
 /// flat array, and ids/numbers arrive as either strings or numbers — all
 /// tolerated here. Factored out so it can be unit-tested without the network.
-fn parse_series_info(body: &Value, creds: &XtreamCredentials) -> Vec<XtreamEpisode> {
+fn parse_series_info(body: &Value, creds: &XtreamCredentials) -> XtreamSeriesInfo {
+    let info = &body["info"];
+    XtreamSeriesInfo {
+        episodes: parse_series_episodes(body, creds),
+        facts: facts_from_json(info),
+        tmdb_id: parse_tmdb_id(&info["tmdb"]).or_else(|| parse_tmdb_id(&info["tmdb_id"])),
+    }
+}
+
+fn parse_series_episodes(body: &Value, creds: &XtreamCredentials) -> Vec<XtreamEpisode> {
     let mut out = Vec::new();
     let episodes = &body["episodes"];
     if let Some(map) = episodes.as_object() {
@@ -227,6 +334,7 @@ fn push_episode(
         title,
         stream_url: creds.series_episode_url(&id, ext),
         still_url,
+        facts: facts_from_json(&ep["info"]),
     });
 }
 
@@ -570,6 +678,10 @@ struct VodStreamJson {
     /// Panels send a number, a numeric string, `""` or `null`.
     #[serde(default)]
     tmdb: Option<serde_json::Value>,
+    #[serde(default)]
+    rating: Option<serde_json::Value>,
+    #[serde(default)]
+    rating_5based: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -582,6 +694,12 @@ struct SeriesJson {
     cover: Option<String>,
     #[serde(default)]
     category_name: Option<String>,
+    #[serde(default)]
+    tmdb: Option<serde_json::Value>,
+    /// Descriptive fields (plot, cast, director, genre, releaseDate, rating,
+    /// backdrop_path, youtube_trailer, episode_run_time…), read as facts.
+    #[serde(flatten)]
+    details: serde_json::Map<String, Value>,
 }
 
 // ── Entry converters ──────────────────────────────────────────────────────────
@@ -616,6 +734,7 @@ fn to_live_entry(s: LiveStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
         quality_hints,
         language_hints,
         parser_version: Some(PARSER_VERSION),
+        provider_facts: None,
     }
 }
 
@@ -650,6 +769,10 @@ fn to_vod_entry(s: VodStreamJson, creds: &XtreamCredentials) -> ParsedEntry {
         quality_hints,
         language_hints,
         parser_version: Some(PARSER_VERSION),
+        provider_facts: facts_from_json(&serde_json::json!({
+            "rating": s.rating,
+            "rating_5based": s.rating_5based,
+        })),
     }
 }
 
@@ -684,10 +807,11 @@ fn to_series_entry(s: SeriesJson, _creds: &XtreamCredentials) -> ParsedEntry {
         episode: Some(0),
         category: Some(category),
         upstream_id: None,
-        provider_tmdb_id: None,
+        provider_tmdb_id: s.tmdb.as_ref().and_then(parse_tmdb_id),
         quality_hints,
         language_hints,
         parser_version: Some(PARSER_VERSION),
+        provider_facts: facts_from_json(&Value::Object(s.details)),
     }
 }
 
@@ -807,6 +931,8 @@ mod tests {
             category_name: None,
             container_extension: None,
             tmdb: None,
+            rating: None,
+            rating_5based: None,
         };
         let e = to_vod_entry(vod("FR | Blade Runner 2049 (2017) 4K"), &creds);
         assert_eq!(e.clean_title, "Blade Runner 2049");
@@ -833,6 +959,8 @@ mod tests {
             category_name: Some("GERMANY MOVIES".into()),
             container_extension: Some("mp4".into()),
             tmdb: Some(serde_json::json!("280180")),
+            rating: Some(serde_json::json!("7.1")),
+            rating_5based: None,
         };
         let e = to_vod_entry(s, &creds);
         assert_eq!(e.kind, MediaKind::Movie);
@@ -840,6 +968,7 @@ mod tests {
         assert_eq!(e.year, Some(2024));
         assert!(e.logo_url.is_some());
         assert_eq!(e.provider_tmdb_id, Some(280180));
+        assert_eq!(e.provider_facts.and_then(|f| f.rating), Some(7.1));
     }
 
     #[test]
@@ -878,6 +1007,8 @@ mod tests {
             name: "Mon Comeback".into(),
             cover: None,
             category_name: Some("HBO".into()),
+            tmdb: None,
+            details: serde_json::Map::new(),
         };
         let e = to_series_entry(s, &creds);
         assert_eq!(e.kind, MediaKind::Series);
@@ -923,7 +1054,7 @@ mod tests {
                 ]
             }
         });
-        let eps = parse_series_info(&body, &test_creds());
+        let eps = parse_series_info(&body, &test_creds()).episodes;
         assert_eq!(eps.len(), 3);
         // Sorted by season then episode.
         assert_eq!((eps[0].season, eps[0].episode), (1, 1));
@@ -941,10 +1072,10 @@ mod tests {
     fn parse_series_info_handles_empty_or_missing() {
         // Some providers send an empty array instead of an object.
         let body = serde_json::json!({ "episodes": [] });
-        assert!(parse_series_info(&body, &test_creds()).is_empty());
+        assert!(parse_series_info(&body, &test_creds()).episodes.is_empty());
         // Missing episodes key entirely.
         let body = serde_json::json!({ "info": {} });
-        assert!(parse_series_info(&body, &test_creds()).is_empty());
+        assert!(parse_series_info(&body, &test_creds()).episodes.is_empty());
     }
 
     #[test]
@@ -954,7 +1085,7 @@ mod tests {
                 { "id": "9", "episode_num": 3, "season": 4, "container_extension": "ts" }
             ]
         });
-        let eps = parse_series_info(&body, &test_creds());
+        let eps = parse_series_info(&body, &test_creds()).episodes;
         assert_eq!(eps.len(), 1);
         assert_eq!((eps[0].season, eps[0].episode), (4, 3));
     }
@@ -989,6 +1120,7 @@ mod tests {
                 quality_hints: Vec::new(),
                 language_hints: Vec::new(),
                 parser_version: None,
+                provider_facts: None,
             },
             |entry| {
                 ids.push(entry.name.parse::<u32>().unwrap());
@@ -1032,5 +1164,86 @@ mod tests {
             assert!(result.is_err());
             assert!(!result.unwrap_err().contains("sensitive-fixture-value"));
         }
+    }
+
+    #[test]
+    fn series_list_items_carry_their_facts_and_tmdb_id() {
+        let item: SeriesJson = serde_json::from_value(serde_json::json!({
+            "series_id": 7, "name": "EN | Dark", "cover": "http://img/c.jpg",
+            "category_name": "Drama", "plot": "  Time travel  in Winden. ",
+            "cast": "Louis Hofmann, Lisa Vicari", "director": "N/A",
+            "genre": "Drama / Mystery", "releaseDate": "2017-12-01",
+            "rating": "8.4", "rating_5based": 4.2,
+            "backdrop_path": ["", "http://img/b.jpg"],
+            "youtube_trailer": "https://www.youtube.com/watch?v=rrwycJ08PSA",
+            "episode_run_time": "60", "tmdb": "70523"
+        }))
+        .unwrap();
+        let e = to_series_entry(item, &test_creds());
+        assert_eq!(e.provider_tmdb_id, Some(70523));
+        let f = e.provider_facts.unwrap();
+        assert_eq!(f.plot.as_deref(), Some("Time travel in Winden."));
+        assert_eq!(f.cast.as_deref(), Some("Louis Hofmann, Lisa Vicari"));
+        assert_eq!(f.director, None, "N/A is no director");
+        assert_eq!(f.release_date.as_deref(), Some("2017-12-01"));
+        assert_eq!(f.rating, Some(8.4));
+        assert_eq!(f.duration_sec, Some(3600));
+        assert_eq!(f.trailer_youtube.as_deref(), Some("rrwycJ08PSA"));
+        assert_eq!(f.backdrop_url.as_deref(), Some("http://img/b.jpg"));
+    }
+
+    #[test]
+    fn series_info_reads_series_and_episode_facts() {
+        let body = serde_json::json!({
+            "info": { "plot": "Series plot", "rating_5based": "4", "tmdb": 1399 },
+            "episodes": { "1": [
+                { "id": 1, "episode_num": 1, "title": "Winter Is Coming",
+                  "container_extension": "mkv",
+                  "info": { "plot": "Episode plot", "duration_secs": 3720,
+                            "releasedate": "2011-04-17", "rating": 0 } },
+                { "id": 2, "episode_num": 2, "container_extension": "mkv",
+                  "info": { "duration": "00:56:10" } },
+                { "id": 3, "episode_num": 3, "container_extension": "mkv" }
+            ] }
+        });
+        let info = parse_series_info(&body, &test_creds());
+        assert_eq!(info.tmdb_id, Some(1399));
+        let series = info.facts.unwrap();
+        assert_eq!(
+            (series.plot.as_deref(), series.rating),
+            (Some("Series plot"), Some(8.0))
+        );
+        let e1 = info.episodes[0].facts.clone().unwrap();
+        assert_eq!(e1.plot.as_deref(), Some("Episode plot"));
+        assert_eq!(e1.duration_sec, Some(3720));
+        assert_eq!(e1.release_date.as_deref(), Some("2011-04-17"));
+        assert_eq!(e1.rating, None, "0 is no rating");
+        assert_eq!(
+            info.episodes[1].facts.clone().unwrap().duration_sec,
+            Some(3370)
+        );
+        assert_eq!(info.episodes[2].facts, None);
+    }
+
+    #[test]
+    fn vod_info_reads_details_and_tmdb_id() {
+        let body = serde_json::json!({
+            "info": { "tmdb_id": "27205", "description": "A thief who steals secrets.",
+                      "actors": "Leonardo DiCaprio", "director": "Christopher Nolan",
+                      "duration_secs": 8880, "youtube_trailer": "YoHD9XEInc0",
+                      "releasedate": "2010-07-15", "rating": "8.8" },
+            "movie_data": { "stream_id": 5 }
+        });
+        let info = parse_vod_info(&body);
+        assert_eq!(info.tmdb_id, Some(27205));
+        let f = info.facts.unwrap();
+        assert_eq!(f.plot.as_deref(), Some("A thief who steals secrets."));
+        assert_eq!(f.cast.as_deref(), Some("Leonardo DiCaprio"));
+        assert_eq!(f.duration_sec, Some(8880));
+        assert_eq!(f.trailer_youtube.as_deref(), Some("YoHD9XEInc0"));
+        assert_eq!(
+            parse_vod_info(&serde_json::json!({})),
+            XtreamVodInfo::default()
+        );
     }
 }

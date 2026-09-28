@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, raw_name, raw_group, parser_version, quality_hints, language_hints, numbering, collection, genre, genre_source, provider_facts)\n                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 19
+    },
+    "nullable": []
+  },
+  "hash": "c96c5ca75a736d5e3c3693d7e2cadb8d16c93c186efc635abf5fd2cb2016468d"
+}

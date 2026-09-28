@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT facts as \"facts?: String\", provider_tmdb_id as \"tmdb?: i64\"\n               FROM series_provider_facts WHERE source_id = ? AND series_title = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "facts?: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "tmdb?: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "0e55e1ec939b3421c5fa960f11bf8657dae7d5bc41794c0c3a22e39f655d0350"
+}

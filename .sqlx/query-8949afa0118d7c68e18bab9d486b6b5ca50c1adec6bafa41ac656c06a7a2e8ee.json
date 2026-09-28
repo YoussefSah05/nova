@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE vod_items SET provider_facts = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8949afa0118d7c68e18bab9d486b6b5ca50c1adec6bafa41ac656c06a7a2e8ee"
+}

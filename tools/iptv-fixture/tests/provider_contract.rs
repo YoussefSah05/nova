@@ -204,7 +204,8 @@ async fn lazy_episode_fetch_orders_specials_and_mixed_numeric_ids() {
     )
     .await
     .unwrap()
-    .unwrap();
+    .unwrap()
+    .episodes;
     assert_eq!(
         episodes
             .iter()

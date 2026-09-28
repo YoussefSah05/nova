@@ -405,6 +405,7 @@ fn classify(attrs: ExtinfAttrs, stream_url: &str) -> ParsedEntry {
         quality_hints,
         language_hints,
         parser_version: Some(PARSER_VERSION),
+        provider_facts: None,
     }
 }
 

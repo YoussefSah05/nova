@@ -1,3 +1,4 @@
+use nova_core::ProviderFacts;
 use nova_core::{
     now_ts, ContentSort, EpisodeNumberingKind, SeriesEpisode, SeriesSummary, SourceEvidence,
 };
@@ -45,9 +46,24 @@ impl<'a> SeriesRepository<'a> {
             let language = SourceEvidence::csv(&ev.language_hints);
             let numbering = e.numbering.as_str();
             let genre_source = ev.genre_source();
+            let facts = ev.facts_json();
+            // An Xtream catalog row (season/episode 0) speaks for the series.
+            if e.season == 0
+                && e.episode == 0
+                && (ev.provider_facts.is_some() || ev.provider_tmdb_id.is_some())
+            {
+                Self::upsert_series_facts_tx(
+                    tx,
+                    e.source_id,
+                    &e.series_title,
+                    ev.provider_facts.as_ref(),
+                    ev.provider_tmdb_id,
+                )
+                .await?;
+            }
             sqlx::query!(
-                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, raw_name, raw_group, parser_version, quality_hints, language_hints, numbering, collection, genre, genre_source)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, raw_name, raw_group, parser_version, quality_hints, language_hints, numbering, collection, genre, genre_source, provider_facts)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 e.source_id,
                 e.series_title,
                 e.category,
@@ -66,11 +82,100 @@ impl<'a> SeriesRepository<'a> {
                 ev.collection,
                 ev.provider_genre,
                 genre_source,
+                facts,
             )
             .execute(&mut **tx)
             .await?;
         }
         Ok(())
+    }
+
+    /// Record a series' provider facts and claimed TMDB id. New facts win,
+    /// gaps are filled from what was stored; a missing id keeps the old one.
+    pub async fn upsert_series_facts_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+        series_title: &str,
+        facts: Option<&ProviderFacts>,
+        provider_tmdb_id: Option<i64>,
+    ) -> Result<(), StorageError> {
+        let stored = sqlx::query_scalar!(
+            r#"SELECT facts as "facts?: String" FROM series_provider_facts
+               WHERE source_id = ? AND series_title = ?"#,
+            source_id,
+            series_title
+        )
+        .fetch_optional(&mut **tx)
+        .await?
+        .flatten()
+        .and_then(|j| ProviderFacts::from_json(&j));
+        let merged = match (facts.cloned(), stored) {
+            (Some(new), Some(old)) => Some(new.or(old)),
+            (new, old) => new.or(old),
+        };
+        let json = merged
+            .and_then(ProviderFacts::non_empty)
+            .map(|f| f.to_json());
+        let now = now_ts();
+        sqlx::query!(
+            "INSERT INTO series_provider_facts (source_id, series_title, facts, provider_tmdb_id, updated_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(source_id, series_title) DO UPDATE SET
+                 facts = excluded.facts,
+                 provider_tmdb_id = COALESCE(excluded.provider_tmdb_id, series_provider_facts.provider_tmdb_id),
+                 updated_at = excluded.updated_at",
+            source_id,
+            series_title,
+            json,
+            provider_tmdb_id,
+            now,
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// A series' provider facts and claimed TMDB TV id.
+    pub async fn series_provider_facts(
+        &self,
+        source_id: i64,
+        series_title: &str,
+    ) -> Result<(Option<ProviderFacts>, Option<i64>), StorageError> {
+        let row = sqlx::query!(
+            r#"SELECT facts as "facts?: String", provider_tmdb_id as "tmdb?: i64"
+               FROM series_provider_facts WHERE source_id = ? AND series_title = ?"#,
+            source_id,
+            series_title
+        )
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map_or((None, None), |r| {
+            (
+                r.facts.as_deref().and_then(ProviderFacts::from_json),
+                r.tmdb,
+            )
+        }))
+    }
+
+    /// Provider facts of a series' episodes, by episode row id.
+    pub async fn episode_provider_facts(
+        &self,
+        source_id: i64,
+        series_title: &str,
+    ) -> Result<std::collections::HashMap<i64, ProviderFacts>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT id as "id!: i64", provider_facts as "facts!: String"
+               FROM series_episodes
+               WHERE source_id = ? AND series_title = ? AND provider_facts IS NOT NULL"#,
+            source_id,
+            series_title
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| ProviderFacts::from_json(&r.facts).map(|f| (r.id, f)))
+            .collect())
     }
 
     /// Snapshot user flags of marked series before a refresh replaces the
@@ -173,11 +278,15 @@ impl<'a> SeriesRepository<'a> {
     /// lazy Xtream `get_series_info` path). Deletes the catalog sentinel and any
     /// prior episodes, then inserts the new set — preserving any series-level
     /// favorite/watchlist flag the user set before episodes were fetched.
+    /// `series_facts` / `series_tmdb_id` come from the same `get_series_info`
+    /// response and refresh the series-level facts.
     pub async fn replace_series_episodes(
         &self,
         source_id: i64,
         series_title: &str,
         episodes: &[SeriesEpisode],
+        series_facts: Option<&ProviderFacts>,
+        series_tmdb_id: Option<i64>,
     ) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
         let flags = sqlx::query!(
@@ -210,12 +319,23 @@ impl<'a> SeriesRepository<'a> {
         .execute(&mut *tx)
         .await?;
 
+        if series_facts.is_some() || series_tmdb_id.is_some() {
+            Self::upsert_series_facts_tx(
+                &mut tx,
+                source_id,
+                series_title,
+                series_facts,
+                series_tmdb_id,
+            )
+            .await?;
+        }
         let added_at = now_ts();
         for e in episodes {
             let numbering = e.numbering.as_str();
+            let facts = e.evidence.facts_json();
             sqlx::query!(
-                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, is_favorite, is_in_watchlist, raw_name, numbering, collection, genre, genre_source)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, is_favorite, is_in_watchlist, raw_name, numbering, collection, genre, genre_source, provider_facts)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 e.source_id,
                 e.series_title,
                 e.category,
@@ -232,6 +352,7 @@ impl<'a> SeriesRepository<'a> {
                 taxonomy.collection,
                 taxonomy.genre,
                 taxonomy.genre_source,
+                facts,
             )
             .execute(&mut *tx)
             .await?;
@@ -273,8 +394,14 @@ impl<'a> SeriesRepository<'a> {
                         MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
                         MAX(se.added_at) as "added_at?: i64",
                         MAX(sm.canonical_title) as "canonical_title?: String",
-                        MAX(sm.backdrop_url) as "backdrop_url?: String",
-                        MAX(sm.overview) as "overview?: String"
+                        COALESCE(MAX(sm.backdrop_url),
+                                 (SELECT json_extract(f.facts, '$.backdropUrl') FROM series_provider_facts f
+                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
+                            as "backdrop_url?: String",
+                        COALESCE(MAX(sm.overview),
+                                 (SELECT json_extract(f.facts, '$.plot') FROM series_provider_facts f
+                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
+                            as "overview?: String"
                  FROM series_episodes se
                  LEFT JOIN series_meta sm
                    ON sm.source_id = se.source_id AND sm.series_title = se.series_title
@@ -331,8 +458,14 @@ impl<'a> SeriesRepository<'a> {
                         MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
                         MAX(se.added_at) as "added_at?: i64",
                         MAX(sm.canonical_title) as "canonical_title?: String",
-                        MAX(sm.backdrop_url) as "backdrop_url?: String",
-                        MAX(sm.overview) as "overview?: String"
+                        COALESCE(MAX(sm.backdrop_url),
+                                 (SELECT json_extract(f.facts, '$.backdropUrl') FROM series_provider_facts f
+                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
+                            as "backdrop_url?: String",
+                        COALESCE(MAX(sm.overview),
+                                 (SELECT json_extract(f.facts, '$.plot') FROM series_provider_facts f
+                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
+                            as "overview?: String"
                  FROM series_episodes se
                  LEFT JOIN series_meta sm
                    ON sm.source_id = se.source_id AND sm.series_title = se.series_title
@@ -674,7 +807,10 @@ impl<'a> SeriesRepository<'a> {
     ) -> Result<Vec<(String, Option<String>)>, StorageError> {
         let rows = sqlx::query!(
             r#"SELECT se.series_title as "series_title!: String",
-                      MAX(sm.overview) as "overview?: String"
+                      COALESCE(MAX(sm.overview),
+                                 (SELECT json_extract(f.facts, '$.plot') FROM series_provider_facts f
+                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
+                            as "overview?: String"
                FROM series_episodes se
                LEFT JOIN series_meta sm
                  ON sm.source_id = se.source_id AND sm.series_title = se.series_title
@@ -777,8 +913,14 @@ impl<'a> SeriesRepository<'a> {
                     MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
                     MAX(se.added_at) as "added_at?: i64",
                     MAX(sm.canonical_title) as "canonical_title?: String",
-                    MAX(sm.backdrop_url) as "backdrop_url?: String",
-                    MAX(sm.overview) as "overview?: String"
+                    COALESCE(MAX(sm.backdrop_url),
+                                 (SELECT json_extract(f.facts, '$.backdropUrl') FROM series_provider_facts f
+                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
+                            as "backdrop_url?: String",
+                    COALESCE(MAX(sm.overview),
+                                 (SELECT json_extract(f.facts, '$.plot') FROM series_provider_facts f
+                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
+                            as "overview?: String"
              FROM series_episodes se
              LEFT JOIN series_meta sm
                ON sm.source_id = se.source_id AND sm.series_title = se.series_title

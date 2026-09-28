@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT provider_facts as \"facts?: String\" FROM vod_items WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "facts?: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "1283941bc953abc4b868346e4b5c2d02c878b883c332e100a423b645009baa0c"
+}

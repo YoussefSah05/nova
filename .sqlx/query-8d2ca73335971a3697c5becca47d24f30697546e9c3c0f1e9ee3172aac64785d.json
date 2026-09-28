@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO series_provider_facts (source_id, series_title, facts, provider_tmdb_id, updated_at)\n             VALUES (?, ?, ?, ?, ?)\n             ON CONFLICT(source_id, series_title) DO UPDATE SET\n                 facts = excluded.facts,\n                 provider_tmdb_id = COALESCE(excluded.provider_tmdb_id, series_provider_facts.provider_tmdb_id),\n                 updated_at = excluded.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "8d2ca73335971a3697c5becca47d24f30697546e9c3c0f1e9ee3172aac64785d"
+}
