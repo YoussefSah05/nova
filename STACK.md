@@ -68,4 +68,4 @@ CI validates repository consistency; `doctor` additionally compares executable
 versions. The existing macOS CI still uses Homebrew mpv, so its native closure is
 not reproducible yet. Model revision/hash verification, actual linked SQLite patch
 inventory, Xcode/SDK pinning, clean-machine bootstrap, native bundling and E2E are
-explicitly unresolved. See `docs/implementation/progress.md`.
+explicitly unresolved. See `docs/nova-implementation-status.md`.

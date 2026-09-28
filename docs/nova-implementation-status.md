@@ -1,5 +1,12 @@
 # Nova implementation status — P00 stabilization and M1 architecture audit
 
+> **Architecture target (2026-09-28):** Nova's long-term architecture is now
+> [`docs/architecture/long-term-architecture.md`](architecture/long-term-architecture.md).
+> The earlier plans cited below (`master-plan.md`, `ARCHITECTURE.md`, the production blueprint and the
+> 100K intelligence architecture) were moved to [`docs/archive/`](archive/README.md); milestone IDs such as
+> `M4.6` refer to `docs/archive/master-plan.md`. The next reconciliation pass should re-map this status
+> against the bootstrap's milestones (§59–61).
+
 Updated: 2026-09-25. P00 stabilized the existing application; M1 below audits its
 source against the target plan. No architecture implementation, UI redesign,
 dependency upgrade, or model change was made during the audit. P00 started from a
@@ -245,9 +252,9 @@ release qualification. The next implementation milestone has not begun.
 
 ### Evidence and architecture map
 
-The target is `master-plan.md`, read alongside `ARCHITECTURE.md`,
+At the time of this audit the target was `master-plan.md`, read alongside `ARCHITECTURE.md`,
 `docs/nova-production-architecture-blueprint.md`,
-`docs/nova-100k-media-intelligence-architecture.md`, `docs/catalog.md`, and the
+`docs/nova-100k-media-intelligence-architecture.md` (all now in `docs/archive/`), `docs/catalog.md`, and the
 increment history in `docs/implementation/progress.md`. The production blueprint
 supersedes the older player plan. These documents describe intent; the following
 map describes executable source. Older comments about generated bindings,

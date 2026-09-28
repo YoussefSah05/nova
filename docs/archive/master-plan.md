@@ -1,6 +1,12 @@
 # Nova — Master Implementation Plan
 
-> Status: living implementation plan
+> **Superseded (2026-09-28) — historical reference only.** Nova's long-term architecture is
+> [`docs/architecture/long-term-architecture.md`](../architecture/long-term-architecture.md);
+> current implementation status is [`docs/nova-implementation-status.md`](../nova-implementation-status.md).
+> Do not use this document for new design decisions. It is kept because code comments, ADRs,
+> commits and the status document cite its sections and milestone IDs.
+
+> Status (until 2026-09-28): living implementation plan
 >
 > Purpose: guide development from the current working Nova application toward the target architecture without rewriting working systems.
 

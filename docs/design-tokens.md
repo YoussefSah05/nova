@@ -42,5 +42,5 @@ Weights: **400** (regular) and **500** (medium) only.
 
 ## Translation card (middle-box, Mode B/C)
 
-See ARCHITECTURE.md §10 for full spec.
+See `docs/archive/ARCHITECTURE-v2-brief.md` §10 for the original spec.
 Background: `rgba(10, 10, 12, 0.78)` + `backdrop-filter: blur(20px) saturate(160%)`.

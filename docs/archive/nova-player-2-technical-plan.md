@@ -1,5 +1,11 @@
 # Nova Architecture & Player 2.0 Technical Plan
 
+> **Superseded (2026-09-28) — historical reference only.** Nova's long-term architecture is
+> [`docs/architecture/long-term-architecture.md`](../architecture/long-term-architecture.md);
+> current implementation status is [`docs/nova-implementation-status.md`](../nova-implementation-status.md).
+> Do not use this document for new design decisions. It is kept because code comments, ADRs,
+> commits and the status document cite its sections and milestone IDs.
+
 Status: proposed implementation plan; no runtime changes are implied by this document.
 
 Baseline: repository commit `c2841bc`, inspected 17 September 2026. External platform references were checked on the same date. Performance budgets below are proposed acceptance targets unless explicitly identified as existing measurements.

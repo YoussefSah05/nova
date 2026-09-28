@@ -1,7 +1,7 @@
 //! Descriptive facts a provider ships with its catalog (Xtream panels send
 //! plots, cast, ratings, durations, trailers and backdrops). They make detail
 //! pages useful offline, without TMDB, and rank below a confident TMDB match
-//! (see `master-plan.md` M4.6).
+//! (see `docs/archive/master-plan.md` M4.6).
 //!
 //! Panels are inconsistent: ratings arrive as `7.5`, `"7,5"`, `"0"` or out of
 //! 5; durations as seconds or `01:42:10`; trailers as a YouTube id or a full

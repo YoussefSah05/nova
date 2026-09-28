@@ -1,6 +1,12 @@
 # Nova 100K+ Scale & Media Intelligence Architecture
 
-Accepted 2026-09-19. Extends [the production blueprint](nova-production-architecture-blueprint.md). Full source requirements: [accepted request](implementation/media-intelligence-requirements.md). Current implementation evidence: [progress](implementation/progress.md).
+> **Superseded (2026-09-28) — historical reference only.** Nova's long-term architecture is
+> [`docs/architecture/long-term-architecture.md`](../architecture/long-term-architecture.md);
+> current implementation status is [`docs/nova-implementation-status.md`](../nova-implementation-status.md).
+> Do not use this document for new design decisions. It is kept because code comments, ADRs,
+> commits and the status document cite its sections and milestone IDs.
+
+Accepted 2026-09-19. Extends [the production blueprint](nova-production-architecture-blueprint.md). Full source requirements: [accepted request](../implementation/media-intelligence-requirements.md). Current implementation evidence: [progress](../implementation/progress.md).
 
 ## 1. Executive architecture decision
 

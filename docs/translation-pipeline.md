@@ -1,6 +1,7 @@
 # Translation Pipeline
 
-> This document expands on ARCHITECTURE.md §9.
+> This document expands on the archived brief's §9 (`docs/archive/ARCHITECTURE-v2-brief.md`).
+> The long-term translation architecture is §38 of `docs/architecture/long-term-architecture.md`.
 > **Status**: Phase 0 stub. Detailed runbook written in Phase 7.
 
 ## Overview
@@ -9,7 +10,7 @@ Nova's translation pipeline is a two-stage process: Whisper transcribes audio to
 in the source language, then a separate translation model converts that text to the
 target language. This enables all language pairs, not just English.
 
-See **ARCHITECTURE.md §9** for:
+See **`docs/archive/ARCHITECTURE-v2-brief.md` §9** for:
 - Why we do not use Whisper's built-in `--task translate` (English-only limitation)
 - Backend comparison table (NLLB-200 / DeepL / Google)
 - VOD translation flow

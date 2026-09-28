@@ -1,5 +1,11 @@
 # Nova Production Architecture & Implementation Blueprint
 
+> **Superseded (2026-09-28) — historical reference only.** Nova's long-term architecture is
+> [`docs/architecture/long-term-architecture.md`](../architecture/long-term-architecture.md);
+> current implementation status is [`docs/nova-implementation-status.md`](../nova-implementation-status.md).
+> Do not use this document for new design decisions. It is kept because code comments, ADRs,
+> commits and the status document cite its sections and milestone IDs.
+
 > Scale and intelligence extension (2026-09-19): [Nova 100K+ Scale & Media Intelligence Architecture](nova-100k-media-intelligence-architecture.md) adds workload classes, phases A–I and native review gates. Implementation evidence remains separate in `implementation/progress.md`.
 
 **Status:** proposed engineering blueprint, not an implementation-complete claim. **Baseline:** commit `c2841bc`; repository and external research inspected 17 September 2026. This document expands and supersedes the proposed Player 2.0 plan for future planning; existing accepted architecture remains in force until the corresponding ADRs and migrations are adopted.
@@ -464,7 +470,7 @@ Use request caching, retry-after handling, bounded queues, negative-cache expiry
 
 ## 18. Catalog intelligence
 
-Execution plan: [catalog model evaluation](implementation/catalog-model-evaluation.md).
+Execution plan: [catalog model evaluation](../implementation/catalog-model-evaluation.md).
 The initial reasoner comparison is Qwen3.5-4B, Qwen3.5-9B and Ministral 3 8B;
 these are candidates, not selected production artifacts. The user permits larger
 open models when measured app constraints allow them. Start with a bounded native
@@ -473,7 +479,7 @@ local smoke run, then evaluate quality and playback coexistence before integrati
 Initial local comparisons now select Qwen3.5-4B Q4_K_M / prompt v2 as the
 development reference for the Rust adapter: zero unsafe links on 24 synthetic
 development/transfer cases, with three unnecessary abstentions. This is not a
-production qualification; see the [recorded transfer results](evaluations/catalog-transfer-protocol.md).
+production qualification; see the [recorded transfer results](../evaluations/catalog-transfer-protocol.md).
 
 Updated requirement (2026-09-18): intelligent catalog understanding is first-class,
 not optional title-cleaning enrichment. Build `CatalogIntelligenceAgent` between

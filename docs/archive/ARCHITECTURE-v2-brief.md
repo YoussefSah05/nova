@@ -1,5 +1,11 @@
 # IPTV Streaming Platform — Architecture & Initialization Brief
 
+> **Superseded (2026-09-28) — historical reference only.** Nova's long-term architecture is
+> [`docs/architecture/long-term-architecture.md`](../architecture/long-term-architecture.md);
+> current implementation status is [`docs/nova-implementation-status.md`](../nova-implementation-status.md).
+> Do not use this document for new design decisions. It is kept because code comments, ADRs,
+> commits and the status document cite its sections and milestone IDs.
+
 > Implementation note (2026-09-17): this historical brief contains planned and stale
 > behavior. Current production-migration contracts are documented in `docs/catalog.md`
 > and `STACK.md`; progress and validation are in `docs/implementation/progress.md`.

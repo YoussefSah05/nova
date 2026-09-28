@@ -1,8 +1,12 @@
 # Production migration progress
 
+> **Historical increment log (2026-09-17 → 2026-09-20).** Current implementation status and the
+> milestone reconciliation matrix live in [`docs/nova-implementation-status.md`](../nova-implementation-status.md);
+> the long-term architecture is [`docs/architecture/long-term-architecture.md`](../architecture/long-term-architecture.md).
+
 ## Active scale and native-review programme — 2026-09-19
 
-Accepted [100K+ Scale & Media Intelligence Architecture](../nova-100k-media-intelligence-architecture.md)
+Accepted [100K+ Scale & Media Intelligence Architecture](../archive/nova-100k-media-intelligence-architecture.md)
 and preserved the full [requirements](media-intelligence-requirements.md). Phases A–I
 cover ingestion, canonical/incremental compilation, intelligence, frontend, resource
 runtime, playback, discovery and content features. Each phase has workload, tests,
