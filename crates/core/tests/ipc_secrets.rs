@@ -74,6 +74,19 @@ fn display_url_drops_user_info_path_and_query() {
             "  http://provider.example#frag  ",
             "http://provider.example",
         ),
+        (
+            "http://u:p@ss@provider.example/get.php",
+            "http://provider.example",
+        ),
+        ("http://[::1]:8080/get.php?password=p", "http://[::1]:8080"),
+        // Malformed URLs the webview's `new URL` accepts: stored, then rejected on import.
+        (
+            "http:provider.example/get.php?username=u&password=p",
+            "get.php",
+        ),
+        ("http:\\\\provider.example\\get.php?password=p", "get.php"),
+        ("user:pass@provider.example", "provider.example"),
+        ("http://?username=u&password=p", ""),
         ("file:///Users/me/Playlists/family.m3u", "family.m3u"),
         ("/Users/me/Playlists/family.m3u", "family.m3u"),
         ("", ""),

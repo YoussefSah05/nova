@@ -30,7 +30,7 @@
 | M03 External model storage | COMPLETE (unqualified) | Bookmarks in `mac_model_library.rs`; offline → `unavailable`, reconnect restores. | No physical-drive or sandbox qualification; downloads always go to the internal library. |
 | M04 Runtime manager / leases | COMPLETE (backend) | `model_runtime.rs`: shared load, leases, LRU eviction, residency budget. | `model_runtime_status` / `unload_model` have no React consumer. |
 | M05 Resource governor | PARTIAL | `resource_policy.rs` lanes; playback guards suspend background classes. | Channel-logo matching, series refetch, `url-tvg` registration and on-demand TMDB/Xtream fetches bypass admission. Playback guards are released only by frontend calls, so a webview reload leaves background work suspended. |
-| M06 Canonical domain / provider boundary | PARTIAL, **RISKY** | Movies: `canonical_entities` / `stream_variants` (0021). | Series, seasons, episodes and live are provider rows (`kind CHECK ('movie')`). **Credentials cross IPC:** `Source.url` (Xtream user/password) is returned by `list_sources` and shown in Settings (`SourcesEpgSection.tsx:81`); `Channel`/`VodItem`/`SeriesEpisode.stream_url` are serialized. |
+| M06 Canonical domain / provider boundary | PARTIAL | Movies: `canonical_entities` / `stream_variants` (0021). Secret-free legacy DTOs (see *Secret-free IPC boundary* below). | Series, seasons, episodes and live are provider rows (`kind CHECK ('movie')`). |
 | M07 Naming / normalization / classification | PARTIAL | Naming v1 parser; raw title/group kept (0026); `naming::display_title`. | Media type is endpoint/URL-heuristic only, M3U defaults to Live, no `Unknown` in `MediaKind`. Movie cards use a hand-written SQL COALESCE instead of `display_title`; series `raw` fallback is set to the parsed title. |
 | M08 Fingerprints / candidate blocking | PARTIAL | `catalog::{fingerprint, reconcile}`; blocking used by movie resolution. | Refresh still deletes and reinserts. Unchanged/changed/new/deleted classification is unwired; movie/live embeddings and enrichment status are discarded on every refresh. |
 | M09 Entity resolution / identity history | PARTIAL | P09: deterministic resolver, redirects, lineage, cannot-link (movies). | No split or user correction; series/episodes/live have no entities. |
@@ -49,7 +49,7 @@
 | M22 Frontend canonicalization | PARTIAL | Movie browse/detail/favorites/search/Continue Watching on canonical DTOs. | Series, live, player, transcripts and episode/live Continue Watching are row-centric; client `seriesGroupKey`/`prettyBrand` grouping remains. |
 | M23 Series / autoplay | PARTIAL | Resume/Up next in Rust (`series_resume`); autoplay uses the normal play path. | In-player next episode chosen in React; no canonical episode identity. |
 | M24 Live / EPG boundary | MISSING, RISKY | XMLTV parser streams. | Programs keyed by `channel_tvg_id` profile-wide; feed downloaded whole with no size cap (`commands/epg.rs:203`). |
-| M25 Security / privacy | **RISKY** | TMDB credential write-only; proxy/EPG errors drop URLs. | Credential exposure (M06); `csp: null`; `/proxy` has no session token. |
+| M25 Security / privacy | PARTIAL | TMDB credential write-only; proxy/EPG errors drop URLs; source and stream URLs no longer cross IPC. | `csp: null`; `/proxy` has no session token and its locator carries the upstream URL; provider logo/poster URLs are passed through. |
 | M26 Migration-chain qualification | PARTIAL | Upgrade-chain tests; `real_profile_upgrade` (opt-in). | Never run against a real profile copy. |
 | M27 Scale qualification | PARTIAL | 30k release scale probes; `tools/catalog-scale`. | No 100k/250k app-level measurements. |
 | M28 AI failure matrix | PARTIAL | Missing/offline model and cancellation tests exist. | No matrix; see M13 inference-failure case. |
@@ -103,8 +103,8 @@
 
 ### Architecture invariants currently violated
 
-1. Credentials reach React (§4, §24, §53): `Source.url` rendered in Settings; `stream_url` fields
-   serialized over IPC.
+1. ~~Credentials reach React~~ — fixed by the secret-free IPC boundary below, except the loopback
+   playback locator (`/proxy?url=…`), which still carries the upstream URL.
 2. Deterministic search must survive AI failure (§22, §45): query-inference errors discard lexical
    results.
 3. Playback truth belongs to Rust (§24): progress, completion, resume and next episode are React-owned.
@@ -127,12 +127,39 @@ exist; credentials reach the webview instead. Q25: no — discovery intersects w
 yes, per title. Q27: movies abstain honestly; unmatched series fall back to the parsed title. Q28: no.
 Q29: yes, except movies. Q30: see below.
 
+### Secret-free IPC boundary (M06/M25) — 2026-09-28
+
+Branch `fix/secret-free-ipc`. Chosen first because it was a live invariant violation (Xtream
+credentials shown in Settings and held in webview memory) and every later canonical DTO slice needs
+secret-free contracts.
+
+- `nova_core::Source.url` stays in Rust; it serializes only as `displayUrl` =
+  `display_source_url(url)`: `scheme://host[:port]` for URLs (user info, path, query, fragment
+  dropped), or a bare file name for local paths and malformed URLs. Deserialization still reads
+  `url`; storage builds these structs from SQL rows, so no repository or schema changed.
+- `stream_url` on `Channel`, `VodItem` and `SeriesEpisode` is `#[serde(skip_serializing)]`. React
+  never read it; playback already resolves locators in Rust (`resolve_stream`).
+- Frontend: `Source.displayUrl` replaces `url` in `types/index.ts` and the Settings sources row;
+  `streamUrl` removed from the three TS types and from test fixtures.
+- Tests: `crates/core/tests/ipc_secrets.rs` round-trips each DTO from credential-bearing JSON and
+  asserts no user, password or `streamUrl` survives, plus 14 `display_source_url` cases (IPv6,
+  `@` in passwords, scheme-less and backslash URLs that the add-source form accepts).
+- Independent review: no Critical/High. **Medium, confirmed and fixed:** a malformed URL without
+  `://` (e.g. `http:host/get.php?password=…`, which `new URL` accepts and `add_source` stores even
+  though its import then fails) kept its query in the file-name fallback. Both fallbacks now drop
+  query, fragment and user info; a bare `user:pass@host` was found and covered during the fix.
+  Low, recorded as gaps: provider-supplied logo/poster URLs, and the `/proxy?url=` playback locator.
+- Validation: `just lint`, `just typecheck`, `cargo fmt --check`, `git diff --check` pass;
+  `just test` passes (531 Rust, 0 failed, 5 opt-in ignored; 56 frontend) before the review fix;
+  `nova-core` (142 tests) and lint re-run after it. Not verified in the running app (`just dev`).
+
 ### Next dependency
 
-**Secret-free IPC boundary (M06/M25).** It is a live invariant violation — Xtream credentials are shown
-on screen and held in webview memory — and every later frontend canonicalization slice (series, live)
-needs secret-free DTOs first. It is small and needs no schema change. After it: the M13 lexical
-fallback, then canonical series identity (M06/M09/M11 for series).
+**Deterministic search must survive semantic failure (M13 / AI12 / AI21).** `search_movies`,
+`semantic_search_series`, `semantic_search_channels` and `search_transcript` return an error when query
+or segment embedding fails, discarding lexical hits (`commands/search.rs:239-247,402,545,640`); the
+palette then shows nothing. Fix: treat any semantic-leg error as "no semantic hits" and log it. After
+it: canonical series identity (M06/M09/M11 for series), then the playback coordinator (M14).
 
 ---
 

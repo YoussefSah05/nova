@@ -212,13 +212,23 @@ pub fn display_source_url(url: &str) -> String {
                 .map_or(authority, |(_, host)| host);
             if host.is_empty() {
                 // `file:///…/list.m3u` — local, so the file name is safe to show.
-                rest.rsplit(['/', '\\']).next().unwrap_or("").to_string()
+                last_path_segment(rest)
             } else {
                 format!("{}://{host}", scheme.to_ascii_lowercase())
             }
         }
-        None => url.rsplit(['/', '\\']).next().unwrap_or("").to_string(),
+        // A local path, or a malformed URL (`http:host/get.php?password=…`,
+        // `user:pass@host`) that the importer will reject but that is stored.
+        None => last_path_segment(url),
     }
+}
+
+/// The final path segment with any query, fragment or user info removed, so a
+/// malformed provider URL can't surface its credentials.
+fn last_path_segment(path: &str) -> String {
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    let segment = path.rsplit(['/', '\\']).next().unwrap_or("");
+    segment.rsplit('@').next().unwrap_or("").to_string()
 }
 
 fn serialize_display_url<S: serde::Serializer>(url: &str, s: S) -> Result<S::Ok, S::Error> {
