@@ -213,6 +213,19 @@ async fn user_state_survives_refresh_and_credential_rotation() {
         .unwrap();
     assert_eq!(continue_watching.len(), 1);
     assert_eq!(continue_watching[0].media_id, new_row);
+    let movies_rail = WatchHistoryRepository::new(&db.pool)
+        .continue_watching_section(nova_core::ContinueSection::Movies, db.source_id, 10)
+        .await
+        .unwrap();
+    assert_eq!(movies_rail.len(), 1);
+    assert_eq!(movies_rail[0].entity_id.as_deref(), Some(entity.as_str()));
+    assert_eq!(movies_rail[0].media_id, new_row);
+    assert_eq!(movies_rail[0].title, "Heat");
+    assert!(WatchHistoryRepository::new(&db.pool)
+        .continue_watching_section(nova_core::ContinueSection::Movies, db.source_id + 1, 10)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
@@ -248,6 +261,11 @@ async fn completion_is_preserved_and_hidden_from_continue_watching() {
     assert!(repo.resume(&entity).await.unwrap().unwrap().completed);
     assert!(WatchHistoryRepository::new(&db.pool)
         .list_continue_watching(10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(WatchHistoryRepository::new(&db.pool)
+        .continue_watching_section(nova_core::ContinueSection::Movies, db.source_id, 10)
         .await
         .unwrap()
         .is_empty());

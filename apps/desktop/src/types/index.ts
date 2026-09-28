@@ -137,16 +137,27 @@ export interface ContentFilters {
   sort?: ContentSort;
 }
 
+/// One card on a tab's Continue Watching rail (`list_continue_watching`).
 export interface ContinueWatchingItem {
+  /// What plays on click: "vod" | "episode" | "live".
   mediaKind: string;
   mediaId: number;
   sourceId: number;
+  /// Movie, series (for an episode) or channel display title.
   title: string;
   subtitle: string | null;
   posterUrl: string | null;
   positionSec: number;
   durationSec: number | null;
   watchedAt: number;
+  entityId: string | null;
+  seriesTitle: string | null;
+  season: number | null;
+  episode: number | null;
+  numbering: SeriesEpisode["numbering"] | null;
+  episodeTitle: string | null;
+  /// The next episode after a finished one (not a resume).
+  upNext: boolean;
 }
 
 // ── Canonical media (P07: SourceRecord != CanonicalEntity != StreamVariant) ──

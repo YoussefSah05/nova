@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.id as \"id!: i64\",\n                      c.name as \"name!: String\",\n                      COALESCE(NULLIF(c.logo_url, ''),\n                               (SELECT l.url FROM epg_channel_logos l\n                                WHERE l.source_id = c.source_id\n                                  AND l.channel_key = lower(c.tvg_id)\n                                ORDER BY l.updated_at DESC LIMIT 1),\n                               (SELECT d.url FROM directory_channel_logos d\n                                WHERE d.source_id = c.source_id\n                                  AND d.channel_key = COALESCE(lower(NULLIF(c.tvg_id, '')),\n                                                               'name:' || lower(c.name))))\n                          as \"logo_url?: String\",\n                      wh.watched_at as \"watched_at!: i64\"\n               FROM watch_history wh\n               JOIN channels c ON c.id = wh.media_id\n               WHERE wh.media_kind = 'live' AND c.source_id = ?\n               ORDER BY wh.watched_at DESC\n               LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "logo_url?: String",
+        "ordinal": 2,
+        "type_info": "Null"
+      },
+      {
+        "name": "watched_at!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "31098b444938ccee0f79c627d1becf474098fd767b9fb090a8ccb9ea24ebcc18"
+}

@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.id as \"id!: i64\",\n                      e.series_title as \"series_title!: String\",\n                      e.season as \"season!: i64\",\n                      e.episode as \"episode!: i64\",\n                      e.numbering as \"numbering!: String\",\n                      e.episode_title,\n                      e.logo_url,\n                      wh.position_sec as \"position_sec!: f64\",\n                      wh.duration_sec as \"duration_sec?: f64\",\n                      wh.watched_at as \"watched_at!: i64\",\n                      wh.completed as \"completed!: i64\",\n                      sm.canonical_title as \"canonical_title?: String\",\n                      sm.backdrop_url as \"backdrop_url?: String\",\n                      sm.poster_url as \"series_poster?: String\"\n               FROM watch_history wh\n               JOIN series_episodes e ON e.id = wh.media_id\n               LEFT JOIN series_meta sm\n                 ON sm.source_id = e.source_id AND sm.series_title = e.series_title\n               WHERE wh.media_kind = 'episode' AND e.source_id = ?\n               ORDER BY wh.watched_at DESC, e.season DESC, e.episode DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "series_title!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "season!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "episode!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "numbering!: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "episode_title",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "logo_url",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "position_sec!: f64",
+        "ordinal": 7,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 8,
+        "type_info": "Float"
+      },
+      {
+        "name": "watched_at!: i64",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "completed!: i64",
+        "ordinal": 10,
+        "type_info": "Integer"
+      },
+      {
+        "name": "canonical_title?: String",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "backdrop_url?: String",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "series_poster?: String",
+        "ordinal": 13,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "b51aac45075c4e00f7d913875fd2485650373b70766730b4a873233a22b17faa"
+}

@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.id as \"entity_id!: String\",\n                      v.id as \"media_id!: i64\",\n                      ews.position_sec as \"position_sec!: f64\",\n                      ews.duration_sec as \"duration_sec?: f64\",\n                      ews.watched_at as \"watched_at!: i64\",\n                      COALESCE(v.canonical_title, e.title, v.name) as \"title!: String\",\n                      COALESCE(v.backdrop_url, v.poster_url, v.logo_url) as \"poster_url?: String\"\n               FROM entity_watch_state ews\n               JOIN canonical_entities e ON e.id = ews.entity_id\n               JOIN vod_items v ON v.id = (\n                   SELECT MIN(s.vod_item_id) FROM stream_variants s\n                   WHERE s.entity_id = ews.entity_id AND s.source_id = ?\n                     AND s.vod_item_id IS NOT NULL)\n               WHERE ews.completed = 0\n               ORDER BY ews.watched_at DESC\n               LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "entity_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "media_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "position_sec!: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 3,
+        "type_info": "Float"
+      },
+      {
+        "name": "watched_at!: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster_url?: String",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "d7cd55c5d4553a01cbc56e6df9c083c8cc83482e1cd7c8d235d85a1d065039d1"
+}

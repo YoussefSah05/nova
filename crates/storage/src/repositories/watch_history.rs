@@ -1,5 +1,5 @@
 use nova_core::catalog::media::episode_binding_key;
-use nova_core::{now_ts, ContinueWatchingItem};
+use nova_core::{now_ts, ContinueSection, ContinueWatchingItem, EpisodeNumberingKind};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
@@ -472,6 +472,214 @@ impl<'a> WatchHistoryRepository<'a> {
                 position_sec: r.position_sec,
                 duration_sec: r.duration_sec,
                 watched_at: r.watched_at,
+                ..ContinueWatchingItem::default()
+            })
+            .collect())
+    }
+
+    /// The Continue Watching rail of one browse tab in one source.
+    pub async fn continue_watching_section(
+        &self,
+        section: ContinueSection,
+        source_id: i64,
+        limit: i64,
+    ) -> Result<Vec<ContinueWatchingItem>, StorageError> {
+        match section {
+            ContinueSection::Movies => self.continue_movies(source_id, limit).await,
+            ContinueSection::Series => self.continue_series(source_id, limit).await,
+            ContinueSection::Live => self.recent_channels(source_id, limit).await,
+        }
+    }
+
+    /// Unfinished canonical movies with a variant in the source, newest first,
+    /// under their display title and a wide image when there is one.
+    async fn continue_movies(
+        &self,
+        source_id: i64,
+        limit: i64,
+    ) -> Result<Vec<ContinueWatchingItem>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT e.id as "entity_id!: String",
+                      v.id as "media_id!: i64",
+                      ews.position_sec as "position_sec!: f64",
+                      ews.duration_sec as "duration_sec?: f64",
+                      ews.watched_at as "watched_at!: i64",
+                      COALESCE(v.canonical_title, e.title, v.name) as "title!: String",
+                      COALESCE(v.backdrop_url, v.poster_url, v.logo_url) as "poster_url?: String"
+               FROM entity_watch_state ews
+               JOIN canonical_entities e ON e.id = ews.entity_id
+               JOIN vod_items v ON v.id = (
+                   SELECT MIN(s.vod_item_id) FROM stream_variants s
+                   WHERE s.entity_id = ews.entity_id AND s.source_id = ?
+                     AND s.vod_item_id IS NOT NULL)
+               WHERE ews.completed = 0
+               ORDER BY ews.watched_at DESC
+               LIMIT ?"#,
+            source_id,
+            limit,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| ContinueWatchingItem {
+                media_kind: "vod".into(),
+                media_id: r.media_id,
+                source_id,
+                title: r.title,
+                poster_url: r.poster_url,
+                position_sec: r.position_sec,
+                duration_sec: r.duration_sec,
+                watched_at: r.watched_at,
+                entity_id: Some(r.entity_id),
+                ..ContinueWatchingItem::default()
+            })
+            .collect())
+    }
+
+    /// One card per series: the most recently watched episode when it is
+    /// unfinished, otherwise the next episode after it ("Up next"). A series
+    /// whose last watched episode was its final one is done and left out.
+    async fn continue_series(
+        &self,
+        source_id: i64,
+        limit: i64,
+    ) -> Result<Vec<ContinueWatchingItem>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT e.id as "id!: i64",
+                      e.series_title as "series_title!: String",
+                      e.season as "season!: i64",
+                      e.episode as "episode!: i64",
+                      e.numbering as "numbering!: String",
+                      e.episode_title,
+                      e.logo_url,
+                      wh.position_sec as "position_sec!: f64",
+                      wh.duration_sec as "duration_sec?: f64",
+                      wh.watched_at as "watched_at!: i64",
+                      wh.completed as "completed!: i64",
+                      sm.canonical_title as "canonical_title?: String",
+                      sm.backdrop_url as "backdrop_url?: String",
+                      sm.poster_url as "series_poster?: String"
+               FROM watch_history wh
+               JOIN series_episodes e ON e.id = wh.media_id
+               LEFT JOIN series_meta sm
+                 ON sm.source_id = e.source_id AND sm.series_title = e.series_title
+               WHERE wh.media_kind = 'episode' AND e.source_id = ?
+               ORDER BY wh.watched_at DESC, e.season DESC, e.episode DESC"#,
+            source_id,
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for r in rows {
+            if !seen.insert(r.series_title.clone()) {
+                continue; // only the latest episode of a series decides its card
+            }
+            let title = nova_core::naming::display_title(nova_core::naming::DisplayNameSources {
+                user: None,
+                trusted_metadata: r.canonical_title.as_deref(),
+                parsed: Some(&r.series_title),
+                raw: &r.series_title,
+            });
+            let series_art = r.backdrop_url.clone().or(r.series_poster.clone());
+            let mut item = ContinueWatchingItem {
+                media_kind: "episode".into(),
+                source_id,
+                title,
+                watched_at: r.watched_at,
+                series_title: Some(r.series_title.clone()),
+                ..ContinueWatchingItem::default()
+            };
+            if r.completed == 0 {
+                item.media_id = r.id;
+                item.position_sec = r.position_sec;
+                item.duration_sec = r.duration_sec;
+                item.season = Some(r.season);
+                item.episode = Some(r.episode);
+                item.numbering = Some(EpisodeNumberingKind::from_db(&r.numbering));
+                item.episode_title = r.episode_title;
+                item.poster_url = r.logo_url.or(series_art);
+            } else {
+                let Some(next) = sqlx::query!(
+                    r#"SELECT id as "id!: i64", season as "season!: i64",
+                              episode as "episode!: i64", numbering as "numbering!: String",
+                              episode_title, logo_url
+                       FROM series_episodes
+                       WHERE source_id = ? AND series_title = ?
+                         AND (season > ? OR (season = ? AND episode > ?))
+                       ORDER BY season, episode
+                       LIMIT 1"#,
+                    source_id,
+                    r.series_title,
+                    r.season,
+                    r.season,
+                    r.episode,
+                )
+                .fetch_optional(self.pool)
+                .await?
+                else {
+                    continue; // finished the series
+                };
+                item.media_id = next.id;
+                item.season = Some(next.season);
+                item.episode = Some(next.episode);
+                item.numbering = Some(EpisodeNumberingKind::from_db(&next.numbering));
+                item.episode_title = next.episode_title;
+                item.poster_url = next.logo_url.or(series_art);
+                item.up_next = true;
+            }
+            out.push(item);
+            if out.len() as i64 >= limit {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Channels of the source watched most recently (live has no progress).
+    /// The logo follows the channel read path's fallbacks (provider, EPG,
+    /// directory).
+    async fn recent_channels(
+        &self,
+        source_id: i64,
+        limit: i64,
+    ) -> Result<Vec<ContinueWatchingItem>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT c.id as "id!: i64",
+                      c.name as "name!: String",
+                      COALESCE(NULLIF(c.logo_url, ''),
+                               (SELECT l.url FROM epg_channel_logos l
+                                WHERE l.source_id = c.source_id
+                                  AND l.channel_key = lower(c.tvg_id)
+                                ORDER BY l.updated_at DESC LIMIT 1),
+                               (SELECT d.url FROM directory_channel_logos d
+                                WHERE d.source_id = c.source_id
+                                  AND d.channel_key = COALESCE(lower(NULLIF(c.tvg_id, '')),
+                                                               'name:' || lower(c.name))))
+                          as "logo_url?: String",
+                      wh.watched_at as "watched_at!: i64"
+               FROM watch_history wh
+               JOIN channels c ON c.id = wh.media_id
+               WHERE wh.media_kind = 'live' AND c.source_id = ?
+               ORDER BY wh.watched_at DESC
+               LIMIT ?"#,
+            source_id,
+            limit,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| ContinueWatchingItem {
+                media_kind: "live".into(),
+                media_id: r.id,
+                source_id,
+                title: r.name,
+                poster_url: r.logo_url,
+                watched_at: r.watched_at,
+                ..ContinueWatchingItem::default()
             })
             .collect())
     }

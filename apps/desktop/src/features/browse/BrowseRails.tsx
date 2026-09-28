@@ -29,6 +29,7 @@ import {
 } from "./queries";
 import { Artwork } from "@/components/Artwork";
 import { ChannelTile } from "./ChannelTile";
+import { continueEpisodeLabel, continueSubtitle } from "./continueWatching";
 
 const MAX_GENRE_RAILS = 25;
 /// How many genre rails fetch immediately; the rest lazy-load on scroll.
@@ -103,7 +104,7 @@ export function BrowseRails({
     <div className="flex flex-col gap-7">
       <BrowseHero tab={tab} profileId={profileId} sourceId={sourceId} {...handlers} />
 
-      <ContinueWatchingRail profileId={profileId} onPlay={onPlay} />
+      <ContinueWatchingRail profileId={profileId} sourceId={sourceId} tab={tab} onPlay={onPlay} />
 
       {PERSONAL_RAILS.map((spec) => (
         <Rail
@@ -172,21 +173,33 @@ function StateCard({
   );
 }
 
+const CONTINUE_TITLE: Record<BrowseTab, string> = {
+  movies: "Continue Watching",
+  series: "Continue Watching",
+  live: "Recently Watched",
+};
+
+/// Each tab has its own rail: unfinished movies, series to continue (or their
+/// next episode), recently watched channels.
 function ContinueWatchingRail({
   profileId,
+  sourceId,
+  tab,
   onPlay,
 }: {
   profileId: string;
+  sourceId: number;
+  tab: BrowseTab;
   onPlay: (media: PlayMedia) => void;
 }) {
-  const { data } = useContinueWatching(profileId);
+  const { data } = useContinueWatching(profileId, sourceId, tab);
   if (!data || data.length === 0) return null;
 
   return (
     <section className="flex flex-col gap-2">
       <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
         <ClockIcon className="h-4 w-4" aria-hidden />
-        Continue Watching
+        {CONTINUE_TITLE[tab]}
       </div>
       <div className="-mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {data.map((item) => (
@@ -212,6 +225,7 @@ function ContinueWatchingCard({
     item.durationSec && item.durationSec > 0
       ? Math.min(100, Math.round((item.positionSec / item.durationSec) * 100))
       : 0;
+  const subtitle = continueSubtitle(item);
 
   return (
     <button
@@ -221,7 +235,7 @@ function ContinueWatchingCard({
           kind: item.mediaKind as PlayMediaKind,
           id: item.mediaId,
           title: item.title,
-          subtitle: item.subtitle,
+          subtitle: item.mediaKind === "episode" ? continueEpisodeLabel(item) : item.subtitle,
           posterUrl: item.posterUrl,
         })
       }
@@ -248,14 +262,14 @@ function ContinueWatchingCard({
             fallback={<PosterFallback title={item.title} />}
           />
         )}
-        <div className="absolute inset-x-0 bottom-0 h-1 bg-black/40">
-          <div className="h-full bg-primary" style={{ width: `${progress}%` }} />
-        </div>
+        {progress > 0 && (
+          <div className="absolute inset-x-0 bottom-0 h-1 bg-black/40">
+            <div className="h-full bg-primary" style={{ width: `${progress}%` }} />
+          </div>
+        )}
       </div>
       <p className="line-clamp-1 text-xs font-medium text-foreground">{item.title}</p>
-      {item.subtitle && (
-        <p className="truncate text-[11px] text-muted-foreground">{item.subtitle}</p>
-      )}
+      {subtitle && <p className="truncate text-[11px] text-muted-foreground">{subtitle}</p>}
     </button>
   );
 }

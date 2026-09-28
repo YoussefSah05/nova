@@ -375,6 +375,13 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     [profile.id, playLegacyItem]
   );
 
+  // Closing the player refreshes every tab's Continue Watching rail (progress,
+  // finished episodes and "Up next" change while watching).
+  const closePlayer = useCallback(() => {
+    setPlayingMedia(null);
+    void qc.invalidateQueries({ queryKey: browseKeys.continueWatching(profile.id) });
+  }, [qc, profile.id]);
+
   const activate = useCallback(
     (item: BrowseItem) => {
       if (item.kind === "series" && item.series) {
@@ -484,7 +491,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           <PlayerModal
             profileId={profile.id}
             media={playingMedia}
-            onClose={() => setPlayingMedia(null)}
+            onClose={closePlayer}
             sourceId={activeSourceId}
             onPlayMedia={setPlayingMedia}
           />
@@ -509,7 +516,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
           <PlayerModal
             profileId={profile.id}
             media={playingMedia}
-            onClose={() => setPlayingMedia(null)}
+            onClose={closePlayer}
             sourceId={activeSourceId}
             onPlayMedia={setPlayingMedia}
           />
@@ -724,7 +731,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
         <PlayerModal
           profileId={profile.id}
           media={playingMedia}
-          onClose={() => setPlayingMedia(null)}
+          onClose={closePlayer}
           sourceId={activeSourceId}
           onPlayMedia={setPlayingMedia}
         />

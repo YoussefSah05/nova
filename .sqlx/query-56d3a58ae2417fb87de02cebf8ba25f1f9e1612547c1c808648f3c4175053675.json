@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\", season as \"season!: i64\",\n                              episode as \"episode!: i64\", numbering as \"numbering!: String\",\n                              episode_title, logo_url\n                       FROM series_episodes\n                       WHERE source_id = ? AND series_title = ?\n                         AND (season > ? OR (season = ? AND episode > ?))\n                       ORDER BY season, episode\n                       LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "season!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "episode!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "numbering!: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "episode_title",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "logo_url",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "56d3a58ae2417fb87de02cebf8ba25f1f9e1612547c1c808648f3c4175053675"
+}

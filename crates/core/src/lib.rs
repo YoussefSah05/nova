@@ -339,20 +339,52 @@ pub enum ContentSort {
     RecentlyAdded,
 }
 
-/// A row on the Continue Watching shelf — joins a `watch_history` entry with
-/// its underlying media. Empty until Phase 5 wires up playback progress.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Which browse tab a Continue Watching rail belongs to. Each tab owns its
+/// rail: movies resume, series continue (or move on to the next episode), live
+/// lists recently watched channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContinueSection {
+    Movies,
+    Series,
+    Live,
+}
+
+/// A row on a Continue Watching rail. `media_kind`/`media_id` name what plays
+/// on click (`vod` / `episode` / `live`); the optional fields add context for
+/// the card.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContinueWatchingItem {
-    pub media_kind: String, // 'vod' | 'episode'
+    pub media_kind: String, // 'vod' | 'episode' | 'live'
     pub media_id: i64,
     pub source_id: i64,
+    /// Display title: the movie, the series (for an episode) or the channel.
     pub title: String,
     pub subtitle: Option<String>,
+    /// Card art (16:9 preferred: a backdrop or episode still; a logo for live).
     pub poster_url: Option<String>,
     pub position_sec: f64,
     pub duration_sec: Option<f64>,
     pub watched_at: i64,
+    /// Canonical movie entity (movies only).
+    #[serde(default)]
+    pub entity_id: Option<String>,
+    /// Provider series title (episodes only), to open the series.
+    #[serde(default)]
+    pub series_title: Option<String>,
+    #[serde(default)]
+    pub season: Option<i64>,
+    #[serde(default)]
+    pub episode: Option<i64>,
+    /// How far the episode numbers are known (episodes only).
+    #[serde(default)]
+    pub numbering: Option<EpisodeNumberingKind>,
+    #[serde(default)]
+    pub episode_title: Option<String>,
+    /// The episode is the next one after a finished episode, not a resume.
+    #[serde(default)]
+    pub up_next: bool,
 }
 
 // ── Import progress event payload ─────────────────────────────────────────────

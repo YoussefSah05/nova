@@ -352,8 +352,18 @@ export async function fetchChannelsInGroup(
   return chans.map(channelToItem);
 }
 
-async function fetchContinueWatching(profileId: string): Promise<ContinueWatchingItem[]> {
-  return invoke<ContinueWatchingItem[]>("list_continue_watching", { profileId, limit: RAIL_SIZE });
+/// Each tab owns its rail; the backend section names match the tab ids.
+async function fetchContinueWatching(
+  profileId: string,
+  sourceId: number,
+  tab: BrowseTab
+): Promise<ContinueWatchingItem[]> {
+  return invoke<ContinueWatchingItem[]>("list_continue_watching", {
+    profileId,
+    sourceId,
+    section: tab,
+    limit: RAIL_SIZE,
+  });
 }
 
 // ── Rail specs ────────────────────────────────────────────────────────────────
@@ -400,8 +410,11 @@ export const browseKeys = {
     [...browseKeys.source(profileId, sourceId), "countries"] as const,
   regions: (profileId: string, sourceId: number) =>
     [...browseKeys.source(profileId, sourceId), "regions"] as const,
-  continueWatching: (profileId: string) =>
-    [...browseKeys.all, profileId, "continueWatching"] as const,
+  /// Without a source/tab it is the prefix of every tab's rail (invalidation).
+  continueWatching: (profileId: string, sourceId?: number, tab?: BrowseTab) =>
+    sourceId === undefined
+      ? ([...browseKeys.all, profileId, "continueWatching"] as const)
+      : ([...browseKeys.all, profileId, "continueWatching", sourceId, tab] as const),
   rail: (profileId: string, sourceId: number, tab: BrowseTab, railId: string) =>
     [...browseKeys.source(profileId, sourceId), "rail", tab, railId] as const,
   grid: (profileId: string, sourceId: number, tab: BrowseTab, filters: BrowseFilters) =>
@@ -447,10 +460,10 @@ export function useCountries(profileId: string, sourceId: number | null) {
   });
 }
 
-export function useContinueWatching(profileId: string) {
+export function useContinueWatching(profileId: string, sourceId: number, tab: BrowseTab) {
   return useQuery({
-    queryKey: browseKeys.continueWatching(profileId),
-    queryFn: () => fetchContinueWatching(profileId),
+    queryKey: browseKeys.continueWatching(profileId, sourceId, tab),
+    queryFn: () => fetchContinueWatching(profileId, sourceId, tab),
   });
 }
 
@@ -520,11 +533,11 @@ export function useBrowseGrid(
 /// profile's Continue Watching, so the tab bar and rail skeleton render with no
 /// IPC the first time each tab is opened.
 export function prefetchSourceOverview(qc: QueryClient, profileId: string, sourceId: number) {
-  void qc.prefetchQuery({
-    queryKey: browseKeys.continueWatching(profileId),
-    queryFn: () => fetchContinueWatching(profileId),
-  });
   for (const tab of ["live", "movies", "series"] as const) {
+    void qc.prefetchQuery({
+      queryKey: browseKeys.continueWatching(profileId, sourceId, tab),
+      queryFn: () => fetchContinueWatching(profileId, sourceId, tab),
+    });
     void qc.prefetchQuery({
       queryKey: browseKeys.count(profileId, sourceId, tab, {}),
       queryFn: () => fetchCount(tab, profileId, sourceId, {}),

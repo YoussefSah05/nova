@@ -858,12 +858,14 @@ pub async fn set_series_in_watchlist(
 #[tauri::command]
 pub async fn list_continue_watching(
     profile_id: String,
+    source_id: i64,
+    section: nova_core::ContinueSection,
     limit: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<ContinueWatchingItem>, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     WatchHistoryRepository::new(&pool)
-        .list_continue_watching(limit.unwrap_or(20))
+        .continue_watching_section(section, source_id, limit.unwrap_or(20).clamp(1, 100))
         .await
         .map_err(Into::into)
 }

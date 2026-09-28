@@ -10,7 +10,10 @@ const pad = (n: number) => String(n).padStart(2, "0");
 /// `S03E07`, `E1234` for absolute numbering, or null when unknown (placeholder
 /// numbers are never shown as a real S01E01). `withSeason: false` gives `E07`
 /// for lists already grouped by season.
-export function episodeCode(ep: SeriesEpisode, withSeason = true): string | null {
+export function episodeCode(
+  ep: Pick<SeriesEpisode, "season" | "episode" | "numbering">,
+  withSeason = true
+): string | null {
   switch (ep.numbering) {
     case "unknown":
       return null;
