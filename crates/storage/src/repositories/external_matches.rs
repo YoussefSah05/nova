@@ -996,7 +996,11 @@ mod tests {
             "search matches are not identity evidence"
         );
         assert_ne!(a, b);
-        assert!(!a.as_str().contains("593") && !b.as_str().contains("593"));
+        // Nova IDs stay opaque Nova IDs, never the TMDB ID (random IDs may
+        // contain any digits, so compare the shape, not substrings).
+        for id in [&a, &b] {
+            assert!(id.as_str().starts_with("mov-") && id.as_str() != "593");
+        }
         let aliases: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM entity_aliases WHERE alias_kind = 'external'")
                 .fetch_one(&db.pool)
