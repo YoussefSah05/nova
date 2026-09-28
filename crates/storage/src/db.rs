@@ -36,6 +36,11 @@ pub async fn init_profile_db(path: &str) -> Result<SqlitePool, StorageError> {
     crate::repositories::ExternalMatchRepository::new(&pool)
         .backfill_series_matches()
         .await?;
+    // Episode progress (0037): key episode rows and seed entity-owned progress
+    // from the legacy row-keyed and parked history.
+    crate::repositories::WatchHistoryRepository::new(&pool)
+        .backfill_episode_state()
+        .await?;
     // Entity resolution (0023): resolve once for profiles that predate it or
     // were last resolved by an older rule set; a no-op otherwise.
     canonical.ensure_movies_resolved().await?;

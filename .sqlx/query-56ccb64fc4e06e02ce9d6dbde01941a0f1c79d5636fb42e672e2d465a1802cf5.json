@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.id as \"id!: i64\", s.position_sec as \"position_sec!: f64\",\n                      s.duration_sec as \"duration_sec?: f64\", s.completed as \"completed!: i64\"\n               FROM series_episodes e\n               JOIN series_bindings b\n                 ON b.source_id = e.source_id AND b.series_title = e.series_title\n               JOIN episode_watch_state s\n                 ON s.series_entity_id = b.entity_id AND s.episode_key = e.episode_key\n               WHERE e.source_id = ? AND e.series_title = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "position_sec!: f64",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "completed!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "56ccb64fc4e06e02ce9d6dbde01941a0f1c79d5636fb42e672e2d465a1802cf5"
+}

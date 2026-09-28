@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE series_episodes SET episode_key = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ef606e9f81caf04b7352b3ddb2942abd7a613efe4e40ef77b43ec36665f7ede3"
+}

@@ -2835,6 +2835,101 @@ mod stabilization_tests {
     }
 
     #[tokio::test]
+    async fn episode_progress_survives_a_refresh_and_a_provider_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let catalog = |title: &str| vec![Ok(episode_entry(title, 0, 0, "xtream://series/42"))];
+        import(pool.clone(), id, catalog("FR Show"), ImportMode::Append).await;
+        let series = SeriesRepository::new(&pool);
+        series
+            .replace_series_episodes(id, "FR Show", &opened_episodes(id, "FR Show"), None, None)
+            .await
+            .unwrap();
+        let history = WatchHistoryRepository::new(&pool);
+        let e2 = episode_id(&pool, "http://h:80/series/u/p/902.mkv").await;
+        history
+            .record_progress("episode", e2, 600.0, Some(2400.0), false, None)
+            .await
+            .unwrap();
+
+        // Refresh under a new title: only the sentinel comes back.
+        import(pool.clone(), id, catalog("Show"), ImportMode::Replace).await;
+        assert_eq!(
+            history.series_with_pending_episodes(id, 10).await.unwrap(),
+            vec!["Show".to_string()],
+            "re-fetched under the series' current title"
+        );
+        // Re-fetched: progress is found by the episode's durable key.
+        series
+            .replace_series_episodes(id, "Show", &opened_episodes(id, "Show"), None, None)
+            .await
+            .unwrap();
+        let e2_new = episode_id(&pool, "http://h:80/series/u/p/902.mkv").await;
+        let resume = history
+            .resume_position("episode", e2_new)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((resume.position_sec, resume.completed), (600.0, false));
+        let rail = history
+            .continue_watching_section(nova_core::ContinueSection::Series, id, 10)
+            .await
+            .unwrap();
+        assert_eq!(rail.len(), 1);
+        assert_eq!((rail[0].media_id, rail[0].up_next), (e2_new, false));
+        assert_eq!(rail[0].series_title.as_deref(), Some("Show"));
+        let progress = history.episode_progress(id, "Show").await.unwrap();
+        assert_eq!(progress.get(&e2_new), Some(&(600.0, Some(2400.0), false)));
+        assert!(history
+            .series_with_pending_episodes(id, 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn finishing_an_episode_offers_the_next_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        import(
+            pool.clone(),
+            id,
+            vec![Ok(episode_entry("Show", 0, 0, "xtream://series/42"))],
+            ImportMode::Append,
+        )
+        .await;
+        SeriesRepository::new(&pool)
+            .replace_series_episodes(id, "Show", &opened_episodes(id, "Show"), None, None)
+            .await
+            .unwrap();
+        let e1 = episode_id(&pool, "http://h:80/series/u/p/901.mkv").await;
+        let e2 = episode_id(&pool, "http://h:80/series/u/p/902.mkv").await;
+        let history = WatchHistoryRepository::new(&pool);
+        history
+            .record_progress("episode", e1, 2400.0, Some(2400.0), true, None)
+            .await
+            .unwrap();
+        let next = history.series_resume(id, "Show").await.unwrap().unwrap();
+        assert_eq!((next.media_id, next.up_next), (e2, true));
+        let state: (i64, i64, i64) =
+            sqlx::query_as("SELECT season, episode, completed FROM episode_watch_state")
+                .fetch_one(&*pool)
+                .await
+                .unwrap();
+        assert_eq!(state, (1, 1, 1), "entity-owned, with its coordinates");
+    }
+
+    #[tokio::test]
     async fn deleting_a_source_keeps_series_entities() {
         let dir = tempfile::tempdir().unwrap();
         let pool = open_db(&dir.path().join("p.db")).await;

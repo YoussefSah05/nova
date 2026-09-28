@@ -1,3 +1,4 @@
+use nova_core::catalog::media::episode_binding_key;
 use nova_core::ProviderFacts;
 use nova_core::{
     now_ts, ContentSort, EpisodeNumberingKind, SeriesEpisode, SeriesSummary, SourceEvidence,
@@ -61,9 +62,10 @@ impl<'a> SeriesRepository<'a> {
                 )
                 .await?;
             }
+            let episode_key = episode_binding_key(&e.stream_url);
             sqlx::query!(
-                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, raw_name, raw_group, parser_version, quality_hints, language_hints, numbering, collection, genre, genre_source, provider_facts)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, raw_name, raw_group, parser_version, quality_hints, language_hints, numbering, collection, genre, genre_source, provider_facts, episode_key)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 e.source_id,
                 e.series_title,
                 e.category,
@@ -83,6 +85,7 @@ impl<'a> SeriesRepository<'a> {
                 ev.provider_genre,
                 genre_source,
                 facts,
+                episode_key,
             )
             .execute(&mut **tx)
             .await?;
@@ -337,9 +340,10 @@ impl<'a> SeriesRepository<'a> {
         for e in episodes {
             let numbering = e.numbering.as_str();
             let facts = e.evidence.facts_json();
+            let episode_key = episode_binding_key(&e.stream_url);
             sqlx::query!(
-                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, is_favorite, is_in_watchlist, raw_name, numbering, collection, genre, genre_source, provider_facts)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO series_episodes (source_id, series_title, category, season, episode, episode_title, logo_url, stream_url, added_at, is_favorite, is_in_watchlist, raw_name, numbering, collection, genre, genre_source, provider_facts, episode_key)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 e.source_id,
                 e.series_title,
                 e.category,
@@ -357,6 +361,7 @@ impl<'a> SeriesRepository<'a> {
                 taxonomy.genre,
                 taxonomy.genre_source,
                 facts,
+                episode_key,
             )
             .execute(&mut *tx)
             .await?;

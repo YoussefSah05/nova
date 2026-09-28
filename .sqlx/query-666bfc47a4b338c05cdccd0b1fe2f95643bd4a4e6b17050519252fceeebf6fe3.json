@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT source_id as \"source_id!: i64\"\n               FROM series_episodes WHERE episode_key IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "source_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "666bfc47a4b338c05cdccd0b1fe2f95643bd4a4e6b17050519252fceeebf6fe3"
+}

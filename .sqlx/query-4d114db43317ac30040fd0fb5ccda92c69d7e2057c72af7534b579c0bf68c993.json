@@ -1,0 +1,104 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.series_entity_id as \"entity_id!: String\",\n                      e.id as \"id?: i64\",\n                      b.series_title as \"series_title!: String\",\n                      COALESCE(e.season, s.season) as \"season?: i64\",\n                      COALESCE(e.episode, s.episode) as \"episode?: i64\",\n                      e.numbering as \"numbering?: String\",\n                      e.episode_title,\n                      e.logo_url,\n                      s.position_sec as \"position_sec!: f64\",\n                      s.duration_sec as \"duration_sec?: f64\",\n                      s.watched_at as \"watched_at!: i64\",\n                      s.completed as \"completed!: i64\",\n                      sm.canonical_title as \"canonical_title?: String\",\n                      sm.backdrop_url as \"backdrop_url?: String\",\n                      sm.poster_url as \"series_poster?: String\"\n               FROM episode_watch_state s\n               JOIN series_bindings b ON b.entity_id = s.series_entity_id\n               LEFT JOIN series_episodes e\n                 ON e.source_id = b.source_id AND e.series_title = b.series_title\n                AND e.episode_key = s.episode_key\n               LEFT JOIN series_meta sm\n                 ON sm.source_id = b.source_id AND sm.series_title = b.series_title\n               WHERE b.source_id = ? AND b.series_title IS NOT NULL\n                 AND (? IS NULL OR b.series_title = ?)\n               ORDER BY s.watched_at DESC, COALESCE(e.season, s.season) DESC,\n                        COALESCE(e.episode, s.episode) DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "entity_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "id?: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "series_title!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "season?: i64",
+        "ordinal": 3,
+        "type_info": "Null"
+      },
+      {
+        "name": "episode?: i64",
+        "ordinal": 4,
+        "type_info": "Null"
+      },
+      {
+        "name": "numbering?: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "episode_title",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "logo_url",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "position_sec!: f64",
+        "ordinal": 8,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 9,
+        "type_info": "Float"
+      },
+      {
+        "name": "watched_at!: i64",
+        "ordinal": 10,
+        "type_info": "Integer"
+      },
+      {
+        "name": "completed!: i64",
+        "ordinal": 11,
+        "type_info": "Integer"
+      },
+      {
+        "name": "canonical_title?: String",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "backdrop_url?: String",
+        "ordinal": 13,
+        "type_info": "Text"
+      },
+      {
+        "name": "series_poster?: String",
+        "ordinal": 14,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      null,
+      null,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "4d114db43317ac30040fd0fb5ccda92c69d7e2057c72af7534b579c0bf68c993"
+}

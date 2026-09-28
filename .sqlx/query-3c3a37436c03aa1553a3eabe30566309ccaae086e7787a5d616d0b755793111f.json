@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.entity_id as \"entity_id!: String\",\n                      e.episode_key as \"episode_key?: String\",\n                      e.stream_url as \"stream_url!: String\",\n                      e.season as \"season!: i64\",\n                      e.episode as \"episode!: i64\"\n               FROM series_episodes e\n               JOIN series_bindings b\n                 ON b.source_id = e.source_id AND b.series_title = e.series_title\n               WHERE e.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "entity_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "episode_key?: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "stream_url!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "season!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "episode!: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3c3a37436c03aa1553a3eabe30566309ccaae086e7787a5d616d0b755793111f"
+}

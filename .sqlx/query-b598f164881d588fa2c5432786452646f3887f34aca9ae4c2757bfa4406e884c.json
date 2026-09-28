@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT position_sec as \"position_sec!: f64\",\n                              duration_sec as \"duration_sec?: f64\",\n                              completed as \"completed!: i64\"\n                       FROM episode_watch_state\n                       WHERE series_entity_id = ? AND episode_key = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "position_sec!: f64",
+        "ordinal": 0,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "completed!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "b598f164881d588fa2c5432786452646f3887f34aca9ae4c2757bfa4406e884c"
+}

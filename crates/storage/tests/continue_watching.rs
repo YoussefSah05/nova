@@ -79,6 +79,17 @@ async fn series_rail_shows_one_card_per_show_with_resume_or_up_next() {
     .await
     .unwrap();
 
+    // Rows and history were written the legacy way (row-keyed); a profile
+    // open binds the series, keys the episodes and seeds their progress.
+    nova_storage::CanonicalRepository::new(&pool)
+        .backfill_series()
+        .await
+        .unwrap();
+    WatchHistoryRepository::new(&pool)
+        .backfill_episode_state()
+        .await
+        .unwrap();
+
     let rail = WatchHistoryRepository::new(&pool)
         .continue_watching_section(ContinueSection::Series, src, 10)
         .await

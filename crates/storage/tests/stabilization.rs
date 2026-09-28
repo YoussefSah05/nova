@@ -363,6 +363,10 @@ async fn upgrade_to_canonical_series_keeps_movie_identity_and_seeds_series() {
         // Series TMDB decisions made before they were entity-owned.
         "INSERT INTO series_meta (source_id, series_title, canonical_title, tmdb_id, tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version, evidence_json, checked_at) VALUES (1, 'Dark', 'Dark', 70523, 'Drama, Mystery', 'matched', 'trusted_id', 10000, 3, '{}', 7)",
         "INSERT INTO series_meta (source_id, series_title, tmdb_status, match_method, matcher_version, evidence_json, checked_at) VALUES (1, 'Lost', 'unmatched', 'search', 3, '{}', 7)",
+        // Episode progress: row-keyed history (Lost S1E1) and history parked
+        // by a refresh (Dark, rows not re-fetched yet).
+        "INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed) SELECT 'episode', id, 321, 2400, 9, 0 FROM series_episodes WHERE stream_url LIKE '%/7.mkv'",
+        "INSERT INTO pending_episode_history (source_id, episode_key, series_title, position_sec, watched_at, completed) VALUES (1, 'u1-parked', 'Dark', 55, 8, 0)",
     ] {
         sqlx::query(sql).execute(&pool).await.unwrap();
     }
@@ -451,6 +455,28 @@ async fn upgrade_to_canonical_series_keeps_movie_identity_and_seeds_series() {
                 ("Lost".into(), "unresolved".into(), None, None)
             ]
         );
+        // Episode progress is owned by the series entities.
+        let episodes: Vec<(String, Option<i64>, Option<i64>, f64)> = sqlx::query_as(
+            "SELECT e.title, s.season, s.episode, s.position_sec
+             FROM episode_watch_state s JOIN canonical_entities e ON e.id = s.series_entity_id
+             ORDER BY e.title",
+        )
+        .fetch_all(&upgraded)
+        .await
+        .unwrap();
+        assert_eq!(
+            episodes,
+            [
+                ("Dark".into(), None, None, 55.0),
+                ("Lost".into(), Some(1), Some(1), 321.0)
+            ]
+        );
+        let unkeyed: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM series_episodes WHERE episode_key IS NULL")
+                .fetch_one(&upgraded)
+                .await
+                .unwrap();
+        assert_eq!(unkeyed, 0);
         // Carried-over decisions are provisional: queued for re-confirmation.
         let queued = nova_storage::SeriesRepository::new(&upgraded)
             .list_for_tmdb(1, 3, i64::MIN, "en-US")
