@@ -1244,6 +1244,11 @@ async fn build_candidate(
     CanonicalRepository::compile_series_tx(tx, source_id)
         .await
         .map_err(ImportFailure::storage)?;
+    // Entity-owned series matches survive the refresh (and provider renames):
+    // re-mirror them onto the new rows instead of re-matching.
+    ExternalMatchRepository::mirror_series_for_source_tx(tx, source_id)
+        .await
+        .map_err(ImportFailure::storage)?;
     // Entity-owned TMDB matches survive the refresh: re-mirror them onto the
     // new rows instead of re-matching.
     ExternalMatchRepository::mirror_movies_for_source_tx(tx, source_id)
@@ -2521,6 +2526,177 @@ mod stabilization_tests {
                 .await
                 .unwrap();
         assert_eq!(series, 1);
+    }
+
+    fn tv_match(title: &str, tmdb_id: i64, name: &str) -> nova_storage::SeriesTmdbWrite {
+        nova_storage::SeriesTmdbWrite {
+            series_title: title.into(),
+            tmdb_id: Some(tmdb_id),
+            canonical_title: Some(name.into()),
+            original_title: Some(name.into()),
+            title_language: Some("en-US".into()),
+            poster_url: Some("https://image.tmdb.org/t/p/w500/p.jpg".into()),
+            genres_csv: Some("Drama, Mystery".into()),
+            primary_genre: Some("Drama".into()),
+            matched: true,
+            method: "trusted_id",
+            confidence_bp: Some(10_000),
+            matcher_version: 3,
+            evidence_json: "{}".into(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_series_tmdb_match_is_entity_owned_and_survives_a_provider_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let catalog = |title: &str| vec![Ok(episode_entry(title, 0, 0, "xtream://series/42"))];
+        import(pool.clone(), id, catalog("FR Dark"), ImportMode::Append).await;
+        let repo = SeriesRepository::new(&pool);
+        assert_eq!(
+            repo.list_for_tmdb(id, 3, 0, "en-US").await.unwrap().len(),
+            1
+        );
+        repo.apply_tmdb(id, &[tv_match("FR Dark", 70523, "Dark")])
+            .await
+            .unwrap();
+        let entity = series_entity(&pool, id, "FR Dark").await;
+        let owned: (String, String, String) = sqlx::query_as(
+            "SELECT entity_id, status, external_id FROM entity_external_matches WHERE namespace = 'tmdb:tv'",
+        )
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(owned, (entity.clone(), "matched".into(), "70523".into()));
+        assert!(repo
+            .list_for_tmdb(id, 3, 0, "en-US")
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Renamed by the provider: the new title shows the match (mirrored),
+        // and nothing is queued for another TMDB request.
+        import(pool.clone(), id, catalog("Dark"), ImportMode::Replace).await;
+        let list = repo
+            .list_series(id, None, None, false, false, ContentSort::Default, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].series_title, "Dark");
+        assert_eq!(list[0].canonical_title.as_deref(), Some("Dark"));
+        assert_eq!(list[0].entity_id.as_deref(), Some(entity.as_str()));
+        let mirrored: (i64, String) = sqlx::query_as(
+            "SELECT tmdb_id, tmdb_status FROM series_meta WHERE source_id = ? AND series_title = 'Dark'",
+        )
+        .bind(id)
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(mirrored, (70523, "matched".into()));
+        let genre: String = sqlx::query_scalar(
+            "SELECT genre FROM series_episodes WHERE source_id = ? AND series_title = 'Dark'",
+        )
+        .bind(id)
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(genre, "Drama", "TMDB genre mirrored onto the new rows");
+        assert!(repo
+            .list_for_tmdb(id, 3, 0, "en-US")
+            .await
+            .unwrap()
+            .is_empty());
+        // A newer matcher or another metadata language re-queues it.
+        assert_eq!(
+            repo.list_for_tmdb(id, 4, 0, "en-US").await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            repo.list_for_tmdb(id, 3, 0, "fr-FR").await.unwrap().len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unresolved_series_is_retried_once_the_provider_claims_an_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let catalog = vec![Ok(episode_entry("Show", 0, 0, "xtream://series/42"))];
+        import(pool.clone(), id, catalog, ImportMode::Append).await;
+        let repo = SeriesRepository::new(&pool);
+        let unresolved = nova_storage::SeriesTmdbWrite {
+            series_title: "Show".into(),
+            matched: false,
+            method: "search",
+            matcher_version: 3,
+            evidence_json: "{}".into(),
+            ..Default::default()
+        };
+        repo.apply_tmdb(id, &[unresolved]).await.unwrap();
+        let status: String = sqlx::query_scalar(
+            "SELECT status FROM entity_external_matches WHERE namespace = 'tmdb:tv'",
+        )
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "unresolved");
+        assert!(repo
+            .list_for_tmdb(id, 3, 0, "en-US")
+            .await
+            .unwrap()
+            .is_empty());
+        // New evidence: the provider now claims a TMDB id for it.
+        sqlx::query(
+            "INSERT INTO series_provider_facts (source_id, series_title, provider_tmdb_id, updated_at) VALUES (?, 'Show', 1399, 0)",
+        )
+        .bind(id)
+        .execute(&*pool)
+        .await
+        .unwrap();
+        let queued = repo.list_for_tmdb(id, 3, 0, "en-US").await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].trusted_tmdb_id, Some(1399));
+    }
+
+    #[tokio::test]
+    async fn movie_user_state_apis_refuse_a_series_entity() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let catalog = vec![Ok(episode_entry("Show", 0, 0, "xtream://series/42"))];
+        import(pool.clone(), id, catalog, ImportMode::Append).await;
+        let series =
+            nova_core::catalog::EntityId::new(series_entity(&pool, id, "Show").await).unwrap();
+        let canonical = CanonicalRepository::new(&pool);
+        assert!(!canonical.set_favorite(&series, true).await.unwrap());
+        assert!(!canonical.set_in_watchlist(&series, true).await.unwrap());
+        assert!(canonical
+            .record_progress(&series, 60.0, Some(600.0), false, None)
+            .await
+            .is_err());
+        let state: (i64, i64, i64) = sqlx::query_as(
+            "SELECT is_favorite, is_in_watchlist, (SELECT COUNT(*) FROM entity_watch_state)
+             FROM canonical_entities WHERE kind = 'series'",
+        )
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(state, (0, 0, 0), "series entity untouched");
     }
 
     #[tokio::test]

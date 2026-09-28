@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE series_episodes\n             SET genre = CASE WHEN ? IS NOT NULL THEN ?\n                              WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL\n                              ELSE genre END,\n                 genre_source = CASE WHEN ? IS NOT NULL THEN 'tmdb'\n                                     WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL\n                                     ELSE genre_source END,\n                 category = COALESCE(CASE WHEN ? IS NOT NULL THEN ?\n                                          WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL\n                                          ELSE genre END,\n                                     collection, category)\n             WHERE source_id = ? AND series_title = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "e313b20dc6736ed9ef5982f641fddefa4eb7949402a0cc47a7e1f65b140bc535"
+}

@@ -99,6 +99,9 @@ export interface SeriesSummary {
   /// Name to show, chosen by the backend's naming policy (confident TMDB
   /// title, else the parsed provider title).
   displayTitle: string;
+  /// Opaque canonical series entity; null only before the catalog compiler
+  /// has bound the series.
+  entityId: string | null;
 }
 
 export interface SeriesEpisode {

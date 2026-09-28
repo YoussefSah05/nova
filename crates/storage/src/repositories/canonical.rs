@@ -720,7 +720,7 @@ impl<'a> CanonicalRepository<'a> {
     ) -> Result<bool, StorageError> {
         let flag: i64 = is_favorite.into();
         let mut tx = self.pool.begin().await?;
-        let Some(entity_id) = Self::canonical_entity_conn(&mut tx, entity_id).await? else {
+        let Some(entity_id) = Self::movie_entity_conn(&mut tx, entity_id).await? else {
             return Ok(false);
         };
         let id = entity_id.as_str();
@@ -757,7 +757,7 @@ impl<'a> CanonicalRepository<'a> {
     ) -> Result<bool, StorageError> {
         let flag: i64 = in_watchlist.into();
         let mut tx = self.pool.begin().await?;
-        let Some(entity_id) = Self::canonical_entity_conn(&mut tx, entity_id).await? else {
+        let Some(entity_id) = Self::movie_entity_conn(&mut tx, entity_id).await? else {
             return Ok(false);
         };
         let id = entity_id.as_str();
@@ -797,10 +797,14 @@ impl<'a> CanonicalRepository<'a> {
     ) -> Result<(), StorageError> {
         let mut conn = self.pool.acquire().await?;
         // A historical ID records onto its survivor; an unknown one is left
-        // to the foreign key to reject, as before.
-        let entity_id = Self::canonical_entity_conn(&mut conn, entity_id)
-            .await?
-            .unwrap_or_else(|| entity_id.clone());
+        // to the foreign key to reject, as before. A series ID is refused:
+        // series resume isn't entity-owned yet.
+        let entity_id = match Self::canonical_entity_conn(&mut conn, entity_id).await? {
+            Some(_) => Self::movie_entity_conn(&mut conn, entity_id)
+                .await?
+                .ok_or(StorageError::NotFound)?,
+            None => entity_id.clone(),
+        };
         Self::record_progress_conn(
             &mut conn,
             &entity_id,

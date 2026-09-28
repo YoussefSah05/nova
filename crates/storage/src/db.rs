@@ -31,6 +31,11 @@ pub async fn init_profile_db(path: &str) -> Result<SqlitePool, StorageError> {
     // Canonical series (0036): bind pre-existing series to entities, seeding
     // their favorite/watchlist from the per-row flags.
     canonical.backfill_series().await?;
+    // Series TMDB matches made before they were entity-owned move onto the
+    // bound series entities (a no-op once carried over).
+    crate::repositories::ExternalMatchRepository::new(&pool)
+        .backfill_series_matches()
+        .await?;
     // Entity resolution (0023): resolve once for profiles that predate it or
     // were last resolved by an older rule set; a no-op otherwise.
     canonical.ensure_movies_resolved().await?;

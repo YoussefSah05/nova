@@ -564,6 +564,25 @@ impl CanonicalRepository<'_> {
 
     /// Bounded, cycle-checked redirect walk. A dangling tombstone or a cycle
     /// is a corrupt record, never silently resolved to something arbitrary.
+    /// [`Self::canonical_entity_conn`] restricted to movies: the movie
+    /// user-state APIs must not act on a series entity ID.
+    pub(crate) async fn movie_entity_conn(
+        conn: &mut SqliteConnection,
+        entity_id: &EntityId,
+    ) -> Result<Option<EntityId>, StorageError> {
+        let Some(current) = Self::canonical_entity_conn(conn, entity_id).await? else {
+            return Ok(None);
+        };
+        let id = current.as_str();
+        let is_movie = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) as "n!: i64" FROM canonical_entities WHERE id = ? AND kind = 'movie'"#,
+            id,
+        )
+        .fetch_one(&mut *conn)
+        .await?;
+        Ok((is_movie > 0).then_some(current))
+    }
+
     pub(crate) async fn canonical_entity_conn(
         conn: &mut SqliteConnection,
         entity_id: &EntityId,

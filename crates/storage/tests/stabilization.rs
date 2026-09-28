@@ -360,6 +360,9 @@ async fn upgrade_to_canonical_series_keeps_movie_identity_and_seeds_series() {
         "INSERT INTO series_episodes (source_id, series_title, season, episode, stream_url, is_favorite, is_in_watchlist) VALUES (1, 'Dark', 0, 0, 'xtream://series/42', 1, 0)",
         "INSERT INTO series_episodes (source_id, series_title, season, episode, stream_url, is_favorite, is_in_watchlist) VALUES (1, 'Lost', 1, 1, 'http://example.invalid/series/u/p/7.mkv', 0, 1), (1, 'Lost', 1, 2, 'http://example.invalid/series/u/p/8.mkv', 0, 1)",
         "INSERT INTO series_episodes (source_id, series_title, season, episode, stream_url) VALUES (1, 'Ozark', 0, 0, 'xtream://series/9')",
+        // Series TMDB decisions made before they were entity-owned.
+        "INSERT INTO series_meta (source_id, series_title, canonical_title, tmdb_id, tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version, evidence_json, checked_at) VALUES (1, 'Dark', 'Dark', 70523, 'Drama, Mystery', 'matched', 'trusted_id', 10000, 3, '{}', 7)",
+        "INSERT INTO series_meta (source_id, series_title, tmdb_status, match_method, matcher_version, evidence_json, checked_at) VALUES (1, 'Lost', 'unmatched', 'search', 3, '{}', 7)",
     ] {
         sqlx::query(sql).execute(&pool).await.unwrap();
     }
@@ -379,7 +382,7 @@ async fn upgrade_to_canonical_series_keeps_movie_identity_and_seeds_series() {
         let children: (i64, i64, i64, i64, i64, i64, f64) = sqlx::query_as(
             "SELECT (SELECT COUNT(*) FROM stream_variants), (SELECT COUNT(*) FROM entity_lineage),
                     (SELECT COUNT(*) FROM entity_redirects), (SELECT COUNT(*) FROM entity_aliases),
-                    (SELECT COUNT(*) FROM entity_external_matches), (SELECT COUNT(*) FROM entity_watch_state),
+                    (SELECT COUNT(*) FROM entity_external_matches WHERE namespace = 'tmdb:movie'), (SELECT COUNT(*) FROM entity_watch_state),
                     (SELECT position_sec FROM entity_watch_state WHERE entity_id = 'mov-a')",
         )
         .fetch_one(&upgraded)
@@ -426,6 +429,27 @@ async fn upgrade_to_canonical_series_keeps_movie_identity_and_seeds_series() {
             key("Lost"),
             nova_core::catalog::media::series_binding_key(None, "Lost"),
             "an opened series has no sentinel yet: bound by title"
+        );
+        // Legacy series matches now belong to the bound entities.
+        let matches: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT e.title, m.status, m.external_id, m.primary_genre
+             FROM entity_external_matches m JOIN canonical_entities e ON e.id = m.entity_id
+             WHERE m.namespace = 'tmdb:tv' ORDER BY e.title",
+        )
+        .fetch_all(&upgraded)
+        .await
+        .unwrap();
+        assert_eq!(
+            matches,
+            [
+                (
+                    "Dark".into(),
+                    "matched".into(),
+                    Some("70523".into()),
+                    Some("Drama".into())
+                ),
+                ("Lost".into(), "unresolved".into(), None, None)
+            ]
         );
         let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
             .fetch_one(&upgraded)

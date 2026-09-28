@@ -380,6 +380,10 @@ pub struct SeriesSummary {
     /// The name to show, by `naming::display_title` (confident TMDB title,
     /// else the parsed provider title).
     pub display_title: String,
+    /// Opaque canonical series entity (`ser-…`); `None` only for a series the
+    /// catalog compiler hasn't bound yet.
+    #[serde(default)]
+    pub entity_id: Option<String>,
 }
 
 impl SeriesSummary {

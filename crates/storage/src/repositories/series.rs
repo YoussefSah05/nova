@@ -398,6 +398,9 @@ impl<'a> SeriesRepository<'a> {
                         MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
                         MAX(se.added_at) as "added_at?: i64",
                         MAX(sm.canonical_title) as "canonical_title?: String",
+                        (SELECT b.entity_id FROM series_bindings b
+                         WHERE b.source_id = se.source_id AND b.series_title = se.series_title)
+                            as "entity_id?: String",
                         COALESCE(MAX(sm.backdrop_url),
                                  (SELECT json_extract(f.facts, '$.backdropUrl') FROM series_provider_facts f
                                   WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
@@ -448,6 +451,7 @@ impl<'a> SeriesRepository<'a> {
                     backdrop_url: r.backdrop_url,
                     overview: r.overview,
                     display_title: String::new(),
+                    entity_id: r.entity_id,
                 }
                 .with_display_title()
             })
@@ -462,6 +466,9 @@ impl<'a> SeriesRepository<'a> {
                         MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
                         MAX(se.added_at) as "added_at?: i64",
                         MAX(sm.canonical_title) as "canonical_title?: String",
+                        (SELECT b.entity_id FROM series_bindings b
+                         WHERE b.source_id = se.source_id AND b.series_title = se.series_title)
+                            as "entity_id?: String",
                         COALESCE(MAX(sm.backdrop_url),
                                  (SELECT json_extract(f.facts, '$.backdropUrl') FROM series_provider_facts f
                                   WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
@@ -512,6 +519,7 @@ impl<'a> SeriesRepository<'a> {
                     backdrop_url: r.backdrop_url,
                     overview: r.overview,
                     display_title: String::new(),
+                    entity_id: r.entity_id,
                 }
                 .with_display_title()
             })
@@ -702,9 +710,10 @@ impl<'a> SeriesRepository<'a> {
         Ok(rows.into_iter().map(|r| r.value).collect())
     }
 
-    /// Distinct series of a source needing a TMDB decision: never matched,
-    /// decided by an older matcher, or left unresolved before
-    /// `retry_unresolved_before`.
+    /// Series of a source whose canonical entity needs a TMDB decision:
+    /// never matched, decided by an older matcher or in another metadata
+    /// language, left unresolved before `retry_unresolved_before`, or left
+    /// unresolved by search while the provider now claims a TMDB id.
     pub async fn list_for_tmdb(
         &self,
         source_id: i64,
@@ -714,24 +723,22 @@ impl<'a> SeriesRepository<'a> {
     ) -> Result<Vec<SeriesTmdbQuery>, StorageError> {
         let version = i64::from(matcher_version);
         let rows = sqlx::query!(
-            r#"SELECT DISTINCT se.series_title as "series_title!: String",
+            r#"SELECT b.series_title as "series_title!: String",
                       spf.provider_tmdb_id as "trusted?: i64"
-               FROM series_episodes se
-               LEFT JOIN series_meta sm
-                 ON sm.source_id = se.source_id AND sm.series_title = se.series_title
+               FROM series_bindings b
+               LEFT JOIN entity_external_matches m
+                 ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'
                LEFT JOIN series_provider_facts spf
-                 ON spf.source_id = se.source_id AND spf.series_title = se.series_title
-               WHERE se.source_id = ?
-                 AND (sm.tmdb_status IS NULL
-                      -- a provider id is new evidence: retry an unmatched series now
-                      OR (sm.tmdb_status = 'unmatched' AND spf.provider_tmdb_id IS NOT NULL
-                          AND sm.match_method = 'search')
-                      OR sm.matcher_version IS NULL
-                      OR sm.matcher_version < ?
-                      OR (sm.tmdb_status = 'unmatched' AND sm.checked_at < ?)
-                      OR (sm.tmdb_status = 'matched'
-                          AND (sm.tmdb_id IS NULL
-                               OR COALESCE(sm.title_language, 'en-US') <> ?)))"#,
+                 ON spf.source_id = b.source_id AND spf.series_title = b.series_title
+               WHERE b.source_id = ? AND b.series_title IS NOT NULL
+                 AND (m.entity_id IS NULL
+                      -- a provider id is new evidence: retry an unresolved series now
+                      OR (m.status = 'unresolved' AND spf.provider_tmdb_id IS NOT NULL
+                          AND m.method = 'search')
+                      OR m.matcher_version < ?
+                      OR (m.status = 'unresolved' AND m.checked_at < ?)
+                      OR (m.status = 'matched' AND COALESCE(m.title_language, 'en-US') <> ?))
+               ORDER BY b.series_title"#,
             source_id,
             version,
             retry_unresolved_before,
@@ -748,92 +755,174 @@ impl<'a> SeriesRepository<'a> {
             .collect())
     }
 
-    /// Upsert TMDB metadata for series into `series_meta` (matched or unmatched).
+    /// Record TMDB decisions for series. The series' canonical entity owns
+    /// the decision (`entity_external_matches`, namespace `tmdb:tv`, with its
+    /// provenance), so it survives refreshes and provider renames; the
+    /// per-source `series_meta` row and the episodes' genre are its mirror.
+    /// A series with no entity binding (not expected after the series
+    /// compiler) is recorded on the mirror only.
     pub async fn apply_tmdb(
         &self,
         source_id: i64,
         updates: &[SeriesTmdbWrite],
     ) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
+        let now = nova_core::now_ts();
         for u in updates {
-            let status = if u.matched { "matched" } else { "unmatched" };
-            let confidence = u.confidence_bp.map(i64::from);
-            let version = i64::from(u.matcher_version);
-            let now = nova_core::now_ts();
-            sqlx::query!(
-                "INSERT INTO series_meta
-                   (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,
-                    tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,
-                    evidence_json, checked_at, original_title, title_language, tmdb_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(source_id, series_title) DO UPDATE SET
-                   tmdb_id = excluded.tmdb_id,
-                   canonical_title = excluded.canonical_title,
-                   poster_url = excluded.poster_url,
-                   backdrop_url = excluded.backdrop_url,
-                   overview = excluded.overview,
-                   tmdb_genres = excluded.tmdb_genres,
-                   tmdb_status = excluded.tmdb_status,
-                   match_method = excluded.match_method,
-                   confidence_bp = excluded.confidence_bp,
-                   matcher_version = excluded.matcher_version,
-                   evidence_json = excluded.evidence_json,
-                   checked_at = excluded.checked_at,
-                   original_title = excluded.original_title,
-                   title_language = excluded.title_language",
+            let entity = sqlx::query_scalar!(
+                r#"SELECT entity_id as "entity_id!: String" FROM series_bindings
+                   WHERE source_id = ? AND series_title = ?"#,
                 source_id,
                 u.series_title,
-                u.canonical_title,
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some(entity) = entity else {
+                Self::apply_tmdb_mirror_only_tx(&mut tx, source_id, u, now).await?;
+                continue;
+            };
+            // Matched means a TMDB id; anything else is unresolved.
+            let external_id = u.tmdb_id.filter(|_| u.matched).map(|id| id.to_string());
+            let matched = external_id.is_some();
+            let status = if matched { "matched" } else { "unresolved" };
+            let method = if u.method == "trusted_id" {
+                "trusted_id"
+            } else {
+                "search"
+            };
+            let confidence = u.confidence_bp.map(i64::from);
+            let version = i64::from(u.matcher_version);
+            let title = u.canonical_title.as_deref().filter(|_| matched);
+            let primary = u.primary_genre.as_deref().filter(|_| matched);
+            sqlx::query!(
+                r#"INSERT INTO entity_external_matches
+                       (entity_id, namespace, status, external_id, method, confidence_bp,
+                        matcher_version, evidence_json, canonical_title, poster_url,
+                        backdrop_url, overview, genres, primary_genre, checked_at,
+                        original_title, title_language)
+                   VALUES (?, 'tmdb:tv', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(entity_id, namespace) DO UPDATE SET
+                       status = excluded.status,
+                       external_id = excluded.external_id,
+                       method = excluded.method,
+                       confidence_bp = excluded.confidence_bp,
+                       matcher_version = excluded.matcher_version,
+                       evidence_json = excluded.evidence_json,
+                       canonical_title = excluded.canonical_title,
+                       poster_url = excluded.poster_url,
+                       backdrop_url = excluded.backdrop_url,
+                       overview = excluded.overview,
+                       genres = excluded.genres,
+                       primary_genre = excluded.primary_genre,
+                       checked_at = excluded.checked_at,
+                       original_title = excluded.original_title,
+                       title_language = excluded.title_language"#,
+                entity,
+                status,
+                external_id,
+                method,
+                confidence,
+                version,
+                u.evidence_json,
+                title,
                 u.poster_url,
                 u.backdrop_url,
                 u.overview,
                 u.genres_csv,
-                status,
-                u.method,
-                confidence,
-                version,
-                u.evidence_json,
+                primary,
                 now,
                 u.original_title,
                 u.title_language,
-                u.tmdb_id,
             )
             .execute(&mut *tx)
             .await?;
-
-            // Same genre precedence as movies: a confident TMDB genre wins, an
-            // unresolved decision removes only a TMDB genre, and the browse
-            // facet `category` is recomputed as COALESCE(genre, collection).
-            let genre = u.primary_genre.as_deref();
-            let matched_flag: i64 = u.matched.into();
-            sqlx::query!(
-                "UPDATE series_episodes
-                 SET genre = CASE WHEN ? IS NOT NULL THEN ?
-                                  WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
-                                  ELSE genre END,
-                     genre_source = CASE WHEN ? IS NOT NULL THEN 'tmdb'
-                                         WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
-                                         ELSE genre_source END,
-                     category = COALESCE(CASE WHEN ? IS NOT NULL THEN ?
-                                              WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
-                                              ELSE genre END,
-                                         collection, category)
-                 WHERE source_id = ? AND series_title = ?",
-                genre,
-                genre,
-                matched_flag,
-                genre,
-                matched_flag,
-                genre,
-                genre,
-                matched_flag,
-                source_id,
-                u.series_title,
-            )
-            .execute(&mut *tx)
-            .await?;
+            crate::ExternalMatchRepository::mirror_series_tx(&mut tx, None, Some(&entity)).await?;
         }
         tx.commit().await?;
+        Ok(())
+    }
+
+    /// The pre-entity write path: `series_meta` plus the episodes' genre.
+    async fn apply_tmdb_mirror_only_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+        u: &SeriesTmdbWrite,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        let status = if u.matched { "matched" } else { "unmatched" };
+        let confidence = u.confidence_bp.map(i64::from);
+        let version = i64::from(u.matcher_version);
+        sqlx::query!(
+            "INSERT INTO series_meta
+               (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,
+                tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,
+                evidence_json, checked_at, original_title, title_language, tmdb_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(source_id, series_title) DO UPDATE SET
+               tmdb_id = excluded.tmdb_id,
+               canonical_title = excluded.canonical_title,
+               poster_url = excluded.poster_url,
+               backdrop_url = excluded.backdrop_url,
+               overview = excluded.overview,
+               tmdb_genres = excluded.tmdb_genres,
+               tmdb_status = excluded.tmdb_status,
+               match_method = excluded.match_method,
+               confidence_bp = excluded.confidence_bp,
+               matcher_version = excluded.matcher_version,
+               evidence_json = excluded.evidence_json,
+               checked_at = excluded.checked_at,
+               original_title = excluded.original_title,
+               title_language = excluded.title_language",
+            source_id,
+            u.series_title,
+            u.canonical_title,
+            u.poster_url,
+            u.backdrop_url,
+            u.overview,
+            u.genres_csv,
+            status,
+            u.method,
+            confidence,
+            version,
+            u.evidence_json,
+            now,
+            u.original_title,
+            u.title_language,
+            u.tmdb_id,
+        )
+        .execute(&mut **tx)
+        .await?;
+        // Same genre precedence as movies: a confident TMDB genre wins, an
+        // unresolved decision removes only a TMDB genre, and the browse
+        // facet `category` is recomputed as COALESCE(genre, collection).
+        let genre = u.primary_genre.as_deref();
+        let matched_flag: i64 = u.matched.into();
+        sqlx::query!(
+            "UPDATE series_episodes
+             SET genre = CASE WHEN ? IS NOT NULL THEN ?
+                              WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
+                              ELSE genre END,
+                 genre_source = CASE WHEN ? IS NOT NULL THEN 'tmdb'
+                                     WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
+                                     ELSE genre_source END,
+                 category = COALESCE(CASE WHEN ? IS NOT NULL THEN ?
+                                          WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
+                                          ELSE genre END,
+                                     collection, category)
+             WHERE source_id = ? AND series_title = ?",
+            genre,
+            genre,
+            matched_flag,
+            genre,
+            matched_flag,
+            genre,
+            genre,
+            matched_flag,
+            source_id,
+            u.series_title,
+        )
+        .execute(&mut **tx)
+        .await?;
         Ok(())
     }
 
@@ -953,6 +1042,9 @@ impl<'a> SeriesRepository<'a> {
                     MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
                     MAX(se.added_at) as "added_at?: i64",
                     MAX(sm.canonical_title) as "canonical_title?: String",
+                    (SELECT b.entity_id FROM series_bindings b
+                     WHERE b.source_id = se.source_id AND b.series_title = se.series_title)
+                        as "entity_id?: String",
                     COALESCE(MAX(sm.backdrop_url),
                                  (SELECT json_extract(f.facts, '$.backdropUrl') FROM series_provider_facts f
                                   WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
@@ -989,6 +1081,7 @@ impl<'a> SeriesRepository<'a> {
                     backdrop_url: r.backdrop_url,
                     overview: r.overview,
                     display_title: String::new(),
+                    entity_id: r.entity_id,
                 }
                 .with_display_title()
             })

@@ -20,6 +20,8 @@ use crate::repositories::canonical::parse_entity;
 
 /// Namespace of TMDB movie IDs (authority + media kind).
 pub const TMDB_MOVIE: &str = "tmdb:movie";
+/// Namespace of TMDB TV IDs, for canonical series entities.
+pub const TMDB_TV: &str = "tmdb:tv";
 
 /// Order in which titles are matched: what the user is most likely to look at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -354,6 +356,142 @@ impl<'a> ExternalMatchRepository<'a> {
         .execute(&mut **tx)
         .await?;
         Ok(())
+    }
+
+    /// Re-derive the series mirror (`series_meta` display row and the
+    /// episodes' TMDB genre) from entity-owned `tmdb:tv` matches, for every
+    /// bound series of `source_id`, or only `entity_id`'s titles when given.
+    /// A series renamed by the provider keeps its match this way, with no
+    /// new TMDB request.
+    pub(crate) async fn mirror_series_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: Option<i64>,
+        entity_id: Option<&str>,
+    ) -> Result<(), StorageError> {
+        sqlx::query!(
+            r#"INSERT INTO series_meta
+                   (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,
+                    tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,
+                    evidence_json, checked_at, original_title, title_language, tmdb_id)
+               SELECT b.source_id, b.series_title, m.canonical_title, m.poster_url,
+                      m.backdrop_url, m.overview, m.genres,
+                      CASE m.status WHEN 'matched' THEN 'matched' ELSE 'unmatched' END,
+                      m.method, m.confidence_bp, m.matcher_version, m.evidence_json,
+                      m.checked_at, m.original_title, m.title_language,
+                      CASE WHEN m.status = 'matched' THEN CAST(m.external_id AS INTEGER) END
+               FROM series_bindings b
+               JOIN entity_external_matches m
+                 ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'
+               WHERE b.series_title IS NOT NULL
+                 AND (?1 IS NULL OR b.source_id = ?1)
+                 AND (?2 IS NULL OR b.entity_id = ?2)
+               ON CONFLICT(source_id, series_title) DO UPDATE SET
+                   tmdb_id = excluded.tmdb_id,
+                   canonical_title = excluded.canonical_title,
+                   poster_url = excluded.poster_url,
+                   backdrop_url = excluded.backdrop_url,
+                   overview = excluded.overview,
+                   tmdb_genres = excluded.tmdb_genres,
+                   tmdb_status = excluded.tmdb_status,
+                   match_method = excluded.match_method,
+                   confidence_bp = excluded.confidence_bp,
+                   matcher_version = excluded.matcher_version,
+                   evidence_json = excluded.evidence_json,
+                   checked_at = excluded.checked_at,
+                   original_title = excluded.original_title,
+                   title_language = excluded.title_language"#,
+            source_id,
+            entity_id,
+        )
+        .execute(&mut **tx)
+        .await?;
+        // Same genre precedence as movies: a confident TMDB genre wins, an
+        // unresolved decision removes only a TMDB genre, and the browse facet
+        // `category` is recomputed as COALESCE(genre, collection).
+        sqlx::query!(
+            r#"UPDATE series_episodes
+               SET genre = CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL
+                                    THEN m.primary_genre
+                                WHEN m.status <> 'matched' AND series_episodes.genre_source = 'tmdb'
+                                    THEN NULL
+                                ELSE series_episodes.genre END,
+                   genre_source = CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL
+                                           THEN 'tmdb'
+                                       WHEN m.status <> 'matched'
+                                            AND series_episodes.genre_source = 'tmdb'
+                                           THEN NULL
+                                       ELSE series_episodes.genre_source END,
+                   category = COALESCE(
+                       CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL
+                                THEN m.primary_genre
+                            WHEN m.status <> 'matched' AND series_episodes.genre_source = 'tmdb'
+                                THEN NULL
+                            ELSE series_episodes.genre END,
+                       series_episodes.collection, series_episodes.category)
+               FROM series_bindings b
+               JOIN entity_external_matches m
+                 ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'
+               WHERE series_episodes.source_id = b.source_id
+                 AND series_episodes.series_title = b.series_title
+                 AND (?1 IS NULL OR b.source_id = ?1)
+                 AND (?2 IS NULL OR b.entity_id = ?2)"#,
+            source_id,
+            entity_id,
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// Mirror a source's series matches after an import replaced its rows
+    /// (runs in the import transaction, after the series compiler).
+    pub async fn mirror_series_for_source_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+    ) -> Result<(), StorageError> {
+        Self::mirror_series_tx(tx, Some(source_id), None).await
+    }
+
+    /// Upgrade step run after the series backfill: series matches decided
+    /// before they were entity-owned (per-source `series_meta` rows) become
+    /// `tmdb:tv` matches of the bound entity, with their provenance. Rows
+    /// that can't satisfy the entity schema (a "matched" row without an ID)
+    /// carry over as unresolved, so the queue re-decides them. Idempotent:
+    /// entities that already own a decision are skipped.
+    pub async fn backfill_series_matches(&self) -> Result<u64, StorageError> {
+        let copied = sqlx::query!(
+            r#"INSERT INTO entity_external_matches
+                   (entity_id, namespace, status, external_id, method, confidence_bp,
+                    matcher_version, evidence_json, canonical_title, poster_url, backdrop_url,
+                    overview, genres, primary_genre, checked_at, original_title, title_language)
+               SELECT b.entity_id, 'tmdb:tv',
+                      CASE WHEN sm.tmdb_status = 'matched' AND sm.tmdb_id IS NOT NULL
+                           THEN 'matched' ELSE 'unresolved' END,
+                      CASE WHEN sm.tmdb_status = 'matched' AND sm.tmdb_id IS NOT NULL
+                           THEN CAST(sm.tmdb_id AS TEXT) END,
+                      CASE WHEN sm.match_method = 'trusted_id' THEN 'trusted_id' ELSE 'search' END,
+                      CASE WHEN sm.confidence_bp BETWEEN 0 AND 10000 THEN sm.confidence_bp END,
+                      COALESCE(sm.matcher_version, 0),
+                      COALESCE(sm.evidence_json, '{}'),
+                      CASE WHEN sm.tmdb_status = 'matched' AND sm.tmdb_id IS NOT NULL
+                           THEN sm.canonical_title END,
+                      sm.poster_url, sm.backdrop_url, sm.overview, sm.tmdb_genres,
+                      CASE WHEN instr(sm.tmdb_genres, ', ') > 0
+                           THEN substr(sm.tmdb_genres, 1, instr(sm.tmdb_genres, ', ') - 1)
+                           ELSE NULLIF(sm.tmdb_genres, '') END,
+                      COALESCE(sm.checked_at, 0), sm.original_title, sm.title_language
+               FROM series_meta sm
+               JOIN series_bindings b
+                 ON b.source_id = sm.source_id AND b.series_title = sm.series_title
+               WHERE sm.tmdb_status IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM entity_external_matches x
+                                 WHERE x.entity_id = b.entity_id AND x.namespace = 'tmdb:tv')
+               ON CONFLICT(entity_id, namespace) DO NOTHING"#,
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+        Ok(copied)
     }
 
     pub async fn movie_match(
