@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.id as \"variant_id!: String\",\n                      s.vod_item_id as \"row_id!: i64\",\n                      v.name as \"raw_title!: String\",\n                      v.quality_hints, v.language_hints,\n                      (h.last_failure_at IS NOT NULL AND h.last_failure_at >= ?\n                       AND (h.last_success_at IS NULL OR h.last_failure_at > h.last_success_at))\n                          as \"recently_failed!: bool\"\n               FROM stream_variants s\n               JOIN vod_items v ON v.id = s.vod_item_id\n               LEFT JOIN variant_health h ON h.variant_id = s.id\n               WHERE s.entity_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "variant_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "row_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "raw_title!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "quality_hints",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "language_hints",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "recently_failed!: bool",
+        "ordinal": 5,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "fcaeb825a2193252c094cd45dccac76435942592ff1537c2585fe876bb9807e1"
+}

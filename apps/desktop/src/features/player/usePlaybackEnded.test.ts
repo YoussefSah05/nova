@@ -1,26 +1,40 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 
-import type { PlaybackEnded, SeriesEpisode } from "@/types";
-import { usePlaybackEnded } from "./usePlaybackEnded";
+import type { PlaybackEnded, PlaybackRecover, SeriesEpisode } from "@/types";
+import { usePlaybackEnded, usePlaybackRecover } from "./usePlaybackEnded";
 
+type Handler = (event: { payload: unknown }) => void;
 const mocks = vi.hoisted(() => ({
-  handler: null as ((event: { payload: PlaybackEnded }) => void) | null,
+  handlers: new Map<string, Handler>(),
   unlisten: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (_name: string, handler: (event: { payload: PlaybackEnded }) => void) => {
-    mocks.handler = handler;
+  listen: vi.fn(async (name: string, handler: Handler) => {
+    mocks.handlers.set(name, handler);
     return mocks.unlisten;
   }),
 }));
 
 const next = { id: 7, season: 1, episode: 3 } as SeriesEpisode;
 const ended = (payload: Partial<PlaybackEnded>) =>
-  mocks.handler?.({ payload: { token: "tok-1", nextEpisode: next, autoplay: true, ...payload } });
+  mocks.handlers.get("playback:ended")?.({
+    payload: { token: "tok-1", nextEpisode: next, autoplay: true, ...payload },
+  });
+const recover = (payload: Partial<PlaybackRecover>) =>
+  mocks.handlers.get("playback:recover")?.({
+    payload: {
+      token: "tok-1",
+      mediaKind: "vod",
+      mediaId: 12,
+      attempt: 1,
+      otherSource: true,
+      ...payload,
+    },
+  });
 
 beforeEach(() => {
-  mocks.handler = null;
+  mocks.handlers.clear();
   mocks.unlisten.mockReset();
 });
 
@@ -29,7 +43,7 @@ it("opens the next episode it is handed, for its own session only", async () => 
   const tokenRef = { current: "tok-1" };
   const openingRef = { current: false };
   const { unmount } = renderHook(() => usePlaybackEnded(true, tokenRef, openingRef, openNext));
-  await waitFor(() => expect(mocks.handler).not.toBeNull());
+  await waitFor(() => expect(mocks.handlers.has("playback:ended")).toBe(true));
 
   ended({ token: "tok-old" });
   ended({ autoplay: false });
@@ -47,7 +61,26 @@ it("opens the next episode it is handed, for its own session only", async () => 
   expect(mocks.unlisten).toHaveBeenCalled();
 });
 
+it("acts on a recovery decision for its own session only", async () => {
+  const act = vi.fn();
+  const tokenRef = { current: "tok-1" };
+  const openingRef = { current: false };
+  renderHook(() => usePlaybackRecover(true, tokenRef, openingRef, act));
+  await waitFor(() => expect(mocks.handlers.has("playback:recover")).toBe(true));
+
+  recover({ token: "tok-old" });
+  openingRef.current = true;
+  recover({});
+  openingRef.current = false;
+  expect(act).not.toHaveBeenCalled();
+
+  recover({ attempt: 2 });
+  expect(act).toHaveBeenCalledTimes(1);
+  expect(act).toHaveBeenCalledWith(expect.objectContaining({ mediaId: 12, attempt: 2 }));
+});
+
 it("does not listen when the native engine is off", () => {
   renderHook(() => usePlaybackEnded(false, { current: "tok-1" }, { current: false }, vi.fn()));
-  expect(mocks.handler).toBeNull();
+  renderHook(() => usePlaybackRecover(false, { current: "tok-1" }, { current: false }, vi.fn()));
+  expect(mocks.handlers.size).toBe(0);
 });

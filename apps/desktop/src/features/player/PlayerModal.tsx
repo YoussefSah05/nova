@@ -51,7 +51,7 @@ import { TranscriptPanel } from "./TranscriptPanel";
 import { CaptionStyleButton } from "./CaptionStylePanel";
 import { CinemaEpisodeBrowser } from "./CinemaEpisodeBrowser";
 import { episodeToMedia } from "./episodeMedia";
-import { usePlaybackEnded } from "./usePlaybackEnded";
+import { usePlaybackEnded, usePlaybackRecover } from "./usePlaybackEnded";
 import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
 import { useCaptionStyle } from "./useCaptionStyle";
 import { useAirPlay } from "./useAirPlay";
@@ -233,6 +233,10 @@ export function PlayerModal({
   const [pipActive, setPipActive] = useState(false);
   const [pipSupported, setPipSupported] = useState(false);
   const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>("resolving");
+  // Set while the playback coordinator recovers from a failure.
+  const [recoveryNote, setRecoveryNote] = useState<string | null>(null);
+  // Bumped to reopen the same item (a recovery retry).
+  const [reopenNonce, setReopenNonce] = useState(0);
   const [loadingProgress, setLoadingProgress] = useState(8);
   const [forceHlsJs, setForceHlsJs] = useState(false);
   const [nativeToken, setNativeToken] = useState<string | null>(null);
@@ -322,6 +326,19 @@ export function PlayerModal({
   usePlaybackEnded(USE_MPV_ENGINE, nativeTokenRef, nativeOpeningRef, (next) =>
     onPlayMediaRef.current?.(episodeToMedia(next, media.posterUrl, media.title))
   );
+  usePlaybackRecover(USE_MPV_ENGINE, nativeTokenRef, nativeOpeningRef, (attempt) => {
+    setError(null);
+    setRecoveryNote(attempt.otherSource ? "Trying another source…" : "Retrying…");
+    if (attempt.mediaKind === media.kind && attempt.mediaId === media.id) {
+      setReopenNonce((n) => n + 1);
+    } else {
+      onPlayMediaRef.current?.({
+        ...media,
+        kind: attempt.mediaKind as PlayMedia["kind"],
+        id: attempt.mediaId,
+      });
+    }
+  });
 
   // Apply the profile's default caption mode once, when the player opens (not on
   // every episode switch, so a mid-session manual toggle isn't overridden).
@@ -407,7 +424,7 @@ export function PlayerModal({
     return () => {
       cancelled = true;
     };
-  }, [profileId, media.kind, media.id, media.title]);
+  }, [profileId, media.kind, media.id, media.title, reopenNonce]);
 
   // Tear the libmpv session down only when the player actually closes — not on
   // every content switch (those reuse the session). Uses the ref so the latest
@@ -469,7 +486,10 @@ export function PlayerModal({
     setBuffering(state.phase === "opening" || state.phase === "buffering");
     // A real frame exists once libmpv reports playing/paused — reveal the
     // GL surface and keep it revealed for the rest of this load.
-    if (state.phase === "playing" || state.phase === "paused") setHasPainted(true);
+    if (state.phase === "playing" || state.phase === "paused") {
+      setHasPainted(true);
+      setRecoveryNote(null);
+    }
 
     if (state.phase === "opening") {
       setLoadingPhase("resolving");
@@ -1553,7 +1573,7 @@ export function PlayerModal({
             percent={visibleLoadingPct}
             title={
               USE_MPV_ENGINE
-                ? nativeLoadingTitle(loadingPhase)
+                ? (recoveryNote ?? nativeLoadingTitle(loadingPhase))
                 : loadingTitle(loadingPhase, resolved)
             }
             detail={loadingDetail}

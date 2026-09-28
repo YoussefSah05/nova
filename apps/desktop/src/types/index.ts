@@ -146,6 +146,17 @@ export interface PlaybackEnded {
   autoplay: boolean;
 }
 
+/// `playback:recover` — the native session failed; the coordinator chose what
+/// to try next: the same item again, or (`otherSource`) another source of the
+/// title. Bounded; after the last attempt the error stays.
+export interface PlaybackRecover {
+  token: string;
+  mediaKind: string;
+  mediaId: number;
+  attempt: number;
+  otherSource: boolean;
+}
+
 /// One card on a tab's Continue Watching rail (`list_continue_watching`).
 export interface ContinueWatchingItem {
   /// What plays on click: "vod" | "episode" | "live".

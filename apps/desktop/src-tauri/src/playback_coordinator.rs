@@ -14,12 +14,16 @@
 //! `begin`/`finish` go through the same queue, so a session's final write
 //! can't race its own progress writes.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
+use nova_core::catalog::{EntityId, VariantId};
 use nova_core::SeriesEpisode;
 use nova_mpv_player::{MpvEngine, MpvPlaybackPhase, MpvPlayerState};
-use nova_storage::{ProfileSettingsRepository, SeriesRepository, WatchHistoryRepository};
+use nova_storage::{
+    CanonicalRepository, ProfileSettingsRepository, SeriesRepository, WatchHistoryRepository,
+};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tokio::sync::{mpsc, oneshot};
@@ -37,6 +41,9 @@ const RESUME_RETRY_MS: i64 = 2_000;
 /// Give up resuming after this many seeks: playback continues from where the
 /// engine actually is, and that becomes the stored position.
 const RESUME_MAX_SEEKS: u32 = 3;
+/// Recovery attempts for one title before the error is left to the user:
+/// one retry of the same source, then other sources.
+const MAX_RECOVERY_ATTEMPTS: u32 = 3;
 
 /// What the policy asks the coordinator to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +56,10 @@ pub enum PolicyAction {
     },
     /// The media played to its end (emitted once per session).
     Ended,
+    /// The media reached playback (once per session): its source works.
+    Started,
+    /// The engine reported an error (once per session): try to recover.
+    Failed,
 }
 
 #[derive(Debug)]
@@ -66,6 +77,7 @@ pub struct SessionPolicy {
     pending: Option<PendingResume>,
     ready: bool,
     ended: bool,
+    failed: bool,
     /// Playing or buffering on the previous snapshot (a pause after it is
     /// written at once).
     active: bool,
@@ -86,6 +98,7 @@ impl SessionPolicy {
             pending: None,
             ready: false,
             ended: false,
+            failed: false,
             active: false,
             last_write_ms: None,
             position_sec: 0.0,
@@ -119,7 +132,14 @@ impl SessionPolicy {
         now_ms: i64,
     ) -> Vec<PolicyAction> {
         let mut actions = Vec::new();
-        if self.ended || matches!(phase, MpvPlaybackPhase::Error) {
+        if matches!(phase, MpvPlaybackPhase::Error) {
+            if !self.failed && !self.ended {
+                self.failed = true;
+                actions.push(PolicyAction::Failed);
+            }
+            return actions;
+        }
+        if self.ended || self.failed {
             return actions;
         }
         let was_active = self.active;
@@ -142,6 +162,7 @@ impl SessionPolicy {
                 return actions;
             }
             self.ready = true;
+            actions.push(PolicyAction::Started);
             if let Some(at) = self.resume_at.take() {
                 self.pending = Some(PendingResume {
                     at,
@@ -223,16 +244,59 @@ pub struct PlaybackEnded {
     pub autoplay: bool,
 }
 
-/// Where `playback:ended` goes (the Tauri event bus; a channel in tests).
-pub type EndedSink = Arc<dyn Fn(PlaybackEnded) + Send + Sync>;
+/// `playback:recover` — the native session failed; the coordinator chose
+/// what to try next (the same item once, then another source of the title).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackRecover {
+    /// The failed session.
+    pub token: String,
+    pub media_kind: String,
+    pub media_id: i64,
+    /// 1-based recovery attempt for this title.
+    pub attempt: u32,
+    /// Another source of the title rather than a retry of the same one.
+    pub other_source: bool,
+}
+
+/// What the coordinator announces to the player.
+#[derive(Debug, Clone)]
+pub enum PlaybackEvent {
+    Ended(Box<PlaybackEnded>),
+    Recover(PlaybackRecover),
+}
+
+/// Where playback events go (the Tauri event bus; a channel in tests).
+pub type EventSink = Arc<dyn Fn(PlaybackEvent) + Send + Sync>;
 
 struct ActiveSession {
     token: String,
     pool: Arc<SqlitePool>,
     media_kind: String,
     media_id: i64,
+    /// A movie's canonical entity and the variant being played.
+    variant: Option<(EntityId, VariantId)>,
+    preferred_lang: Option<String>,
     caption_mode: Option<String>,
     policy: SessionPolicy,
+}
+
+impl ActiveSession {
+    /// Recovery is tracked per title: the entity for a movie, else the item.
+    fn chain_key(&self) -> String {
+        match &self.variant {
+            Some((entity, _)) => entity.as_str().to_string(),
+            None => format!("{}:{}", self.media_kind, self.media_id),
+        }
+    }
+}
+
+/// What recovery has tried for one title since it last played.
+#[derive(Debug, Default)]
+struct RecoveryChain {
+    attempts: u32,
+    retried_same: bool,
+    tried_variants: Vec<VariantId>,
 }
 
 enum Msg {
@@ -262,7 +326,7 @@ pub struct PlaybackCoordinator {
     tx: mpsc::UnboundedSender<Msg>,
     rx: StdMutex<Option<mpsc::UnboundedReceiver<Msg>>>,
     engine: Arc<MpvEngine>,
-    ended_sink: OnceLock<EndedSink>,
+    sink: OnceLock<EventSink>,
     clock: Instant,
 }
 
@@ -273,17 +337,17 @@ impl PlaybackCoordinator {
             tx,
             rx: StdMutex::new(Some(rx)),
             engine,
-            ended_sink: OnceLock::new(),
+            sink: OnceLock::new(),
             clock: Instant::now(),
         })
     }
 
-    /// Start the actor (once) with where `playback:ended` goes.
-    pub fn start(self: &Arc<Self>, sink: EndedSink) {
+    /// Start the actor (once) with where playback events go.
+    pub fn start(self: &Arc<Self>, sink: EventSink) {
         let Some(rx) = self.rx.lock().ok().and_then(|mut rx| rx.take()) else {
             return;
         };
-        let _ = self.ended_sink.set(sink);
+        let _ = self.sink.set(sink);
         let this = self.clone();
         tauri::async_runtime::spawn(async move { this.run(rx).await });
     }
@@ -345,6 +409,7 @@ impl PlaybackCoordinator {
 
     async fn run(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<Msg>) {
         let mut active: Option<ActiveSession> = None;
+        let mut chains: HashMap<String, RecoveryChain> = HashMap::new();
         while let Some(msg) = rx.recv().await {
             match msg {
                 Msg::Poke => {
@@ -354,11 +419,11 @@ impl PlaybackCoordinator {
                     let Ok(state) = self.engine.state(Some(&session.token)) else {
                         continue; // a replaced/closed engine session
                     };
-                    self.apply(session, &state).await;
+                    self.apply(session, &state, &mut chains).await;
                 }
                 Msg::Observe(state, done) => {
                     if let Some(session) = active.as_mut() {
-                        self.apply(session, &state).await;
+                        self.apply(session, &state, &mut chains).await;
                     }
                     let _ = done.send(());
                 }
@@ -402,6 +467,23 @@ impl PlaybackCoordinator {
         media_id: i64,
     ) -> ActiveSession {
         let live = media_kind == "live";
+        let variant = if media_kind == "vod" {
+            let canonical = CanonicalRepository::new(&pool);
+            match (
+                canonical.entity_for_vod(media_id).await,
+                canonical.variant_for_vod(media_id).await,
+            ) {
+                (Ok(Some(entity)), Ok(Some(variant))) => Some((entity, variant)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let preferred_lang = ProfileSettingsRepository::new(&pool)
+            .get()
+            .await
+            .ok()
+            .and_then(|s| s.preferred_audio_lang);
         let resume = if live {
             None
         } else {
@@ -419,6 +501,8 @@ impl PlaybackCoordinator {
             pool,
             media_kind,
             media_id,
+            variant,
+            preferred_lang,
             caption_mode: None,
             policy: SessionPolicy::new(live, resume),
         }
@@ -430,7 +514,12 @@ impl PlaybackCoordinator {
         }
     }
 
-    async fn apply(&self, session: &mut ActiveSession, state: &MpvPlayerState) {
+    async fn apply(
+        &self,
+        session: &mut ActiveSession,
+        state: &MpvPlayerState,
+        chains: &mut HashMap<String, RecoveryChain>,
+    ) {
         if state.token.as_deref() != Some(session.token.as_str()) {
             return; // a snapshot of a replaced session
         }
@@ -449,14 +538,85 @@ impl PlaybackCoordinator {
                 }
                 PolicyAction::Record { .. } => Self::record(session, &action).await,
                 PolicyAction::Ended => self.announce_end(session),
+                PolicyAction::Started => {
+                    Self::record_outcome(session, true).await;
+                    chains.remove(&session.chain_key());
+                }
+                PolicyAction::Failed => {
+                    Self::record_outcome(session, false).await;
+                    let chain = chains.entry(session.chain_key()).or_default();
+                    if let Some(recover) = Self::next_attempt(session, chain).await {
+                        self.emit(PlaybackEvent::Recover(recover));
+                    }
+                }
             }
         }
+    }
+
+    fn emit(&self, event: PlaybackEvent) {
+        if let Some(sink) = self.sink.get() {
+            sink(event);
+        }
+    }
+
+    async fn record_outcome(session: &ActiveSession, success: bool) {
+        let Some((_, variant)) = &session.variant else {
+            return;
+        };
+        if let Err(e) = CanonicalRepository::new(&session.pool)
+            .record_variant_outcome(variant, success)
+            .await
+        {
+            tracing::warn!(error = %e, "could not record variant health");
+        }
+    }
+
+    /// Bounded recovery (bootstrap §25): the same item once (transient
+    /// failures), then the next-ranked untried source of the title, up to
+    /// [`MAX_RECOVERY_ATTEMPTS`]; `None` leaves the error to the user.
+    async fn next_attempt(
+        session: &ActiveSession,
+        chain: &mut RecoveryChain,
+    ) -> Option<PlaybackRecover> {
+        if chain.attempts >= MAX_RECOVERY_ATTEMPTS {
+            return None;
+        }
+        let (media_id, other_source) = if !chain.retried_same {
+            chain.retried_same = true;
+            (session.media_id, false)
+        } else {
+            let (entity, variant) = session.variant.as_ref()?;
+            if !chain.tried_variants.contains(variant) {
+                chain.tried_variants.push(variant.clone());
+            }
+            let next = CanonicalRepository::new(&session.pool)
+                .resolve_playback_with(
+                    entity,
+                    None,
+                    session.preferred_lang.as_deref(),
+                    &chain.tried_variants,
+                )
+                .await
+                .ok()
+                .flatten()?;
+            // The next source's own attempt gets one same-item retry too.
+            chain.retried_same = false;
+            (next.media_id, true)
+        };
+        chain.attempts += 1;
+        Some(PlaybackRecover {
+            token: session.token.clone(),
+            media_kind: session.media_kind.clone(),
+            media_id,
+            attempt: chain.attempts,
+            other_source,
+        })
     }
 
     /// Look up what follows and emit `playback:ended` off the actor, so a
     /// provider fetch for the series can't hold up the queue.
     fn announce_end(&self, session: &ActiveSession) {
-        let Some(sink) = self.ended_sink.get().cloned() else {
+        let Some(sink) = self.sink.get().cloned() else {
             return;
         };
         let (token, pool, kind, id) = (
@@ -476,11 +636,11 @@ impl PlaybackCoordinator {
                 .await
                 .map(|s| s.autoplay_next)
                 .unwrap_or(true);
-            sink(PlaybackEnded {
+            sink(PlaybackEvent::Ended(Box::new(PlaybackEnded {
                 token,
                 next_episode,
                 autoplay,
-            });
+            })));
         });
     }
 
@@ -563,7 +723,7 @@ mod tests {
         assert_eq!(p.finish(300), None, "never ready: nothing to write");
         assert_eq!(
             p.observe(Playing, 0.0, D, 400),
-            vec![PolicyAction::Seek(600.0)]
+            vec![PolicyAction::Started, PolicyAction::Seek(600.0)]
         );
     }
 
@@ -572,7 +732,7 @@ mod tests {
         let mut p = SessionPolicy::new(false, Some((600.0, false)));
         assert_eq!(
             p.observe(Playing, 0.0, D, 1_000),
-            vec![PolicyAction::Seek(600.0)]
+            vec![PolicyAction::Started, PolicyAction::Seek(600.0)]
         );
         // Until the engine reports the seek, the start is never written.
         assert!(p.observe(Playing, 0.4, D, 1_500).is_empty());
@@ -673,14 +833,41 @@ mod tests {
     }
 
     #[test]
-    fn errors_decide_nothing() {
+    fn an_error_asks_for_recovery_once_and_decides_nothing_else() {
         let mut p = SessionPolicy::new(false, None);
-        p.observe(Playing, 10.0, Some(100.0), 0);
-        assert!(p.observe(Error, 0.0, None, 10_000).is_empty());
+        assert!(p
+            .observe(Playing, 10.0, Some(100.0), 0)
+            .contains(&PolicyAction::Started));
+        assert_eq!(
+            p.observe(Error, 0.0, None, 10_000),
+            vec![PolicyAction::Failed]
+        );
+        assert!(p.observe(Error, 0.0, None, 10_100).is_empty(), "once");
+        assert!(
+            p.observe(Playing, 50.0, Some(100.0), 20_000).is_empty(),
+            "no writes after"
+        );
         assert_eq!(
             records(&p.finish(10_000).into_iter().collect::<Vec<_>>()),
             vec![(10.0, false)],
             "the last good position is kept"
+        );
+    }
+
+    #[test]
+    fn a_session_that_ended_or_never_loaded_does_not_ask_for_recovery_twice() {
+        let mut p = SessionPolicy::new(false, None);
+        assert_eq!(
+            p.observe(Error, 0.0, None, 0),
+            vec![PolicyAction::Failed],
+            "open failed"
+        );
+        let mut done = SessionPolicy::new(false, None);
+        done.observe(Playing, 0.0, D, 0);
+        done.observe(Ended, 2400.0, D, 100);
+        assert!(
+            done.observe(Error, 0.0, None, 200).is_empty(),
+            "already finished"
         );
     }
 }

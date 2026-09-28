@@ -3434,7 +3434,7 @@ mod stabilization_tests {
 
     #[tokio::test]
     async fn the_playback_coordinator_owns_resume_progress_completion_and_next() {
-        use crate::playback_coordinator::{PlaybackCoordinator, PlaybackEnded};
+        use crate::playback_coordinator::{PlaybackCoordinator, PlaybackEvent};
         use nova_mpv_player::MpvPlaybackPhase::{Ended, Playing};
 
         let dir = tempfile::tempdir().unwrap();
@@ -3466,9 +3466,11 @@ mod stabilization_tests {
             .await
             .unwrap();
         let coordinator = PlaybackCoordinator::new(nova_mpv_player::MpvEngine::new());
-        let (ended_tx, mut ended_rx) = tokio::sync::mpsc::unbounded_channel::<PlaybackEnded>();
-        coordinator.start(std::sync::Arc::new(move |p| {
-            let _ = ended_tx.send(p);
+        let (ended_tx, mut ended_rx) = tokio::sync::mpsc::unbounded_channel();
+        coordinator.start(std::sync::Arc::new(move |event| {
+            if let PlaybackEvent::Ended(p) = event {
+                let _ = ended_tx.send(*p);
+            }
         }));
 
         // E1 resumes: the coordinator asks for the seek (rejected here: no
@@ -3534,6 +3536,138 @@ mod stabilization_tests {
             .unwrap()
             .unwrap();
         assert!(done.completed);
+    }
+
+    #[tokio::test]
+    async fn a_failing_source_is_retried_then_replaced_and_remembered() {
+        use crate::playback_coordinator::{PlaybackCoordinator, PlaybackEvent, PlaybackRecover};
+        use nova_mpv_player::MpvPlaybackPhase::{Error, Playing};
+
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let sources = SourceRepository::new(&pool);
+        let heat = |raw: &str, quality: &[&str], id: u32| ParsedEntry {
+            clean_title: "Heat".into(),
+            year: Some(1995),
+            quality_hints: quality.iter().map(|q| q.to_string()).collect(),
+            ..xtream_movie(raw, id, "p")
+        };
+        // One film, two providers: the 4K copy ranks first.
+        let a = sources
+            .create("xtream", "a", "http://a/get.php")
+            .await
+            .unwrap()
+            .id;
+        let b = sources
+            .create("xtream", "b", "http://b/get.php")
+            .await
+            .unwrap()
+            .id;
+        import(
+            pool.clone(),
+            a,
+            vec![Ok(heat("Heat (1995) 4K", &["4K"], 1))],
+            ImportMode::Append,
+        )
+        .await;
+        import(
+            pool.clone(),
+            b,
+            vec![Ok(heat("Heat (1995)", &[], 2))],
+            ImportMode::Append,
+        )
+        .await;
+        let canonical = CanonicalRepository::new(&pool);
+        let entity: String = sqlx::query_scalar(
+            "SELECT id FROM canonical_entities WHERE kind = 'movie' AND state = 'active'",
+        )
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        let entity = nova_core::catalog::EntityId::new(entity).unwrap();
+        let first = canonical
+            .resolve_playback(&entity, None)
+            .await
+            .unwrap()
+            .unwrap();
+        let row = |url: &str| {
+            let pool = pool.clone();
+            let url = url.to_string();
+            async move {
+                sqlx::query_scalar::<_, i64>("SELECT id FROM vod_items WHERE stream_url = ?")
+                    .bind(url)
+                    .fetch_one(&*pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        let (row_4k, row_plain) = (
+            row("http://host/movie/user/p/1.mkv").await,
+            row("http://host/movie/user/p/2.mkv").await,
+        );
+        assert_eq!(first.media_id, row_4k, "the 4K copy plays first");
+
+        let coordinator = PlaybackCoordinator::new(nova_mpv_player::MpvEngine::new());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        coordinator.start(std::sync::Arc::new(move |event| {
+            if let PlaybackEvent::Recover(r) = event {
+                let _ = tx.send(r);
+            }
+        }));
+        let fail = |token: &'static str, row: i64| {
+            let coordinator = coordinator.clone();
+            let pool = pool.clone();
+            async move {
+                coordinator
+                    .begin(token.into(), pool, "vod".into(), row)
+                    .await;
+                coordinator.observe(engine_state(token, Error, 0.0)).await;
+            }
+        };
+        let expect = |r: PlaybackRecover, token: &str, row: i64, attempt: u32, other: bool| {
+            assert_eq!(
+                (r.token.as_str(), r.media_id, r.attempt, r.other_source),
+                (token, row, attempt, other)
+            );
+        };
+
+        // A fails: one retry of the same source, then the other source.
+        fail("t1", row_4k).await;
+        expect(rx.try_recv().unwrap(), "t1", row_4k, 1, false);
+        fail("t2", row_4k).await;
+        expect(rx.try_recv().unwrap(), "t2", row_plain, 2, true);
+        // B plays: its success is recorded and the recovery chain resets.
+        coordinator
+            .begin("t3".into(), pool.clone(), "vod".into(), row_plain)
+            .await;
+        coordinator.observe(engine_state("t3", Playing, 1.0)).await;
+        assert!(rx.try_recv().is_err(), "nothing to recover");
+        let health: Vec<(i64, bool)> = sqlx::query_as(
+            "SELECT failures, last_success_at IS NOT NULL FROM variant_health h
+             JOIN stream_variants s ON s.id = h.variant_id
+             ORDER BY s.vod_item_id",
+        )
+        .fetch_all(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(health, [(2, false), (0, true)], "per-source evidence");
+        // The failing 4K copy is demoted until it plays again.
+        let next = canonical
+            .resolve_playback(&entity, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.media_id, row_plain);
+
+        // Bounded: a title that keeps failing stops after three attempts.
+        fail("t4", row_plain).await;
+        expect(rx.try_recv().unwrap(), "t4", row_plain, 1, false);
+        fail("t5", row_plain).await;
+        expect(rx.try_recv().unwrap(), "t5", row_4k, 2, true);
+        fail("t6", row_4k).await;
+        expect(rx.try_recv().unwrap(), "t6", row_4k, 3, false);
+        fail("t7", row_4k).await;
+        assert!(rx.try_recv().is_err(), "the error is left to the user");
     }
 
     #[tokio::test]

@@ -6,7 +6,7 @@
 
 use nova_core::catalog::media::{CanonicalMediaDetail, CanonicalMediaSummary, MoviePlaybackTarget};
 use nova_core::catalog::{EntityId, VariantId};
-use nova_storage::{CanonicalRepository, MovieFilters};
+use nova_storage::{CanonicalRepository, MovieFilters, ProfileSettingsRepository};
 use tauri::State;
 
 use crate::ipc::ApiError;
@@ -125,7 +125,9 @@ pub async fn set_movie_in_watchlist(
 }
 
 /// Rust selects the variant (the requested one when valid for this entity,
-/// otherwise the first available) and returns a transient player locator.
+/// otherwise the best by the variant selector: no recent failure, the
+/// profile's preferred audio language, picture quality) and returns a
+/// transient player locator.
 #[tauri::command]
 pub async fn resolve_movie_playback(
     profile_id: String,
@@ -135,8 +137,18 @@ pub async fn resolve_movie_playback(
 ) -> Result<MoviePlaybackTarget, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     let variant = self::variant_id(variant_id)?;
+    let preferred = ProfileSettingsRepository::new(&pool)
+        .get()
+        .await
+        .ok()
+        .and_then(|s| s.preferred_audio_lang);
     CanonicalRepository::new(&pool)
-        .resolve_playback(&self::entity_id(entity_id)?, variant.as_ref())
+        .resolve_playback_with(
+            &self::entity_id(entity_id)?,
+            variant.as_ref(),
+            preferred.as_deref(),
+            &[],
+        )
         .await?
         .ok_or_else(|| ApiError::NotFound("no playable version is available".into()))
 }

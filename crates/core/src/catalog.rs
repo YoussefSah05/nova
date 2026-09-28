@@ -21,6 +21,7 @@ pub mod publish;
 pub mod reconcile;
 pub mod resolution;
 pub mod snapshot;
+pub mod variants;
 
 pub const MAX_FIELD_BYTES: usize = 16 * 1024;
 pub const MAX_RECORD_BYTES: usize = 128 * 1024;

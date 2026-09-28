@@ -96,14 +96,19 @@ pub fn run() {
 
             // Wire the wakeup callback → "mpv:state" Tauri event. The
             // frontend `PlayerModal` listens for this instead of polling.
-            // The playback coordinator's actor, announcing ends as
-            // `playback:ended` for the player to autoplay.
+            // The playback coordinator's actor, announcing `playback:ended`
+            // (autoplay) and `playback:recover` (bounded failover).
             let ended_app = app.handle().clone();
             app.state::<state::AppState>()
                 .playback
-                .start(Arc::new(move |payload| {
-                    if let Err(e) = ended_app.emit("playback:ended", payload) {
-                        tracing::debug!(error = %e, "failed to emit playback:ended");
+                .start(Arc::new(move |event| {
+                    use playback_coordinator::PlaybackEvent;
+                    let sent = match event {
+                        PlaybackEvent::Ended(p) => ended_app.emit("playback:ended", *p),
+                        PlaybackEvent::Recover(p) => ended_app.emit("playback:recover", p),
+                    };
+                    if let Err(e) = sent {
+                        tracing::debug!(error = %e, "failed to emit a playback event");
                     }
                 }));
             let emitter = AppEventEmitter::new(app.handle().clone(), engine.clone());

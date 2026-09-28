@@ -30,7 +30,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `get_movie` | `{ profileId, entityId }` | `CanonicalMediaDetail` (summary + `variants[]` + entity `resume`) | P07 |
 | `set_movie_favorite` | `{ profileId, entityId, isFavorite }` | `void` | P07 |
 | `set_movie_in_watchlist` | `{ profileId, entityId, inWatchlist }` | `void` | P07 |
-| `resolve_movie_playback` | `{ profileId, entityId, variantId? }` | `MoviePlaybackTarget { entityId, variantId, mediaKind: 'vod', mediaId }` (Rust-selected variant; transient locator) | P07 |
+| `resolve_movie_playback` | `{ profileId, entityId, variantId? }` | `MoviePlaybackTarget { entityId, variantId, mediaKind: 'vod', mediaId }` (Rust-selected variant: explicit choice, no recent failure, preferred audio language, picture quality; transient locator) | P07, M14 |
 | `list_series` | `{ profileId, sourceId, filters? }` | `SeriesSummary[]` | 3 |
 | `count_series` | `{ profileId, sourceId, filters? }` | `number` | 3 |
 | `list_series_categories` | `{ profileId, sourceId }` | `string[]` | 3 |
@@ -240,6 +240,7 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | `epg:refresh:progress` | `{ source_id: number, pct: number }` | 4 |
 | `mpv:state` | `MpvPlayerState` | 5 |
 | `playback:ended` | `{ token, nextEpisode: SeriesEpisode \| null, autoplay }` — native media played to its end; next episode and autoplay decided in Rust | M14 |
+| `playback:recover` | `{ token, mediaKind, mediaId, attempt, otherSource }` — the native session failed; bounded recovery (same item once, then another source of the title, ≤ 3 attempts) decided in Rust; the player reopens it for its own token | M15 |
 | `airplay:status` | `AirPlayStatus` (poll while a route is reachable / engaged) | 5 |
 | `airplay:picker-closed` | `void` (user finished with the native route picker) | 5 |
 
@@ -367,9 +368,14 @@ Player flow:
    (≥ 95 %). The player only reports the caption selection:
    `invoke("playback_caption_mode", { token, captionMode })`. `record_watch_progress` /
    `get_resume_position` remain for the web (hls.js) fallback path.
-5. When the media ends, the backend emits `playback:ended { token, nextEpisode, autoplay }`; the
+5. On a playback error the coordinator records the source's failure (`variant_health`) and may
+   emit `playback:recover { token, mediaKind, mediaId, attempt, otherSource }`: the player reopens
+   that item (same id: reopen; other id: open it) for its own token. Reaching playback records a
+   success. Movies pick their source with the variant selector (explicit choice, no recent failure,
+   preferred audio language, picture quality).
+6. When the media ends, the backend emits `playback:ended { token, nextEpisode, autoplay }`; the
    player opens `nextEpisode` only for its own current token and when `autoplay` is set.
-6. On modal close / unmount: `invoke("mpv_close", { token })` (the final write happens here).
+7. On modal close / unmount: `invoke("mpv_close", { token })` (the final write happens here).
 
 AirPlay (parallel AVPlayer route, macOS):
 

@@ -19,6 +19,7 @@ use nova_core::catalog::media::{
     binding_key, locator_binding_key, CanonicalMediaDetail, CanonicalMediaSummary,
     MoviePlaybackTarget, ResumeState, VariantSummary,
 };
+use nova_core::catalog::variants::{rank_variants, VariantCandidate};
 use nova_core::catalog::{ContentKind, EntityId, VariantId};
 use nova_core::{now_ts, ContentSort};
 use sqlx::{Sqlite, SqlitePool, Transaction};
@@ -29,6 +30,9 @@ mod identity;
 mod series_identity;
 
 pub use identity::{LineageEntry, ResolutionReport, MAX_REDIRECT_HOPS};
+
+/// A failure older than this no longer demotes a variant.
+pub const RECENT_FAILURE_SECS: i64 = 24 * 60 * 60;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CompileStats {
@@ -638,40 +642,136 @@ impl<'a> CanonicalRepository<'a> {
         Self::resume_conn(&mut conn, &entity_id).await
     }
 
-    /// Rust-side variant selection: the requested variant when it belongs to
-    /// the entity and is available, otherwise the first available variant.
-    /// `None` when the entity has no playable variant.
+    /// The variant to play for an entity (a historical ID plays its
+    /// survivor), ranked by [`rank_variants`] with no language preference.
     pub async fn resolve_playback(
         &self,
         entity_id: &EntityId,
         variant_id: Option<&VariantId>,
     ) -> Result<Option<MoviePlaybackTarget>, StorageError> {
+        self.resolve_playback_with(entity_id, variant_id, None, &[])
+            .await
+    }
+
+    /// The variant to play: the requested one if it belongs to the entity,
+    /// else the best by the variant selector (recent failures demoted,
+    /// `preferred_lang` first, then quality). `exclude` skips variants a
+    /// recovery attempt already tried.
+    pub async fn resolve_playback_with(
+        &self,
+        entity_id: &EntityId,
+        variant_id: Option<&VariantId>,
+        preferred_lang: Option<&str>,
+        exclude: &[VariantId],
+    ) -> Result<Option<MoviePlaybackTarget>, StorageError> {
         let Some(entity_id) = self.canonical_entity_id(entity_id).await? else {
             return Ok(None);
         };
-        let entity_id = &entity_id;
+        let candidates = self.playback_candidates(&entity_id).await?;
+        let ranked = rank_variants(
+            &candidates,
+            variant_id.map(VariantId::as_str),
+            preferred_lang,
+        );
+        let Some(best) = ranked
+            .into_iter()
+            .find(|c| !exclude.iter().any(|e| e.as_str() == c.variant_id))
+        else {
+            return Ok(None);
+        };
+        Ok(Some(MoviePlaybackTarget {
+            entity_id: entity_id.clone(),
+            variant_id: parse_variant(best.variant_id.clone())?,
+            media_kind: "vod".into(),
+            media_id: best.row_id,
+        }))
+    }
+
+    /// The available variants of an entity with their selection evidence.
+    /// A variant counts as recently failed when its last failure is within
+    /// [`RECENT_FAILURE_SECS`] and after its last success.
+    pub async fn playback_candidates(
+        &self,
+        entity_id: &EntityId,
+    ) -> Result<Vec<VariantCandidate>, StorageError> {
         let id = entity_id.as_str();
-        let requested = variant_id.map(VariantId::as_str);
-        let row = sqlx::query!(
-            r#"SELECT s.id as "variant_id!: String", s.vod_item_id as "vod_item_id!: i64"
+        let since = now_ts() - RECENT_FAILURE_SECS;
+        let rows = sqlx::query!(
+            r#"SELECT s.id as "variant_id!: String",
+                      s.vod_item_id as "row_id!: i64",
+                      v.name as "raw_title!: String",
+                      v.quality_hints, v.language_hints,
+                      (h.last_failure_at IS NOT NULL AND h.last_failure_at >= ?
+                       AND (h.last_success_at IS NULL OR h.last_failure_at > h.last_success_at))
+                          as "recently_failed!: bool"
                FROM stream_variants s
-               WHERE s.entity_id = ? AND s.vod_item_id IS NOT NULL
-               ORDER BY (s.id = ?) DESC, s.vod_item_id ASC
-               LIMIT 1"#,
+               JOIN vod_items v ON v.id = s.vod_item_id
+               LEFT JOIN variant_health h ON h.variant_id = s.id
+               WHERE s.entity_id = ?"#,
+            since,
             id,
-            requested,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        let split = |csv: Option<String>| -> Vec<String> {
+            csv.map(|c| c.split(',').map(str::to_string).collect())
+                .unwrap_or_default()
+        };
+        Ok(rows
+            .into_iter()
+            .map(|r| VariantCandidate {
+                variant_id: r.variant_id,
+                row_id: r.row_id,
+                raw_title: r.raw_title,
+                quality_hints: split(r.quality_hints),
+                language_hints: split(r.language_hints),
+                recently_failed: r.recently_failed,
+            })
+            .collect())
+    }
+
+    /// Record how a variant played (by the playback coordinator).
+    pub async fn record_variant_outcome(
+        &self,
+        variant_id: &VariantId,
+        success: bool,
+    ) -> Result<(), StorageError> {
+        let id = variant_id.as_str();
+        let now = now_ts();
+        let (failure, failed_at, played_at) = if success {
+            (0_i64, None, Some(now))
+        } else {
+            (1_i64, Some(now), None)
+        };
+        sqlx::query!(
+            r#"INSERT INTO variant_health (variant_id, failures, last_failure_at, last_success_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(variant_id) DO UPDATE SET
+                   failures = variant_health.failures + excluded.failures,
+                   last_failure_at = COALESCE(excluded.last_failure_at, variant_health.last_failure_at),
+                   last_success_at = COALESCE(excluded.last_success_at, variant_health.last_success_at)"#,
+            id,
+            failure,
+            failed_at,
+            played_at,
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The variant a legacy movie row currently plays as.
+    pub async fn variant_for_vod(
+        &self,
+        vod_item_id: i64,
+    ) -> Result<Option<VariantId>, StorageError> {
+        let id = sqlx::query_scalar!(
+            r#"SELECT id as "id!: String" FROM stream_variants WHERE vod_item_id = ?"#,
+            vod_item_id,
         )
         .fetch_optional(self.pool)
         .await?;
-        row.map(|r| {
-            Ok(MoviePlaybackTarget {
-                entity_id: entity_id.clone(),
-                variant_id: parse_variant(r.variant_id)?,
-                media_kind: "vod".into(),
-                media_id: r.vod_item_id,
-            })
-        })
-        .transpose()
+        id.map(parse_variant).transpose()
     }
 
     /// The entity of a legacy movie row: through its bound variant, or the
