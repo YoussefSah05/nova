@@ -8,6 +8,7 @@ use crate::airplay::AirPlayEngine;
 use crate::caption_session::CaptionSessionManager;
 use crate::desktop_jobs::DesktopJobs;
 use crate::model_runtime::ModelRuntimeManager;
+use crate::playback_coordinator::PlaybackCoordinator;
 use crate::resource_policy::PlaybackActivityGuard;
 
 pub struct AppState {
@@ -36,6 +37,9 @@ pub struct AppState {
     pub caption_sessions: Arc<CaptionSessionManager>,
     /// Owns lazily loaded AI backends and prevents unload during active use.
     pub model_runtime: Arc<ModelRuntimeManager>,
+    /// Playback policy of the native session: resume, progress, completion,
+    /// next episode (Rust-owned; React renders).
+    pub playback: Arc<PlaybackCoordinator>,
     /// Native mpv has one replaceable session; this guard tracks its lifetime.
     pub mpv_activity: Mutex<Option<PlaybackActivityGuard>>,
     /// Web/HLS and AirPlay sessions are released by their proxy token.
@@ -47,6 +51,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(pool: SqlitePool, hls_proxy_port: u16, hls_sessions: SessionRegistry) -> Self {
         let pool = Arc::new(pool);
+        let mpv_engine = MpvEngine::new();
         Self {
             pool: pool.clone(),
             active_profile_id: Arc::new(RwLock::new(None)),
@@ -55,7 +60,8 @@ impl AppState {
             profile_open: Mutex::new(()),
             hls_proxy_port,
             hls_sessions,
-            mpv_engine: MpvEngine::new(),
+            playback: Arc::new(PlaybackCoordinator::new(mpv_engine.clone())),
+            mpv_engine,
             airplay: AirPlayEngine::new(),
             caption_sessions: Arc::new(CaptionSessionManager::new()),
             model_runtime: Arc::new(ModelRuntimeManager::new(pool)),

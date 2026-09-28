@@ -41,7 +41,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { ChannelGroup, SeriesEpisode } from "@/types";
+import type { ChannelGroup } from "@/types";
 import { fetchChannelsInGroup, type BrowseItem } from "@/features/browse/queries";
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
 
@@ -51,6 +51,7 @@ import { TranscriptPanel } from "./TranscriptPanel";
 import { CaptionStyleButton } from "./CaptionStylePanel";
 import { CinemaEpisodeBrowser } from "./CinemaEpisodeBrowser";
 import { episodeToMedia } from "./episodeMedia";
+import { usePlaybackEnded } from "./usePlaybackEnded";
 import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
 import { useCaptionStyle } from "./useCaptionStyle";
 import { useAirPlay } from "./useAirPlay";
@@ -313,48 +314,14 @@ export function PlayerModal({
   // -- per-profile settings + autoplay-next-episode -----------------------
   const profileSettings = useProfileSettings(profileId);
 
-  // The next episode to roll into when this one ends (autoplay). Resolved from
-  // the sibling list, ordered by (season, episode).
-  const [nextEpisode, setNextEpisode] = useState<PlayMedia | null>(null);
-  useEffect(() => {
-    if (media.kind !== "episode") {
-      setNextEpisode(null);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const eps = await invoke<SeriesEpisode[]>("list_player_episodes", {
-          profileId,
-          episodeId: media.id,
-        });
-        if (cancelled) return;
-        const sorted = [...eps].sort((a, b) => a.season - b.season || a.episode - b.episode);
-        const idx = sorted.findIndex((e) => e.id === media.id);
-        const next = idx >= 0 && idx + 1 < sorted.length ? sorted[idx + 1] : null;
-        setNextEpisode(next ? episodeToMedia(next, media.posterUrl, media.title) : null);
-      } catch {
-        if (!cancelled) setNextEpisode(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [media.kind, media.id, profileId, media.posterUrl, media.title]);
-
-  // Read by the native-state handler (which has empty deps) without re-binding.
-  const autoplayRef = useRef<{ enabled: boolean; next: PlayMedia | null }>({
-    enabled: true,
-    next: null,
-  });
-  autoplayRef.current = { enabled: profileSettings.settings.autoplayNext, next: nextEpisode };
+  // Autoplay: the Rust playback coordinator decides the media ended, looks up
+  // the next episode and reads the profile's autoplay setting; the player only
+  // opens what it is handed, for its own session.
   const onPlayMediaRef = useRef(onPlayMedia);
   onPlayMediaRef.current = onPlayMedia;
-  // Fire autoplay at most once per playthrough.
-  const endedHandledRef = useRef(false);
-  useEffect(() => {
-    endedHandledRef.current = false;
-  }, [media.kind, media.id]);
+  usePlaybackEnded(USE_MPV_ENGINE, nativeTokenRef, (next) =>
+    onPlayMediaRef.current?.(episodeToMedia(next, media.posterUrl, media.title))
+  );
 
   // Apply the profile's default caption mode once, when the player opens (not on
   // every episode switch, so a mid-session manual toggle isn't overridden).
@@ -513,15 +480,6 @@ export function PlayerModal({
     } else {
       setLoadingPhase("ready");
       setLoadingProgress(100);
-    }
-
-    // Autoplay the next episode when this one ends.
-    if (state.phase === "ended" && !endedHandledRef.current) {
-      const { enabled, next } = autoplayRef.current;
-      if (enabled && next) {
-        endedHandledRef.current = true;
-        onPlayMediaRef.current?.(next);
-      }
     }
   }, []);
 
@@ -887,32 +845,10 @@ export function PlayerModal({
     return () => window.clearInterval(interval);
   }, [buffering, error, loadingPhase, ready]);
 
-  // -- 5. Resume position (VOD/episode only) ------------------------------
+  // -- 5. Resume position (web fallback path only) ------------------------
+  // The native session resumes in Rust (playback coordinator).
   useEffect(() => {
-    if (!ready || isLive) return;
-    if (USE_MPV_ENGINE) {
-      if (!nativeToken) return;
-      let cancelled = false;
-      void (async () => {
-        try {
-          const info = await invoke<ResumeInfo | null>("get_resume_position", {
-            profileId,
-            mediaKind: media.kind,
-            mediaId: media.id,
-          });
-          if (cancelled || !info || info.completed || info.positionSec <= 5) return;
-          await invoke("mpv_seek_absolute", {
-            token: nativeToken,
-            positionSec: info.positionSec,
-          });
-        } catch {
-          /* resume is best-effort */
-        }
-      })();
-      return () => {
-        cancelled = true;
-      };
-    }
+    if (!ready || isLive || USE_MPV_ENGINE) return;
 
     const video = videoRef.current;
     if (!video) return;
@@ -936,39 +872,20 @@ export function PlayerModal({
     return () => {
       cancelled = true;
     };
-  }, [ready, isLive, nativeToken, profileId, media.kind, media.id]);
+  }, [ready, isLive, profileId, media.kind, media.id]);
 
-  // -- 6. Watch-history writes (every 5s + on pause + on close) -----------
+  // -- 6. Watch-history writes (web fallback path only) --------------------
+  // The native session's progress, completion and final write are owned by
+  // the Rust playback coordinator; the player reports the caption selection.
   useEffect(() => {
-    if (USE_MPV_ENGINE) {
-      if (!nativeToken || !ready) return;
-      const tick = () => {
-        const latest = latestPlaybackRef.current;
-        if (!Number.isFinite(latest.currentTime)) return;
-        const dur =
-          Number.isFinite(latest.duration) && latest.duration > 0 ? latest.duration : null;
-        const completed = dur !== null && latest.currentTime / dur >= COMPLETED_THRESHOLD;
-        void invoke("record_watch_progress", {
-          profileId,
-          mediaKind: media.kind,
-          mediaId: media.id,
-          positionSec: latest.currentTime,
-          durationSec: dur,
-          completed,
-          captionMode: captionModeRef.current,
-        }).catch(() => {
-          /* progress writes are best-effort */
-        });
-      };
+    if (!USE_MPV_ENGINE || !nativeToken) return;
+    void invoke("playback_caption_mode", { token: nativeToken, captionMode }).catch(
+      () => undefined
+    );
+  }, [nativeToken, captionMode]);
 
-      const interval = window.setInterval(() => {
-        if (latestPlaybackRef.current.playing) tick();
-      }, PROGRESS_INTERVAL_MS);
-      return () => {
-        window.clearInterval(interval);
-        tick();
-      };
-    }
+  useEffect(() => {
+    if (USE_MPV_ENGINE) return;
 
     const video = videoRef.current;
     if (!video || !ready) return;

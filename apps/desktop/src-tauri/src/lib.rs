@@ -12,6 +12,7 @@ pub mod model_runtime;
 pub mod mpv_layer;
 #[cfg(target_os = "macos")]
 pub mod native_player_view;
+pub mod playback_coordinator;
 pub mod resource_policy;
 pub mod state;
 
@@ -178,6 +179,7 @@ pub fn run() {
             commands::playback::set_player_surface_active,
             commands::playback::record_watch_progress,
             commands::playback::get_resume_position,
+            commands::playback::playback_caption_mode,
             // Phase 6 — Transcription (VOD), streaming caption sessions
             commands::transcription::get_model_status,
             commands::models::list_internal_models,
@@ -268,6 +270,10 @@ impl EventEmitter for AppEventEmitter {
         tauri::async_runtime::spawn(async move {
             match engine.state(None) {
                 Ok(state) => {
+                    // Rust-owned playback policy (resume, progress, end) sees
+                    // every snapshot first; React only renders it.
+                    let coordinator = app.state::<state::AppState>().playback.clone();
+                    coordinator.observe(&app, &state).await;
                     if let Err(e) = app.emit("mpv:state", state) {
                         tracing::debug!(error = %e, "failed to emit mpv:state");
                     }

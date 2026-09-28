@@ -238,6 +238,7 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | `jobs:queue:changed` | `{ jobs: JobSummary[] }` | 2 |
 | `epg:refresh:progress` | `{ source_id: number, pct: number }` | 4 |
 | `mpv:state` | `MpvPlayerState` | 5 |
+| `playback:ended` | `{ token, nextEpisode: SeriesEpisode \| null, autoplay }` — native media played to its end; next episode and autoplay decided in Rust | M14 |
 | `airplay:status` | `AirPlayStatus` (poll while a route is reachable / engaged) | 5 |
 | `airplay:picker-closed` | `void` (user finished with the native route picker) | 5 |
 
@@ -357,8 +358,15 @@ Player flow:
 3. Use `mpv_*` control commands for play/pause, seeking, volume, mute, live edge, audio/video/
    subtitle track selection, playback speed, and frame-step. `MpvPlayerState.tracks` drives the
    audio-track and quality (video-track) menus; menus show only when ≥2 tracks of that kind exist.
-4. Every 5s while playing, `invoke("record_watch_progress", { ..., captionMode: "off" })`.
-5. On modal close / unmount: `invoke("mpv_close", { token })`.
+4. Playback policy is Rust-owned (`PlaybackCoordinator`): from the engine's own snapshots it
+   seeks to the resume point once playable, persists progress every 5 s while playing, on pause,
+   at the end, on close and before another item replaces the session, and decides completion
+   (≥ 95 %). The player only reports the caption selection:
+   `invoke("playback_caption_mode", { token, captionMode })`. `record_watch_progress` /
+   `get_resume_position` remain for the web (hls.js) fallback path.
+5. When the media ends, the backend emits `playback:ended { token, nextEpisode, autoplay }`; the
+   player opens `nextEpisode` only for its own current token and when `autoplay` is set.
+6. On modal close / unmount: `invoke("mpv_close", { token })` (the final write happens here).
 
 AirPlay (parallel AVPlayer route, macOS):
 

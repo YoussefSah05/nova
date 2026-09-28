@@ -44,6 +44,9 @@ pub async fn mpv_open_stream(
         .resolve_stream_url(&media_kind, media_id)
         .await?;
 
+    // The engine replaces the loaded file in place: persist where the
+    // previous item stopped before its session is replaced.
+    state.playback.finish(None).await;
     let opened = state
         .mpv_engine
         .open(MpvOpenOptions {
@@ -53,11 +56,17 @@ pub async fn mpv_open_stream(
         })
         .map_err(|e| ApiError::Internal(format!("native player failed: {e}")))?;
     *state.mpv_activity.lock().await = Some(state.model_runtime.playback_activity());
+    state
+        .playback
+        .begin(opened.token.clone(), pool, media_kind, media_id)
+        .await;
     Ok(opened)
 }
 
 #[tauri::command]
 pub async fn mpv_close(token: String, state: State<'_, AppState>) -> Result<(), ApiError> {
+    // Final progress write while the position is still known.
+    state.playback.finish(Some(&token)).await;
     let closed = state.mpv_engine.close(&token);
     // A stale token belongs to a replaced session: the live session keeps its
     // playback guard. Any other outcome ends native playback for resource
@@ -66,6 +75,18 @@ pub async fn mpv_close(token: String, state: State<'_, AppState>) -> Result<(), 
         state.mpv_activity.lock().await.take();
     }
     closed.map_err(|e| ApiError::Internal(format!("native player close failed: {e}")))
+}
+
+/// The user's caption selection for the native session, persisted with its
+/// progress by the playback coordinator.
+#[tauri::command]
+pub async fn playback_caption_mode(
+    token: String,
+    caption_mode: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state.playback.set_caption_mode(&token, caption_mode).await;
+    Ok(())
 }
 
 #[tauri::command]

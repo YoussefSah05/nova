@@ -3409,6 +3409,115 @@ mod stabilization_tests {
         }
     }
 
+    fn engine_state(
+        token: &str,
+        phase: nova_mpv_player::MpvPlaybackPhase,
+        position_sec: f64,
+    ) -> nova_mpv_player::MpvPlayerState {
+        nova_mpv_player::MpvPlayerState {
+            token: Some(token.into()),
+            engine: "libmpv".into(),
+            phase,
+            position_sec,
+            duration_sec: Some(2400.0),
+            volume: 100.0,
+            muted: false,
+            seekable: true,
+            speed: 1.0,
+            audio_track_id: None,
+            sub_track_id: None,
+            video_track_id: None,
+            tracks: Vec::new(),
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_playback_coordinator_owns_resume_progress_completion_and_next() {
+        use crate::playback_coordinator::{PlaybackCoordinator, PlaybackEnded};
+        use nova_mpv_player::MpvPlaybackPhase::{Ended, Playing};
+
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("m3u", "test", "https://example.invalid/list.m3u")
+            .await
+            .unwrap()
+            .id;
+        let catalog = (1..=3)
+            .map(|n| {
+                Ok(episode_entry(
+                    "Show",
+                    1,
+                    n,
+                    &format!("https://example.invalid/s/{n}.mkv"),
+                ))
+            })
+            .collect();
+        import(pool.clone(), id, catalog, ImportMode::Append).await;
+        let ep = |n: u32| {
+            let pool = pool.clone();
+            async move { episode_id(&pool, &format!("https://example.invalid/s/{n}.mkv")).await }
+        };
+        let (e1, e2, e3) = (ep(1).await, ep(2).await, ep(3).await);
+        let history = WatchHistoryRepository::new(&pool);
+        history
+            .record_progress("episode", e1, 600.0, Some(2400.0), false, None)
+            .await
+            .unwrap();
+        let coordinator = PlaybackCoordinator::new(nova_mpv_player::MpvEngine::new());
+        let ignore = |_: PlaybackEnded| panic!("not ended");
+
+        // E1 resumes: the coordinator asks for the seek and, while it settles,
+        // never writes the stale start position — not even when closed.
+        coordinator
+            .begin("tok-1".into(), pool.clone(), "episode".into(), e1)
+            .await;
+        coordinator
+            .observe_with(&engine_state("tok-1", Playing, 0.0), ignore)
+            .await;
+        coordinator.finish(Some("tok-1")).await;
+        let e1_resume = history
+            .resume_position("episode", e1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(e1_resume.position_sec, 600.0, "resume point kept");
+
+        // E2 plays: progress is written by Rust, snapshots of another token
+        // are ignored, and the end marks it finished and names E3.
+        coordinator
+            .begin("tok-2".into(), pool.clone(), "episode".into(), e2)
+            .await;
+        coordinator
+            .observe_with(&engine_state("tok-2", Playing, 42.0), ignore)
+            .await;
+        let written = history
+            .resume_position("episode", e2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((written.position_sec, written.completed), (42.0, false));
+        coordinator
+            .observe_with(&engine_state("stale", Ended, 2400.0), ignore)
+            .await;
+        coordinator.finish(Some("stale")).await;
+        let mut ended = None;
+        coordinator
+            .observe_with(&engine_state("tok-2", Ended, 2400.0), |p| ended = Some(p))
+            .await;
+        let ended = ended.expect("playback:ended emitted");
+        assert_eq!(ended.token, "tok-2");
+        assert!(ended.autoplay, "the profile default");
+        assert_eq!(ended.next_episode.map(|e| e.id), Some(e3));
+        let done = history
+            .resume_position("episode", e2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(done.completed);
+    }
+
     #[tokio::test]
     async fn deleting_a_source_keeps_series_entities() {
         let dir = tempfile::tempdir().unwrap();
