@@ -393,6 +393,43 @@ impl TmdbClient {
             .await
     }
 
+    /// `/{movie,tv}/{id}/recommendations` (first page).
+    pub async fn recommendations(
+        &self,
+        kind: MediaKind,
+        id: i64,
+    ) -> Result<Option<String>, EnrichError> {
+        let path = match kind {
+            MediaKind::Movie => format!("/movie/{id}/recommendations"),
+            MediaKind::Tv => format!("/tv/{id}/recommendations"),
+        };
+        self.get_optional(&path, &[], &self.language).await
+    }
+
+    /// `/{movie,tv}/{id}/similar` (first page).
+    pub async fn similar(&self, kind: MediaKind, id: i64) -> Result<Option<String>, EnrichError> {
+        let path = match kind {
+            MediaKind::Movie => format!("/movie/{id}/similar"),
+            MediaKind::Tv => format!("/tv/{id}/similar"),
+        };
+        self.get_optional(&path, &[], &self.language).await
+    }
+
+    /// `/collection/{id}`: the films of a collection.
+    pub async fn collection(&self, id: i64) -> Result<Option<String>, EnrichError> {
+        self.get_optional(&format!("/collection/{id}"), &[], &self.language)
+            .await
+    }
+
+    /// `/trending/{movie,tv}/week` (first two pages merged by the caller).
+    pub async fn trending(&self, kind: MediaKind, page: u32) -> Result<String, EnrichError> {
+        let path = match kind {
+            MediaKind::Movie => "/trending/movie/week",
+            MediaKind::Tv => "/trending/tv/week",
+        };
+        self.get(path, &[("page", page.to_string())]).await
+    }
+
     /// `/search/movie`.
     pub async fn search_movie(
         &self,

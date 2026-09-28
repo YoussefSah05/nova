@@ -17,12 +17,15 @@ import { EpisodeList } from "./detail/EpisodeList";
 import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
 import {
+  useRelatedTitles,
   useSeasonEpisodes,
   useSeriesEpisodes,
   useSeriesResume,
   useTitleFacts,
 } from "./detail/data";
 import { episodeViewLabel, metaLine, seriesPrimaryAction } from "./detail/meta";
+import { ItemRail } from "./ItemRail";
+import { seriesToItem, type BrowseItem } from "./queries";
 
 export interface PlayableEpisode {
   id: number;
@@ -38,6 +41,10 @@ interface SeriesDetailProps {
   onToggleFavorite: (next: boolean) => Promise<void> | void;
   onToggleWatchlist: (next: boolean) => Promise<void> | void;
   onPlayEpisode: (episode: PlayableEpisode) => void;
+  /// Open another title and toggle its flags (from "More like this").
+  onOpenTitle: (item: BrowseItem) => void;
+  onToggleItemFavorite: (item: BrowseItem, next: boolean) => void;
+  onToggleItemWatchlist: (item: BrowseItem, next: boolean) => void;
 }
 
 function formatDate(date: string): string {
@@ -54,6 +61,9 @@ export function SeriesDetail({
   onToggleFavorite,
   onToggleWatchlist,
   onPlayEpisode,
+  onOpenTitle,
+  onToggleItemFavorite,
+  onToggleItemWatchlist,
 }: SeriesDetailProps) {
   const subject: TitleArtSubject = useMemo(
     () => ({ kind: "series", sourceId: series.sourceId, seriesTitle: series.seriesTitle }),
@@ -63,6 +73,7 @@ export function SeriesDetail({
   const { data: facts } = useTitleFacts(profileId, subject);
   const all = useSeriesEpisodes(profileId, series);
   const { data: resume } = useSeriesResume(profileId, series);
+  const { data: related } = useRelatedTitles(profileId, series.sourceId, subject);
 
   // Seasons the provider actually has, regular seasons first, specials last.
   const seasons = useMemo(() => {
@@ -187,6 +198,14 @@ export function SeriesDetail({
           </>
         )}
       </section>
+
+      <ItemRail
+        title="More like this"
+        items={(related?.series ?? []).map(seriesToItem)}
+        onActivate={onOpenTitle}
+        onToggleFavorite={onToggleItemFavorite}
+        onToggleWatchlist={onToggleItemWatchlist}
+      />
     </TitleHero>
   );
 }

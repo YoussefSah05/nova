@@ -4,7 +4,10 @@
 
 use sqlx::SqlitePool;
 
+use nova_core::catalog::EntityId;
+
 use crate::error::StorageError;
+use crate::repositories::canonical::parse_entity;
 use crate::repositories::title_art::TitleArtMedia;
 
 /// A stored JSON payload with what decides whether it is still current.
@@ -123,5 +126,56 @@ impl<'a> TitleFactsRepository<'a> {
         .execute(self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Library movies confidently matched to any of `tmdb_ids`:
+    /// `(tmdb_id, entity)` pairs (availability in a source is checked by the
+    /// caller when it loads the cards).
+    pub async fn library_movies(
+        &self,
+        tmdb_ids: &[i64],
+    ) -> Result<Vec<(i64, EntityId)>, StorageError> {
+        if tmdb_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let json = serde_json::to_string(tmdb_ids)?;
+        let rows = sqlx::query!(
+            r#"SELECT m.external_id as "tmdb!: String", m.entity_id as "entity_id!: String"
+               FROM entity_external_matches m
+               JOIN canonical_entities e ON e.id = m.entity_id AND e.state = 'active'
+               WHERE m.namespace = 'tmdb:movie' AND m.status = 'matched'
+                 AND m.external_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))"#,
+            json
+        )
+        .fetch_all(self.pool)
+        .await?;
+        rows.into_iter()
+            .filter_map(|r| r.tmdb.parse::<i64>().ok().map(|id| (id, r.entity_id)))
+            .map(|(id, entity)| Ok((id, parse_entity(entity)?)))
+            .collect()
+    }
+
+    /// Series of a source confidently matched to any of `tmdb_ids`:
+    /// `(tmdb_id, series_title)` pairs.
+    pub async fn library_series(
+        &self,
+        source_id: i64,
+        tmdb_ids: &[i64],
+    ) -> Result<Vec<(i64, String)>, StorageError> {
+        if tmdb_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let json = serde_json::to_string(tmdb_ids)?;
+        let rows = sqlx::query!(
+            r#"SELECT tmdb_id as "tmdb!: i64", series_title as "series_title!: String"
+               FROM series_meta
+               WHERE source_id = ? AND tmdb_status = 'matched'
+                 AND tmdb_id IN (SELECT value FROM json_each(?))"#,
+            source_id,
+            json
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| (r.tmdb, r.series_title)).collect())
     }
 }

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.external_id as \"tmdb!: String\", m.entity_id as \"entity_id!: String\"\n               FROM entity_external_matches m\n               JOIN canonical_entities e ON e.id = m.entity_id AND e.state = 'active'\n               WHERE m.namespace = 'tmdb:movie' AND m.status = 'matched'\n                 AND m.external_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))",
+  "describe": {
+    "columns": [
+      {
+        "name": "tmdb!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "entity_id!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "0f7eb5de12989219589e5ad46340e09321dd47fe7987aa1ce812e7ee3f3399a7"
+}

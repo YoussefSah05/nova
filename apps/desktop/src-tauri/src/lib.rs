@@ -209,6 +209,8 @@ pub fn run() {
             commands::title_facts::get_season_episodes,
             commands::title_facts::get_series_resume,
             commands::title_facts::open_trailer,
+            commands::discovery::get_related_titles,
+            commands::discovery::get_trending_in_library,
             commands::channel_logos::match_channel_logos,
             commands::channel_logos::clear_channel_logo_matches,
             commands::channel_logos::get_logo_directory_status,

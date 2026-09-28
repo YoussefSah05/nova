@@ -21,14 +21,15 @@ import {
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
 import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
-import { fetchChannelsInGroup, type BrowseItem } from "./queries";
+import { fetchChannelsInGroup, movieToItem, type BrowseItem } from "./queries";
+import { ItemRail } from "./ItemRail";
 import type { CanonicalMediaDetail } from "@/types";
 import { titleArtSubject, useTitleArt } from "./titleArt";
 import { ChannelTile } from "./ChannelTile";
 import { CastStrip } from "./detail/CastStrip";
 import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
-import { useTitleFacts } from "./detail/data";
+import { useRelatedTitles, useTitleFacts } from "./detail/data";
 import { metaLine } from "./detail/meta";
 
 /// Preferred audio language choices. `null` = keep the stream's original track.
@@ -51,6 +52,8 @@ interface ContentDetailProps {
   onPlay: (item: BrowseItem) => void;
   onToggleFavorite: (item: BrowseItem, next: boolean) => void;
   onToggleWatchlist: (item: BrowseItem, next: boolean) => void;
+  /// Open another title (from "More like this" or the collection).
+  onOpenTitle: (item: BrowseItem) => void;
 }
 
 /// Live brand bundle: a backdrop-less header + a grid of the bundle's channels.
@@ -152,6 +155,7 @@ export function ContentDetail({
   onPlay,
   onToggleFavorite,
   onToggleWatchlist,
+  onOpenTitle,
 }: ContentDetailProps) {
   const { settings, setSettings } = useProfileSettings(profileId);
   // Canonical movie detail (entity-owned resume state); the card's summary
@@ -165,10 +169,9 @@ export function ContentDetail({
   });
   const movie = detail ?? item.movie;
   const art = useTitleArt(profileId, item);
-  const { data: facts } = useTitleFacts(
-    profileId,
-    item.kind === "movie" ? titleArtSubject(item) : null
-  );
+  const movieSubject = item.kind === "movie" ? titleArtSubject(item) : null;
+  const { data: facts } = useTitleFacts(profileId, movieSubject);
+  const { data: related } = useRelatedTitles(profileId, sourceId, movieSubject);
 
   // Live brand bundle → channel grid; movies → the overview hero below.
   if (item.kind === "live") {
@@ -279,6 +282,20 @@ export function ContentDetail({
         cast={facts?.cast ?? []}
         people={facts?.directors ?? []}
         peopleLabel="Directed by"
+      />
+      <ItemRail
+        title={related?.collectionName ?? "Collection"}
+        items={(related?.collection ?? []).map(movieToItem)}
+        onActivate={onOpenTitle}
+        onToggleFavorite={onToggleFavorite}
+        onToggleWatchlist={onToggleWatchlist}
+      />
+      <ItemRail
+        title="More like this"
+        items={(related?.movies ?? []).map(movieToItem)}
+        onActivate={onOpenTitle}
+        onToggleFavorite={onToggleFavorite}
+        onToggleWatchlist={onToggleWatchlist}
       />
     </TitleHero>
   );

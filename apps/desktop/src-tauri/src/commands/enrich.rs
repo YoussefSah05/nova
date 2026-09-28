@@ -400,6 +400,11 @@ pub(crate) enum TmdbRequest {
     Facts(TmdbMediaKind, i64),
     /// `/tv/{id}/season/{n}`.
     Season(i64, i64),
+    Recommendations(TmdbMediaKind, i64),
+    Similar(TmdbMediaKind, i64),
+    Collection(i64),
+    /// `/trending/{movie,tv}/week`, page n.
+    Trending(TmdbMediaKind, u32),
     SearchMovie {
         query: String,
         year: Option<i32>,
@@ -430,6 +435,12 @@ impl TmdbRequest {
             Self::Facts(TmdbMediaKind::Movie, id) => format!("movie-facts-v1::{id}"),
             Self::Facts(TmdbMediaKind::Tv, id) => format!("tv-facts-v1::{id}"),
             Self::Season(id, n) => format!("tv-season-v1::{id}::{n}"),
+            Self::Recommendations(kind, id) => {
+                format!("{}-recommendations-v1::{id}", kind_key(*kind))
+            }
+            Self::Similar(kind, id) => format!("{}-similar-v1::{id}", kind_key(*kind)),
+            Self::Collection(id) => format!("collection-v1::{id}"),
+            Self::Trending(kind, page) => format!("{}-trending-week-v1::{page}", kind_key(*kind)),
             Self::SearchMovie { query, year } => match year {
                 Some(y) => format!("movie::{}::{y}", query.to_lowercase()),
                 None => format!("movie::{}::noyear", query.to_lowercase()),
@@ -437,6 +448,13 @@ impl TmdbRequest {
             Self::SearchTv(q) => format!("tv::{}", q.to_lowercase()),
             Self::SearchMulti(q) => format!("multi::{}", q.to_lowercase()),
         }
+    }
+}
+
+fn kind_key(kind: TmdbMediaKind) -> &'static str {
+    match kind {
+        TmdbMediaKind::Movie => "movie",
+        TmdbMediaKind::Tv => "tv",
     }
 }
 
@@ -502,6 +520,10 @@ impl CachedTmdb<'_> {
             TmdbRequest::Facts(TmdbMediaKind::Movie, id) => self.client.movie_facts(*id).await,
             TmdbRequest::Facts(TmdbMediaKind::Tv, id) => self.client.tv_facts(*id).await,
             TmdbRequest::Season(id, n) => self.client.tv_season(*id, *n).await,
+            TmdbRequest::Recommendations(kind, id) => self.client.recommendations(*kind, *id).await,
+            TmdbRequest::Similar(kind, id) => self.client.similar(*kind, *id).await,
+            TmdbRequest::Collection(id) => self.client.collection(*id).await,
+            TmdbRequest::Trending(kind, page) => self.client.trending(*kind, *page).await.map(Some),
             TmdbRequest::SearchMovie { query, year } => {
                 self.client.search_movie(query, *year).await.map(Some)
             }

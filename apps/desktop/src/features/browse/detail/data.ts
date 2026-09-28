@@ -6,6 +6,7 @@ import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  CanonicalMediaSummary,
   ContinueWatchingItem,
   EpisodeView,
   SeriesEpisode,
@@ -59,6 +60,49 @@ export function useSeriesResume(profileId: string, series: SeriesSummary) {
     queryFn: () =>
       invoke<ContinueWatchingItem | null>("get_series_resume", seriesArgs(profileId, series)),
     staleTime: 0,
+  });
+}
+
+export interface RelatedTitles {
+  collectionName: string | null;
+  collection: CanonicalMediaSummary[];
+  movies: CanonicalMediaSummary[];
+  series: SeriesSummary[];
+}
+
+export interface TrendingTitles {
+  movies: CanonicalMediaSummary[];
+  series: SeriesSummary[];
+}
+
+/// "More like this" + collection: library titles only (empty with TMDB off).
+export function useRelatedTitles(
+  profileId: string,
+  sourceId: number | null,
+  subject: TitleArtSubject | null
+) {
+  return useQuery({
+    queryKey: ["related-titles", profileId, sourceId, subject ? subjectKey(subject) : null],
+    queryFn: () => invoke<RelatedTitles>("get_related_titles", { profileId, sourceId, subject }),
+    enabled: subject !== null && sourceId !== null,
+    staleTime: 30 * 60 * 1000,
+    retry: false,
+  });
+}
+
+/// This week's trending works that the library has.
+export function useTrendingInLibrary(
+  profileId: string,
+  sourceId: number,
+  section: "movies" | "series" | null
+) {
+  return useQuery({
+    queryKey: ["trending-library", profileId, sourceId, section],
+    queryFn: () =>
+      invoke<TrendingTitles>("get_trending_in_library", { profileId, sourceId, section }),
+    enabled: section !== null,
+    staleTime: 60 * 60 * 1000,
+    retry: false,
   });
 }
 

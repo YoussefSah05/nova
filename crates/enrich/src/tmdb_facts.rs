@@ -591,6 +591,62 @@ fn is_placeholder_name(name: &str, number: i64) -> bool {
     .any(|w| lower == format!("{w} {n}") || lower == format!("{n} {w}"))
 }
 
+/// TMDB ids listed by a results page (recommendations, similar, trending),
+/// in TMDB's order, de-duplicated.
+pub fn result_ids(body: &str) -> Result<Vec<i64>, EnrichError> {
+    #[derive(Deserialize)]
+    struct Item {
+        id: i64,
+    }
+    let page: Results<Item> =
+        serde_json::from_str(body).map_err(|e| EnrichError::Parse(e.to_string()))?;
+    let mut out: Vec<i64> = Vec::new();
+    for item in page.results {
+        if item.id > 0 && !out.contains(&item.id) {
+            out.push(item.id);
+        }
+    }
+    Ok(out)
+}
+
+/// A collection's name and its films' TMDB ids in release order.
+pub fn parse_collection(body: &str) -> Result<(String, Vec<i64>), EnrichError> {
+    #[derive(Deserialize)]
+    struct Part {
+        id: i64,
+        #[serde(default)]
+        release_date: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Collection {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        parts: Vec<Part>,
+    }
+    let c: Collection =
+        serde_json::from_str(body).map_err(|e| EnrichError::Parse(e.to_string()))?;
+    let mut parts = c.parts;
+    // Unreleased films (no date) go last.
+    parts.sort_by(|a, b| {
+        let key = |p: &Part| {
+            p.release_date
+                .clone()
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| "9999".into())
+        };
+        key(a).cmp(&key(b))
+    });
+    Ok((
+        c.name.trim().to_string(),
+        parts
+            .into_iter()
+            .map(|p| p.id)
+            .filter(|id| *id > 0)
+            .collect(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -728,6 +784,22 @@ mod tests {
             Some("https://image.tmdb.org/t/p/w300/e2.jpg")
         );
         assert!(parse_season("not json").is_err());
+    }
+
+    #[test]
+    fn lists_ids_and_orders_collections() {
+        let page = r#"{"page": 1, "results": [{"id": 3}, {"id": 1}, {"id": 3}, {"id": 0}]}"#;
+        assert_eq!(result_ids(page).unwrap(), vec![3, 1]);
+        let collection = r#"{"id": 230, "name": " The Godfather Collection ", "parts": [
+            {"id": 242, "release_date": "1990-12-25"}, {"id": 999, "release_date": ""},
+            {"id": 238, "release_date": "1972-03-14"}, {"id": 240, "release_date": "1974-12-20"}]}"#;
+        assert_eq!(
+            parse_collection(collection).unwrap(),
+            (
+                "The Godfather Collection".to_string(),
+                vec![238, 240, 242, 999]
+            )
+        );
     }
 
     #[test]

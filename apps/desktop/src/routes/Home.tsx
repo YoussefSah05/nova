@@ -404,6 +404,22 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     [playItem]
   );
 
+  // A title opened from a detail page ("More like this", a collection) shows
+  // at the top, replacing the page (Back returns to the browse view).
+  const openFromDetail = useCallback(
+    (item: BrowseItem) => {
+      window.scrollTo({ top: 0 });
+      if (item.kind === "series" && item.series) {
+        setSelectedContent(null);
+        setSelectedSeries(item.series);
+        return;
+      }
+      setSelectedSeries(null);
+      activate(item);
+    },
+    [activate]
+  );
+
   const toggleFavorite = useCallback(
     async (item: BrowseItem, next: boolean) => {
       if (activeSourceId === null) return;
@@ -470,8 +486,12 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return (
       <>
         <SeriesDetail
+          key={`${selectedSeries.sourceId}:${selectedSeries.seriesTitle}`}
           profileId={profile.id}
           series={selectedSeries}
+          onOpenTitle={openFromDetail}
+          onToggleItemFavorite={toggleFavorite}
+          onToggleItemWatchlist={toggleWatchlist}
           onBack={() => setSelectedSeries(null)}
           onToggleFavorite={(next) => toggleSeriesFavorite(selectedSeries, next)}
           onToggleWatchlist={(next) => toggleSeriesWatchlist(selectedSeries, next)}
@@ -502,6 +522,8 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return (
       <>
         <ContentDetail
+          key={selectedContent.key}
+          onOpenTitle={openFromDetail}
           profileId={profile.id}
           sourceId={activeSourceId}
           item={selectedContent}

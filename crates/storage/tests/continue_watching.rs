@@ -111,8 +111,15 @@ async fn series_rail_shows_one_card_per_show_with_resume_or_up_next() {
     assert_eq!((lost.media_id, lost.up_next), (lost21, true));
     let dark = history.series_resume(src, "Dark").await.unwrap().unwrap();
     assert_eq!((dark.media_id, dark.position_sec), (dark2, 600.0));
-    assert!(history.series_resume(src, "Fargo").await.unwrap().is_none(), "finished");
-    assert!(history.series_resume(src, "Never Watched").await.unwrap().is_none());
+    assert!(
+        history.series_resume(src, "Fargo").await.unwrap().is_none(),
+        "finished"
+    );
+    assert!(history
+        .series_resume(src, "Never Watched")
+        .await
+        .unwrap()
+        .is_none());
 
     let limited = WatchHistoryRepository::new(&pool)
         .continue_watching_section(ContinueSection::Series, src, 1)

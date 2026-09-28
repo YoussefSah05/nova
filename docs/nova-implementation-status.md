@@ -1525,3 +1525,33 @@ tiers + provider facts) and §14 gains five ordered slices (per-section
 Continue Watching → provider metadata → rich TMDB facts → unified title detail
 → catalog-aware discovery). Trailers open in the browser. Canonical series
 identity, user corrections, people pages and in-app trailers are deferred.
+
+## Series parity, per-section Continue Watching, rich metadata — implemented (2026-09-28)
+
+Slices from the planning entry above, one commit each (stacked branches
+`feat/continue-watching-sections` → `feat/provider-metadata` →
+`feat/tmdb-rich-facts` → `feat/title-detail` → `feat/library-discovery`):
+
+1. **Per-section Continue Watching:** `list_continue_watching` takes a
+   section and a source; series show one card per show (resume or Up next,
+   finished shows drop out); live lists recently watched channels.
+2. **Provider facts:** Xtream plots, cast, directors, genres, dates, ratings,
+   runtimes, trailers and backdrops are normalized (`ProviderFacts`) and kept
+   (migration 0034); series facts survive the catalog row replacement; the
+   provider's series TMDB id is stored.
+3. **Rich TMDB facts:** `get_title_facts` / `get_season_episodes`, stored per
+   TMDB work (0035). *Adjustment to the plan:* facts are fetched **on demand
+   when a page opens** (one cached call per title viewed) instead of in the
+   bulk matching pass, per M4.3's "do not eagerly download every field";
+   TTLs refresh ratings and new episodes. Series match through the provider's
+   TMDB id when TMDB corroborates it.
+4. **Unified detail page:** movies and series share `TitleHero` (meta line,
+   cast, trailer opened in the browser by a YouTube-only backend command);
+   series get Resume/Next/Play, a season picker and rich episode rows with
+   progress.
+5. **Discovery:** "More like this", collections and "Trending in your
+   library", intersected with the library (never unavailable titles).
+
+Gaps: not exercised against the live TMDB API or a real Xtream panel in this
+session (offline fixtures only); series remain per-source (no cross-source
+identity); no manual match correction; hover previews do not show facts yet.

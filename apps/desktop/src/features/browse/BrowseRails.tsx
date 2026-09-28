@@ -18,18 +18,22 @@ import { PosterFallback } from "./PosterFallback";
 import { type PosterCardHandlers } from "./PosterCard";
 import {
   genreRail,
+  movieToItem,
   PERSONAL_RAILS,
   RECENTLY_ADDED_RAIL,
   useBrowseCount,
   useCategories,
   useContinueWatching,
   useRail,
+  seriesToItem,
   type BrowseTab,
   type RailSpec,
 } from "./queries";
 import { Artwork } from "@/components/Artwork";
 import { ChannelTile } from "./ChannelTile";
 import { continueEpisodeLabel, continueSubtitle } from "./continueWatching";
+import { ItemRail } from "./ItemRail";
+import { useTrendingInLibrary } from "./detail/data";
 
 const MAX_GENRE_RAILS = 25;
 /// How many genre rails fetch immediately; the rest lazy-load on scroll.
@@ -106,6 +110,8 @@ export function BrowseRails({
 
       <ContinueWatchingRail profileId={profileId} sourceId={sourceId} tab={tab} onPlay={onPlay} />
 
+      <TrendingRail tab={tab} profileId={profileId} sourceId={sourceId} {...handlers} />
+
       {PERSONAL_RAILS.map((spec) => (
         <Rail
           key={spec.id}
@@ -171,6 +177,23 @@ function StateCard({
       {action}
     </Card>
   );
+}
+
+/// "Trending in your library": this week's TMDB trending titles you have
+/// (hidden when TMDB is off or nothing trending is in the library).
+function TrendingRail({
+  tab,
+  profileId,
+  sourceId,
+  ...handlers
+}: { tab: BrowseTab; profileId: string; sourceId: number } & PosterCardHandlers) {
+  const section = tab === "movies" ? "movies" : tab === "series" ? "series" : null;
+  const { data } = useTrendingInLibrary(profileId, sourceId, section);
+  const items =
+    tab === "movies"
+      ? (data?.movies ?? []).map(movieToItem)
+      : (data?.series ?? []).map(seriesToItem);
+  return <ItemRail title="Trending in your library" items={items} {...handlers} />;
 }
 
 const CONTINUE_TITLE: Record<BrowseTab, string> = {
