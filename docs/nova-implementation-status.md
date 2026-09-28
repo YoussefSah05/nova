@@ -1488,3 +1488,40 @@ queries were pruned.
 - A merged entity keeps its own match record. The survivor is matched
   independently.
 - There is no UI yet to inspect evidence or manually pick a candidate.
+
+## Catch-up — naming v1, episode resume, P12 search, artwork v1, live tiles (2026-09-27/28)
+
+Merged to `main`; logged here after the fact (details in the phase history and commit
+messages):
+
+- **Naming v1:** one versioned provider-title parser, raw evidence kept, provider
+  collections separated from Nova genres, localized TMDB titles with the
+  original kept, one display-name policy (`nova_core::naming`).
+- **Episode resume across refresh:** episode history is parked by a stable
+  binding key and reattached after a re-import.
+- **P12 canonical movie search:** `movie_search` FTS5 projection with tiered
+  ranking (exact title first), people/keywords/genres indexed.
+- **Artwork v1:** shared image-URL policy, XMLTV channel icons, opt-in iptv-org
+  logo directory, validated `nova-art://` disk cache, TMDB title logos and
+  text-free backdrops on demand.
+- **Live brand tiles:** logos presented on their own colour (`ChannelTile`).
+
+## Planning — series parity, per-section Continue Watching, rich metadata (2026-09-28)
+
+On-device review findings:
+
+- Series take a thinner path than movies: small header, no hero or title
+  logo, no Play/Resume/Next-episode action, no per-episode progress, provider
+  episode data only, no React Query caching.
+- Continue Watching is one rail shared by all tabs (movies + episodes, no
+  source filter, no live), with raw provider titles and one card per episode.
+- Only five TMDB endpoints are used; `/tv/{id}`, seasons, episodes, runtime,
+  rating, certification, trailers and similar titles are unused, and people /
+  keywords are stored but never shown. Xtream series/episode plots, cast,
+  ratings, durations and `get_vod_info` are dropped.
+
+Decisions: master plan §9 gains M4.6 (TMDB GET capability map with T1/T2/T3
+tiers + provider facts) and §14 gains five ordered slices (per-section
+Continue Watching → provider metadata → rich TMDB facts → unified title detail
+→ catalog-aware discovery). Trailers open in the browser. Canonical series
+identity, user corrections, people pages and in-app trailers are deferred.

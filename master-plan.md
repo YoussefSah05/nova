@@ -620,6 +620,36 @@ Support seasons and episodes lazily and canonically.
 
 Track retrieval/version/fingerprint provenance so derived work can be reused or invalidated correctly.
 
+## M4.6 Metadata capability map (TMDB GET API + provider)
+
+Source-checked against the official TMDB OpenAPI spec (135 GET paths,
+2026-09-28). Tiers: **T1** fetched in the progressive matching pass (one cached
+call per confidently matched title); **T2** fetched lazily when a detail page
+opens; **T3** a few periodic discovery calls. Everything goes through
+`tmdb_cache`, is keyed per TMDB work (never per Nova entity), and runs only
+when the user enabled TMDB. Offline, provider facts still fill detail pages.
+
+| Group | Endpoints | Decision |
+|---|---|---|
+| Movie details | `/movie/{id}` + `append_to_response=credits,keywords,release_dates,videos,external_ids` | T1: runtime, tagline, rating/votes, status, certification (region), trailer key, IMDb id, collection |
+| TV details | `/tv/{id}` + `aggregate_credits,keywords,content_ratings,videos,external_ids` | T1: seasons summary, years, status, networks, creators, episode runtime, rating, certification, trailer |
+| Seasons / episodes | `/tv/{id}/season/{n}` | T2 on season open: episode names, overviews, stills, air dates, runtime; joined to provider episodes by (season, episode) |
+| Images | `/{movie,tv}/{id}/images` | In use (artwork v1): title logo + text-free backdrop, on demand |
+| Similar | `/{movie,tv}/{id}/recommendations`, `/similar` | T2: "More like this", **only titles present in the library** |
+| Collections | `/collection/{id}` | T2: "Part of the collection" row, library titles only |
+| Discovery | `/trending/{movie,tv}/week`, `/movie/popular`, `/tv/popular`, `top_rated` | T3: "Trending in your library" (≈4 calls/day, intersected with the catalog) |
+| Find | `/find/{external_id}` | T1 trusted-ID path when a provider supplies an IMDb id (M4.1) |
+| People | `/person/{id}`, `/combined_credits` | Deferred: "More with <actor> in your library" |
+| Skipped | account/*, guest sessions, lists, watch providers, reviews, discover, certification lists, company/network details | Not useful for a local IPTV library or needs a TMDB user account; `/changes` kept as a future M4.5 refresh signal |
+
+Provider (Xtream) facts captured alongside, used when TMDB is off or has no
+match: VOD `rating`/`added`; series `plot`, `cast`, `director`, `genre`,
+`releaseDate`, `rating`, `backdrop_path`, `youtube_trailer`,
+`episode_run_time`, `tmdb` (becomes the series trusted id); episode
+`plot`/`duration_secs`/`rating`/`releasedate`; lazy `get_vod_info` on movie
+detail. Field precedence for display: user override (future) → confident TMDB
+→ provider → parsed title.
+
 ---
 
 # 10. Phase 5 — Search
@@ -827,6 +857,24 @@ PlaybackState
 ```
 
 Do not perform a wholesale frontend rewrite.
+
+Slices planned from the 2026-09-28 on-device review (order of execution):
+
+1. **Per-section Continue Watching**: each tab owns its rail. Movies from
+   entity state; series one card per show with the in-progress or next episode
+   ("Up next"); live shows recently watched channels. Filtered by source.
+2. **Provider metadata capture** (M4.6 provider facts): offline-rich details.
+3. **Rich TMDB facts** (M4.6 T1): stored per TMDB work, progressive.
+4. **Unified title detail**: one hero for movies and series (backdrop, title
+   logo, meta row, cast, trailer opened in the browser); series get a
+   Play/Resume/Next-episode action, a season selector and episodes with TMDB
+   titles, stills, overviews and per-episode progress (M4.4 lazy seasons).
+5. **Catalog-aware discovery rails** (M4.6 T2/T3): "More like this",
+   collections and trending, never showing unavailable titles.
+
+Deferred: canonical series identity across sources (entity resolution for
+series and episodes, the series counterpart of M3.5), user corrections
+("fix match", custom title/artwork), people pages, in-app trailer playback.
 
 ---
 
@@ -1055,6 +1103,9 @@ implementation or imply that tested library primitives are integrated features.
    discovery/personalization
 
 9. Frontend canonicalization
+   per-section Continue Watching → provider metadata → rich TMDB facts
+   → unified title detail (series parity) → catalog-aware discovery
+   (see §14; canonical series identity deferred)
 
 10. Live / EPG boundary
 
