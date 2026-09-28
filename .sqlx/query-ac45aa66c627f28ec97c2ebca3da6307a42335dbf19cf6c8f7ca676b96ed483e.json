@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO tmdb_title_facts (media_type, tmdb_id, language, facts, facts_version, fetched_at)\n             VALUES (?, ?, ?, ?, ?, ?)\n             ON CONFLICT(media_type, tmdb_id) DO UPDATE SET\n                 language = excluded.language, facts = excluded.facts,\n                 facts_version = excluded.facts_version, fetched_at = excluded.fetched_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "ac45aa66c627f28ec97c2ebca3da6307a42335dbf19cf6c8f7ca676b96ed483e"
+}

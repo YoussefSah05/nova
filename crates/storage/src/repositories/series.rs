@@ -681,12 +681,18 @@ impl<'a> SeriesRepository<'a> {
     ) -> Result<Vec<SeriesTmdbQuery>, StorageError> {
         let version = i64::from(matcher_version);
         let rows = sqlx::query!(
-            r#"SELECT DISTINCT se.series_title as "series_title!: String"
+            r#"SELECT DISTINCT se.series_title as "series_title!: String",
+                      spf.provider_tmdb_id as "trusted?: i64"
                FROM series_episodes se
                LEFT JOIN series_meta sm
                  ON sm.source_id = se.source_id AND sm.series_title = se.series_title
+               LEFT JOIN series_provider_facts spf
+                 ON spf.source_id = se.source_id AND spf.series_title = se.series_title
                WHERE se.source_id = ?
                  AND (sm.tmdb_status IS NULL
+                      -- a provider id is new evidence: retry an unmatched series now
+                      OR (sm.tmdb_status = 'unmatched' AND spf.provider_tmdb_id IS NOT NULL
+                          AND sm.match_method = 'search')
                       OR sm.matcher_version IS NULL
                       OR sm.matcher_version < ?
                       OR (sm.tmdb_status = 'unmatched' AND sm.checked_at < ?)
@@ -704,6 +710,7 @@ impl<'a> SeriesRepository<'a> {
             .into_iter()
             .map(|r| SeriesTmdbQuery {
                 series_title: r.series_title,
+                trusted_tmdb_id: r.trusted.filter(|id| *id > 0),
             })
             .collect())
     }

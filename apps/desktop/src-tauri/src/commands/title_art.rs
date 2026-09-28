@@ -66,7 +66,25 @@ pub async fn get_title_art(
 ) -> Result<TitleArtView, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     let repo = TitleArtRepository::new(&pool);
-    let work = match &subject {
+    let Some((media, tmdb_id)) = tmdb_work(&pool, &subject).await? else {
+        return Ok(TitleArtView::default());
+    };
+    let (client, language) = tmdb_access(&pool).await?;
+    let cache = TmdbCacheRepository::new(&pool);
+    let tmdb = client.as_ref().map(|client| CachedTmdb {
+        client,
+        cache: &cache,
+    });
+    Ok(resolve_title_art(&repo, tmdb.as_ref(), media, tmdb_id, &language).await)
+}
+
+/// The TMDB work a title is confidently matched to, if any.
+pub(crate) async fn tmdb_work(
+    pool: &sqlx::SqlitePool,
+    subject: &TitleArtSubject,
+) -> Result<Option<(TitleArtMedia, i64)>, ApiError> {
+    let repo = TitleArtRepository::new(pool);
+    Ok(match subject {
         TitleArtSubject::Movie { entity_id } => repo
             .movie_tmdb_id(entity_id)
             .await?
@@ -78,26 +96,21 @@ pub async fn get_title_art(
             .series_tmdb_id(*source_id, series_title)
             .await?
             .map(|id| (TitleArtMedia::Tv, id)),
-    };
-    let Some((media, tmdb_id)) = work else {
-        return Ok(TitleArtView::default());
-    };
+    })
+}
 
-    let settings = ProfileSettingsRepository::new(&pool).get().await?;
+/// The profile's TMDB client (only when enabled with a credential) and its
+/// metadata language.
+pub(crate) async fn tmdb_access(
+    pool: &sqlx::SqlitePool,
+) -> Result<(Option<TmdbClient>, String), ApiError> {
+    let settings = ProfileSettingsRepository::new(pool).get().await?;
     let language = nova_core::metadata_language(&settings.metadata_language).to_string();
     let credential = settings
         .tmdb_api_key
         .filter(|k| settings.tmdb_enabled && !k.trim().is_empty());
-    let client = match credential {
-        Some(key) => TmdbClient::new(key, &language).ok(),
-        None => None,
-    };
-    let cache = TmdbCacheRepository::new(&pool);
-    let tmdb = client.as_ref().map(|client| CachedTmdb {
-        client,
-        cache: &cache,
-    });
-    Ok(resolve_title_art(&repo, tmdb.as_ref(), media, tmdb_id, &language).await)
+    let client = credential.and_then(|key| TmdbClient::new(key, &language).ok());
+    Ok((client, language))
 }
 
 /// Stored art when current; otherwise fetch (if a TMDB client is available),

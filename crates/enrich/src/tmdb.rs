@@ -352,6 +352,47 @@ impl TmdbClient {
         self.get_optional(&path, &params, &self.language).await
     }
 
+    /// `/movie/{id}` with what a detail page shows (credits, release dates,
+    /// videos, external ids); videos limited to the metadata language,
+    /// English and language-neutral. `None` when TMDB doesn't know the ID.
+    pub async fn movie_facts(&self, id: i64) -> Result<Option<String>, EnrichError> {
+        let params = [
+            (
+                "append_to_response",
+                "credits,release_dates,videos,external_ids".to_string(),
+            ),
+            (
+                "include_video_language",
+                crate::tmdb_art::include_image_language(&self.language),
+            ),
+        ];
+        self.get_optional(&format!("/movie/{id}"), &params, &self.language)
+            .await
+    }
+
+    /// `/tv/{id}` with aggregate credits, content ratings, videos and external
+    /// ids (also the trusted-id check body for series).
+    pub async fn tv_facts(&self, id: i64) -> Result<Option<String>, EnrichError> {
+        let params = [
+            (
+                "append_to_response",
+                "aggregate_credits,content_ratings,videos,external_ids".to_string(),
+            ),
+            (
+                "include_video_language",
+                crate::tmdb_art::include_image_language(&self.language),
+            ),
+        ];
+        self.get_optional(&format!("/tv/{id}"), &params, &self.language)
+            .await
+    }
+
+    /// `/tv/{id}/season/{n}`: the season's episodes.
+    pub async fn tv_season(&self, id: i64, season: i64) -> Result<Option<String>, EnrichError> {
+        self.get_optional(&format!("/tv/{id}/season/{season}"), &[], &self.language)
+            .await
+    }
+
     /// `/search/movie`.
     pub async fn search_movie(
         &self,

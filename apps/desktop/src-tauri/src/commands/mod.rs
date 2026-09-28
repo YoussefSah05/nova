@@ -28,6 +28,7 @@ pub mod profile_settings;
 pub mod search;
 pub mod settings;
 pub mod title_art;
+pub mod title_facts;
 pub mod transcription;
 
 // ── Profile commands (Phase 1) ────────────────────────────────────────────────
@@ -693,7 +694,7 @@ pub async fn list_player_episodes(
 /// time a series is opened we call `get_series_info`, persist the real episodes
 /// (replacing the sentinel), and return them; subsequent opens read the cache.
 /// M3U sources already carry real episodes inline, so this is a passthrough.
-async fn fetch_series_episodes(
+pub(crate) async fn fetch_series_episodes(
     pool: &sqlx::SqlitePool,
     source_id: i64,
     series_title: &str,

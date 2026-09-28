@@ -477,6 +477,30 @@ impl<'a> WatchHistoryRepository<'a> {
             .collect())
     }
 
+    /// Progress of a series' episodes by episode row id:
+    /// `(position_sec, duration_sec, completed)`.
+    pub async fn episode_progress(
+        &self,
+        source_id: i64,
+        series_title: &str,
+    ) -> Result<std::collections::HashMap<i64, (f64, Option<f64>, bool)>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT e.id as "id!: i64", wh.position_sec as "position_sec!: f64",
+                      wh.duration_sec as "duration_sec?: f64", wh.completed as "completed!: i64"
+               FROM watch_history wh
+               JOIN series_episodes e ON e.id = wh.media_id
+               WHERE wh.media_kind = 'episode' AND e.source_id = ? AND e.series_title = ?"#,
+            source_id,
+            series_title
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.id, (r.position_sec, r.duration_sec, r.completed != 0)))
+            .collect())
+    }
+
     /// The Continue Watching rail of one browse tab in one source.
     pub async fn continue_watching_section(
         &self,

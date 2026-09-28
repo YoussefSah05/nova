@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT source_id as \"source_id!: i64\", stream_url as \"stream_url!: String\"\n               FROM vod_items WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "source_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "stream_url!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9af5309f7e610cd3608547a66c13318dedca757ec3ec5e64abb7516185731b31"
+}

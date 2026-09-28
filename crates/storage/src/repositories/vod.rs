@@ -82,6 +82,19 @@ impl<'a> VodRepository<'a> {
         Ok(json.as_deref().and_then(ProviderFacts::from_json))
     }
 
+    /// `(source_id, stream_url)` of a movie row (to ask its provider for
+    /// details). Internal use only: stream URLs carry credentials.
+    pub async fn locator(&self, vod_id: i64) -> Result<Option<(i64, String)>, StorageError> {
+        let row = sqlx::query!(
+            r#"SELECT source_id as "source_id!: i64", stream_url as "stream_url!: String"
+               FROM vod_items WHERE id = ?"#,
+            vod_id
+        )
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|r| (r.source_id, r.stream_url)))
+    }
+
     /// Store richer facts for a movie row (e.g. from `get_vod_info`), filling
     /// gaps from what the row already had.
     pub async fn merge_provider_facts(

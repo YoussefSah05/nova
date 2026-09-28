@@ -27,6 +27,24 @@ impl<'a> TmdbCacheRepository<'a> {
         Ok(row.map(|r| r.body))
     }
 
+    /// Cached raw body for `key` fetched at or after `not_before` (epoch
+    /// seconds); older bodies count as missing so the caller refetches.
+    pub async fn get_since(
+        &self,
+        key: &str,
+        not_before: i64,
+    ) -> Result<Option<String>, StorageError> {
+        let row = sqlx::query!(
+            r#"SELECT body as "body!: String" FROM tmdb_cache
+               WHERE cache_key = ? AND fetched_at >= ?"#,
+            key,
+            not_before,
+        )
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|r| r.body))
+    }
+
     /// Store (or replace) the raw body for `key`.
     pub async fn put(&self, key: &str, body: &str) -> Result<(), StorageError> {
         let fetched_at = now_ts();

@@ -14,7 +14,7 @@ pub enum TitleArtMedia {
 }
 
 impl TitleArtMedia {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Movie => "movie",
             Self::Tv => "tv",

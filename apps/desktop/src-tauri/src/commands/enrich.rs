@@ -395,6 +395,11 @@ pub(crate) enum TmdbRequest {
     MovieDetails(i64),
     /// `/{movie,tv}/{id}/images` for title artwork.
     Images(TmdbMediaKind, i64),
+    /// Detail-page facts: `/movie/{id}` or `/tv/{id}` with appended credits,
+    /// ratings, videos and external ids.
+    Facts(TmdbMediaKind, i64),
+    /// `/tv/{id}/season/{n}`.
+    Season(i64, i64),
     SearchMovie {
         query: String,
         year: Option<i32>,
@@ -422,6 +427,9 @@ impl TmdbRequest {
             Self::MovieDetails(id) => format!("movie-details-v2::{id}"),
             Self::Images(TmdbMediaKind::Movie, id) => format!("movie-images-v1::{id}"),
             Self::Images(TmdbMediaKind::Tv, id) => format!("tv-images-v1::{id}"),
+            Self::Facts(TmdbMediaKind::Movie, id) => format!("movie-facts-v1::{id}"),
+            Self::Facts(TmdbMediaKind::Tv, id) => format!("tv-facts-v1::{id}"),
+            Self::Season(id, n) => format!("tv-season-v1::{id}::{n}"),
             Self::SearchMovie { query, year } => match year {
                 Some(y) => format!("movie::{}::{y}", query.to_lowercase()),
                 None => format!("movie::{}::noyear", query.to_lowercase()),
@@ -436,6 +444,15 @@ impl TmdbRequest {
 /// map in tests. `Ok(None)` means TMDB answered 404.
 pub(crate) trait TmdbFetch {
     async fn fetch(&self, request: &TmdbRequest) -> Result<Option<String>, ApiError>;
+    /// Like [`Self::fetch`], but a cached body older than `max_age_secs` is
+    /// fetched again (facts and seasons change: ratings, new episodes).
+    async fn fetch_max_age(
+        &self,
+        request: &TmdbRequest,
+        _max_age_secs: i64,
+    ) -> Result<Option<String>, ApiError> {
+        self.fetch(request).await
+    }
     /// Metadata language of the fetched bodies (BCP-47).
     fn language(&self) -> &str;
 }
@@ -451,14 +468,40 @@ impl TmdbFetch for CachedTmdb<'_> {
     }
 
     async fn fetch(&self, request: &TmdbRequest) -> Result<Option<String>, ApiError> {
+        self.fetch_since(request, None).await
+    }
+
+    async fn fetch_max_age(
+        &self,
+        request: &TmdbRequest,
+        max_age_secs: i64,
+    ) -> Result<Option<String>, ApiError> {
+        self.fetch_since(request, Some(nova_core::now_ts() - max_age_secs))
+            .await
+    }
+}
+
+impl CachedTmdb<'_> {
+    async fn fetch_since(
+        &self,
+        request: &TmdbRequest,
+        not_before: Option<i64>,
+    ) -> Result<Option<String>, ApiError> {
         let key = request.cache_key(self.language());
-        if let Some(body) = self.cache.get(&key).await? {
+        let cached = match not_before {
+            Some(t) => self.cache.get_since(&key, t).await?,
+            None => self.cache.get(&key).await?,
+        };
+        if let Some(body) = cached {
             // An empty cached body records a 404.
             return Ok((!body.is_empty()).then_some(body));
         }
         let fetched = match request {
             TmdbRequest::MovieDetails(id) => self.client.movie_details(*id).await,
             TmdbRequest::Images(kind, id) => self.client.images(*kind, *id).await,
+            TmdbRequest::Facts(TmdbMediaKind::Movie, id) => self.client.movie_facts(*id).await,
+            TmdbRequest::Facts(TmdbMediaKind::Tv, id) => self.client.tv_facts(*id).await,
+            TmdbRequest::Season(id, n) => self.client.tv_season(*id, *n).await,
             TmdbRequest::SearchMovie { query, year } => {
                 self.client.search_movie(query, *year).await.map(Some)
             }
@@ -735,7 +778,8 @@ async fn match_movie(
     })
 }
 
-/// Decide one series (no trusted IDs yet): `/search/tv` → `/search/multi`.
+/// Decide one series: the provider's TMDB id when TMDB corroborates it (the
+/// same trusted-id rule as movies), otherwise `/search/tv` → `/search/multi`.
 async fn match_series(
     tmdb: &impl TmdbFetch,
     q: &SeriesTmdbQuery,
@@ -743,6 +787,39 @@ async fn match_series(
 ) -> Result<SeriesTmdbWrite, ApiError> {
     let query = nova_core::clean::search_series_title(&q.series_title);
     let mut evidence = MatchEvidence::new(query.clone(), None, tmdb.language());
+
+    if let Some(tmdb_id) = q.trusted_tmdb_id {
+        // The facts body (details + credits…) doubles as the check: it is the
+        // one a series page asks for, so the page then reads it from cache.
+        let request = TmdbRequest::Facts(TmdbMediaKind::Tv, tmdb_id);
+        evidence.requests.push(request.cache_key(tmdb.language()));
+        let check = match tmdb.fetch(&request).await? {
+            None => None,
+            Some(body) => {
+                let details = parse_details(&body).map_err(parse_err)?;
+                let titles = vec![q.series_title.clone(), query.clone()];
+                let check = verify_trusted(&details, &titles, None);
+                if check == TrustedCheck::Consistent {
+                    evidence.trusted_id = Some(TrustedIdEvidence {
+                        tmdb_id,
+                        check: Some(check),
+                    });
+                    evidence.outcome = "matched".into();
+                    let m = TmdbMatch::from_item(&details, &q.series_title, genres);
+                    return Ok(series_match_write(
+                        q,
+                        m,
+                        tmdb.language(),
+                        "trusted_id",
+                        10_000,
+                        &evidence,
+                    ));
+                }
+                Some(check)
+            }
+        };
+        evidence.trusted_id = Some(TrustedIdEvidence { tmdb_id, check });
+    }
     let steps = vec![
         TmdbRequest::SearchTv(query.clone()),
         TmdbRequest::SearchMulti(query.clone()),
@@ -753,24 +830,8 @@ async fn match_series(
         Decision::Matched(i) => {
             evidence.outcome = "matched".into();
             let m = TmdbMatch::from_item(&ranked[i].item, &q.series_title, genres);
-            let genres = canonicalize_genres(&m.genres);
-            SeriesTmdbWrite {
-                series_title: q.series_title.clone(),
-                tmdb_id: Some(m.tmdb_id),
-                canonical_title: Some(m.canonical_title),
-                original_title: m.original_title,
-                title_language: Some(tmdb.language().to_string()),
-                poster_url: m.poster_url,
-                backdrop_url: m.backdrop_url,
-                overview: m.overview,
-                primary_genre: genres.first().cloned(),
-                genres_csv: (!genres.is_empty()).then(|| genres.join(", ")),
-                matched: true,
-                method: "search",
-                confidence_bp: Some(nova_enrich::tmdb::score_bp(ranked[i].score)),
-                matcher_version: MATCHER_VERSION,
-                evidence_json: evidence_json(&evidence),
-            }
+            let bp = nova_enrich::tmdb::score_bp(ranked[i].score);
+            series_match_write(q, m, tmdb.language(), "search", bp, &evidence)
         }
         Decision::Unresolved(reason) => {
             evidence.outcome = outcome_name(reason).into();
@@ -793,6 +854,35 @@ async fn match_series(
             }
         }
     })
+}
+
+/// The `series_meta` write of a confident series match.
+fn series_match_write(
+    q: &SeriesTmdbQuery,
+    m: TmdbMatch,
+    language: &str,
+    method: &'static str,
+    confidence_bp: u16,
+    evidence: &MatchEvidence,
+) -> SeriesTmdbWrite {
+    let genres = canonicalize_genres(&m.genres);
+    SeriesTmdbWrite {
+        series_title: q.series_title.clone(),
+        tmdb_id: Some(m.tmdb_id),
+        canonical_title: Some(m.canonical_title),
+        original_title: m.original_title,
+        title_language: Some(language.to_string()),
+        poster_url: m.poster_url,
+        backdrop_url: m.backdrop_url,
+        overview: m.overview,
+        primary_genre: genres.first().cloned(),
+        genres_csv: (!genres.is_empty()).then(|| genres.join(", ")),
+        matched: true,
+        method,
+        confidence_bp: Some(confidence_bp),
+        matcher_version: MATCHER_VERSION,
+        evidence_json: evidence_json(evidence),
+    }
 }
 
 /// Map TMDB genre names onto Nova's canonical taxonomy so chips/rails stay
@@ -1125,6 +1215,7 @@ mod tmdb_matching_tests {
         let tmdb = Fixture::default().with("tv::breaking bad", tv);
         let q = SeriesTmdbQuery {
             series_title: "Breaking Bad".into(),
+            trusted_tmdb_id: None,
         };
         let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();
         assert!(w.matched);
@@ -1134,8 +1225,42 @@ mod tmdb_matching_tests {
         let tmdb = Fixture::default();
         let q = SeriesTmdbQuery {
             series_title: "Unknown Show".into(),
+            trusted_tmdb_id: None,
         };
         let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();
         assert!(!w.matched && w.poster_url.is_none() && w.canonical_title.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_corroborated_provider_series_id_skips_search() {
+        let details = r#"{"id": 1396, "name": "Breaking Bad", "first_air_date": "2008-01-20",
+                          "poster_path": "/b.jpg", "genres": [{"id": 18, "name": "Drama"}]}"#;
+        let tmdb = Fixture::default().with("tv-facts-v1::1396", details);
+        let q = SeriesTmdbQuery {
+            series_title: "Breaking Bad".into(),
+            trusted_tmdb_id: Some(1396),
+        };
+        let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();
+        assert!(w.matched);
+        assert_eq!(
+            (w.method, w.tmdb_id, w.confidence_bp),
+            ("trusted_id", Some(1396), Some(10_000))
+        );
+        assert_eq!(tmdb.requested(), vec!["tv-facts-v1::1396"], "no search");
+
+        // An id pointing at another show is contradicted: search decides.
+        let wrong = r#"{"id": 1668, "name": "Friends", "first_air_date": "1994-09-22"}"#;
+        let tv = r#"{"results": [{"id": 1396, "name": "Breaking Bad", "first_air_date": "2008-01-20"}]}"#;
+        let tmdb = Fixture::default()
+            .with("tv-facts-v1::1668", wrong)
+            .with("tv::breaking bad", tv);
+        let q = SeriesTmdbQuery {
+            series_title: "Breaking Bad".into(),
+            trusted_tmdb_id: Some(1668),
+        };
+        let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();
+        assert!(w.matched);
+        assert_eq!((w.method, w.tmdb_id), ("search", Some(1396)));
+        assert!(w.evidence_json.contains("uncorroborated"), "{}", w.evidence_json);
     }
 }

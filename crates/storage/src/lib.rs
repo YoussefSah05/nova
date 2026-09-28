@@ -25,8 +25,8 @@ pub use repositories::{
     ProfileSettingsRepository, ProgramsRepository, Publication, PublicationMode,
     PublicationRepository, RegisteredModel, ResolutionReport, ResolvedStreamUrl, ResumePosition,
     SearchHit, SearchRepository, SeriesFlagSnapshot, SeriesRepository, SeriesTmdbQuery,
-    SeriesTmdbWrite, SourceRepository, SourceSegment, StoredTitleArt, StoredTranscript,
-    TitleArtMedia, TitleArtRepository, TmdbCacheRepository, TranscriptLine, TranscriptRepository,
-    TranslationRepository, TranslationRow, UnenrichedRow, VodRepository, WatchHistoryRepository,
-    WatchSnapshot, TMDB_MOVIE,
+    SeriesTmdbWrite, SourceRepository, SourceSegment, StoredFacts, StoredTitleArt,
+    StoredTranscript, TitleArtMedia, TitleArtRepository, TitleFactsRepository, TmdbCacheRepository,
+    TranscriptLine, TranscriptRepository, TranslationRepository, TranslationRow, UnenrichedRow,
+    VodRepository, WatchHistoryRepository, WatchSnapshot, TMDB_MOVIE,
 };

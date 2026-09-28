@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT facts as \"json!: String\", language as \"language!: String\",\n                      facts_version as \"facts_version!: i64\", fetched_at as \"fetched_at!: i64\"\n               FROM tmdb_title_facts WHERE media_type = ? AND tmdb_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "json!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "language!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "facts_version!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "fetched_at!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b4daf39bdfc96bf0280f32a7cafb350ed21564d99056fddfead5f80e82351d5a"
+}

@@ -130,6 +130,17 @@ pub fn detect(url: &str) -> bool {
     url.contains("/get.php?") && url.contains("username=") && url.contains("password=")
 }
 
+/// The panel's stream id in a movie URL (`…/movie/<user>/<pass>/<id>.<ext>`).
+pub fn vod_id_from_url(url: &str) -> Option<i64> {
+    let path = url.split(['?', '#']).next()?;
+    let mut segments = path.rsplit('/');
+    let file = segments.next()?;
+    // user and password segments sit between `movie` and the file
+    let is_movie = path.split('/').rev().nth(3) == Some("movie");
+    let id = file.split('.').next()?.parse::<i64>().ok()?;
+    (is_movie && id > 0).then_some(id)
+}
+
 /// One episode of a series, resolved from `get_series_info`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct XtreamEpisode {
@@ -1245,5 +1256,20 @@ mod tests {
             parse_vod_info(&serde_json::json!({})),
             XtreamVodInfo::default()
         );
+    }
+
+    #[test]
+    fn vod_ids_come_from_movie_urls_only() {
+        assert_eq!(
+            vod_id_from_url("http://h:80/movie/u/p/1234.mkv"),
+            Some(1234)
+        );
+        assert_eq!(
+            vod_id_from_url("http://h:80/movie/u/p/77.mp4?token=x"),
+            Some(77)
+        );
+        assert_eq!(vod_id_from_url("http://h:80/series/u/p/1234.mkv"), None);
+        assert_eq!(vod_id_from_url("http://h:80/live/u/p/1234.ts"), None);
+        assert_eq!(vod_id_from_url("http://h/movie/u/p/abc.mkv"), None);
     }
 }

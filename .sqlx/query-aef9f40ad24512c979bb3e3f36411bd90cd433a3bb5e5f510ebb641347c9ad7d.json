@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT episodes as \"json!: String\", language as \"language!: String\",\n                      facts_version as \"facts_version!: i64\", fetched_at as \"fetched_at!: i64\"\n               FROM tmdb_season_episodes WHERE tmdb_id = ? AND season = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "json!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "language!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "facts_version!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "fetched_at!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "aef9f40ad24512c979bb3e3f36411bd90cd433a3bb5e5f510ebb641347c9ad7d"
+}

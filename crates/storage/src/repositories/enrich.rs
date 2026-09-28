@@ -27,6 +27,8 @@ pub struct EnrichUpdate {
 #[derive(Debug, Clone)]
 pub struct SeriesTmdbQuery {
     pub series_title: String,
+    /// TMDB TV id the provider claims for the series (trusted-id evidence).
+    pub trusted_tmdb_id: Option<i64>,
 }
 
 /// The TMDB result for one series, written to `series_meta`.
