@@ -1261,6 +1261,10 @@ mod tmdb_matching_tests {
         let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();
         assert!(w.matched);
         assert_eq!((w.method, w.tmdb_id), ("search", Some(1396)));
-        assert!(w.evidence_json.contains("uncorroborated"), "{}", w.evidence_json);
+        assert!(
+            w.evidence_json.contains("uncorroborated"),
+            "{}",
+            w.evidence_json
+        );
     }
 }

@@ -1,14 +1,35 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { ChevronDown } from "lucide-react";
+//! A series' page, on the same frame as a movie's: backdrop and title logo,
+//! a meta line (years · rating · seasons · score), tagline and overview, the
+//! main action (Resume / Next episode / Play S01E01), trailer, watchlist and
+//! favourite, the cast, then a season picker with rich episode rows.
+
+import { useEffect, useMemo, useState } from "react";
+import { Play } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { motion, AnimatePresence, EASE_ENTER } from "@/lib/motion";
-import type { SeriesEpisode, SeriesSummary } from "@/types";
-import { FavoriteButton } from "@/features/browse/FavoriteButton";
-import { WatchlistButton } from "@/features/browse/WatchlistButton";
-import { PosterFallback } from "@/features/browse/PosterFallback";
-import { episodeLabel } from "@/features/player/episodeMedia";
-import { Artwork } from "@/components/Artwork";
+import type { EpisodeView, SeriesSummary } from "@/types";
+import { FavoriteButton } from "./FavoriteButton";
+import { WatchlistButton } from "./WatchlistButton";
+import { useTitleArtFor, type TitleArtSubject } from "./titleArt";
+import { CastStrip } from "./detail/CastStrip";
+import { EpisodeList } from "./detail/EpisodeList";
+import { TitleHero } from "./detail/TitleHero";
+import { TrailerButton } from "./detail/TrailerButton";
+import {
+  useSeasonEpisodes,
+  useSeriesEpisodes,
+  useSeriesResume,
+  useTitleFacts,
+} from "./detail/data";
+import { episodeViewLabel, metaLine, seriesPrimaryAction } from "./detail/meta";
+
+export interface PlayableEpisode {
+  id: number;
+  /// `S02E03 — Title`.
+  label: string;
+  stillUrl: string | null;
+}
 
 interface SeriesDetailProps {
   profileId: string;
@@ -16,7 +37,14 @@ interface SeriesDetailProps {
   onBack: () => void;
   onToggleFavorite: (next: boolean) => Promise<void> | void;
   onToggleWatchlist: (next: boolean) => Promise<void> | void;
-  onPlayEpisode: (episode: SeriesEpisode) => void;
+  onPlayEpisode: (episode: PlayableEpisode) => void;
+}
+
+function formatDate(date: string): string {
+  const d = new Date(`${date}T00:00:00`);
+  return Number.isNaN(d.getTime())
+    ? date
+    : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 export function SeriesDetail({
@@ -27,202 +55,138 @@ export function SeriesDetail({
   onToggleWatchlist,
   onPlayEpisode,
 }: SeriesDetailProps) {
-  const [episodes, setEpisodes] = useState<SeriesEpisode[]>([]);
-  const [openSeasons, setOpenSeasons] = useState<Set<number>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  // Bumped by the retry button to re-run the fetch effect.
-  const [reloadKey, setReloadKey] = useState(0);
+  const subject: TitleArtSubject = useMemo(
+    () => ({ kind: "series", sourceId: series.sourceId, seriesTitle: series.seriesTitle }),
+    [series.sourceId, series.seriesTitle]
+  );
+  const art = useTitleArtFor(profileId, subject);
+  const { data: facts } = useTitleFacts(profileId, subject);
+  const all = useSeriesEpisodes(profileId, series);
+  const { data: resume } = useSeriesResume(profileId, series);
 
+  // Seasons the provider actually has, regular seasons first, specials last.
+  const seasons = useMemo(() => {
+    const numbers = [...new Set((all.data ?? []).map((e) => e.season))];
+    return numbers.sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
+  }, [all.data]);
+  const [season, setSeason] = useState<number | null>(null);
+  // Open on the season being watched, else the first one.
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    // The first open of an Xtream series fetches its episodes from the
-    // provider (get_series_info), so this can take a moment.
-    invoke<SeriesEpisode[]>("list_series_episodes", {
-      profileId,
-      sourceId: series.sourceId,
-      seriesTitle: series.seriesTitle,
-    })
-      .then((eps) => {
-        if (cancelled) return;
-        setEpisodes(eps);
-        // Open the lowest season by default so episodes are visible immediately.
-        const first = eps.reduce<number | null>(
-          (min, e) => (min === null || e.season < min ? e.season : min),
-          null
-        );
-        setOpenSeasons(first === null ? new Set() : new Set([first]));
-      })
-      .catch((e) => {
-        if (!cancelled) setError(typeof e === "string" ? e : "Couldn't load episodes.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [profileId, series, reloadKey]);
+    if (season !== null && seasons.includes(season)) return;
+    const preferred = resume?.season ?? null;
+    setSeason(preferred !== null && seasons.includes(preferred) ? preferred : (seasons[0] ?? null));
+  }, [seasons, resume?.season, season]);
+  const episodes = useSeasonEpisodes(profileId, series, season);
 
-  const bySeasonMap = new Map<number, SeriesEpisode[]>();
-  for (const ep of episodes) {
-    const list = bySeasonMap.get(ep.season) ?? [];
-    list.push(ep);
-    bySeasonMap.set(ep.season, list);
-  }
-  const seasons = Array.from(bySeasonMap.keys()).sort((a, b) => a - b);
-  // Derive counts from the fetched episodes — the catalog summary reports 0 for
-  // not-yet-fetched Xtream series.
-  const seasonCount = seasons.length || series.seasonCount;
-  const episodeCount = episodes.length || series.episodeCount;
+  const first = useMemo(
+    () => (all.data ?? []).find((e) => e.season === seasons[0]),
+    [all.data, seasons]
+  );
+  const action = seriesPrimaryAction(resume, first);
+  const seasonName = (n: number) =>
+    facts?.seasons.find((s) => s.number === n)?.name ?? (n === 0 ? "Specials" : `Season ${n}`);
+
+  const playEpisode = (ep: EpisodeView) =>
+    onPlayEpisode({ id: ep.id, label: episodeViewLabel(ep, true), stillUrl: ep.stillUrl });
+  const playAction = () => {
+    if (!action) return;
+    const listed = episodes.data?.find((e) => e.id === action.episodeId);
+    if (listed) return playEpisode(listed);
+    const label =
+      resume?.episodeTitle && resume.mediaId === action.episodeId
+        ? `${action.episodeCode} — ${resume.episodeTitle}`
+        : action.episodeCode;
+    onPlayEpisode({ id: action.episodeId, label, stillUrl: resume?.posterUrl ?? null });
+  };
+
+  const next = facts?.nextEpisode;
+  const note = next
+    ? `New episode S${String(next.season).padStart(2, "0")}E${String(next.episode).padStart(2, "0")} · ${formatDate(next.airDate)}`
+    : null;
 
   return (
-    <div className="flex flex-col gap-4">
-      <button
-        onClick={onBack}
-        className="flex items-center gap-2 text-sm text-white/50 hover:text-white transition-colors w-fit"
-      >
-        ← Back
-      </button>
-
-      <div className="flex items-start gap-4">
-        <div className="h-28 w-20 flex-shrink-0 overflow-hidden rounded-lg">
-          <Artwork
-            src={series.posterUrl}
-            alt={series.seriesTitle}
-            loading="lazy"
-            decoding="async"
-            className="h-full w-full object-cover"
-            fallback={<PosterFallback title={series.displayTitle} />}
+    <TitleHero
+      title={series.displayTitle}
+      posterUrl={series.posterUrl}
+      backdropUrl={art?.backdropUrl ?? series.backdropUrl}
+      logoUrl={art?.logoUrl}
+      meta={metaLine(facts, {
+        kind: "series",
+        seasonCount: seasons.filter((s) => s > 0).length || series.seasonCount,
+        genre: series.category,
+      })}
+      tagline={facts?.tagline}
+      overview={series.overview ?? facts?.plot}
+      note={note}
+      onBack={onBack}
+      actions={
+        <>
+          <Button onClick={playAction} disabled={!action} className="gap-2">
+            <Play className="h-4 w-4 fill-current" /> {action?.label ?? "Play"}
+          </Button>
+          <TrailerButton url={facts?.trailerUrl} />
+          <WatchlistButton
+            inWatchlist={series.isInWatchlist}
+            onToggle={onToggleWatchlist}
+            label={series.displayTitle}
           />
-        </div>
-        <div className="flex flex-1 items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="font-display text-xl font-semibold text-white">{series.displayTitle}</h2>
-            <p className="text-sm text-white/50 mt-1">
-              {seasonCount} season{seasonCount !== 1 ? "s" : ""} · {episodeCount} episode
-              {episodeCount !== 1 ? "s" : ""}
-              {series.category ? ` · ${series.category}` : ""}
-            </p>
-            {series.overview && (
-              <p className="mt-2 line-clamp-3 max-w-xl text-sm leading-6 text-white/70">
-                {series.overview}
-              </p>
-            )}
+          <FavoriteButton
+            isFavorite={series.isFavorite}
+            onToggle={onToggleFavorite}
+            label={series.displayTitle}
+          />
+        </>
+      }
+    >
+      <CastStrip
+        cast={facts?.cast ?? []}
+        people={facts?.directors ?? []}
+        peopleLabel="Created by"
+      />
+
+      <section className="flex flex-col gap-3">
+        {all.isError ? (
+          <div className="flex flex-col items-start gap-3 rounded-xl bg-neutral-900 px-4 py-5">
+            <p className="text-sm text-white/70">Couldn't load episodes.</p>
+            <Button variant="secondary" size="sm" onClick={() => void all.refetch()}>
+              Retry
+            </Button>
           </div>
-          <div className="flex flex-shrink-0 items-center gap-2">
-            <WatchlistButton
-              inWatchlist={series.isInWatchlist}
-              onToggle={onToggleWatchlist}
-              label={series.seriesTitle}
-            />
-            <FavoriteButton
-              isFavorite={series.isFavorite}
-              onToggle={onToggleFavorite}
-              label={series.seriesTitle}
-            />
-          </div>
-        </div>
-      </div>
-
-      {loading && (
-        <div className="flex items-center gap-3 px-1 py-8 text-sm text-white/50">
-          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white/70" />
-          Loading episodes…
-        </div>
-      )}
-
-      {!loading && error && (
-        <div className="flex flex-col items-start gap-3 rounded-xl bg-neutral-900 px-4 py-5">
-          <p className="text-sm text-white/70">{error}</p>
-          <button
-            onClick={() => setReloadKey((k) => k + 1)}
-            className="rounded-lg bg-white/10 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/20"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
-      {!loading && !error && episodes.length === 0 && (
-        <p className="px-1 py-8 text-sm text-white/50">No episodes available for this series.</p>
-      )}
-
-      <div className="flex flex-col gap-2">
-        {seasons.map((season) => {
-          const eps = bySeasonMap.get(season) ?? [];
-          const isOpen = openSeasons.has(season);
-          return (
-            <div
-              key={season}
-              className="overflow-hidden rounded-xl border border-white/5 bg-white/[0.02]"
-            >
-              <button
-                className={cn(
-                  "flex w-full items-center justify-between px-4 py-3 text-sm font-medium transition-colors",
-                  isOpen ? "text-white" : "text-white/85 hover:bg-white/[0.04]"
-                )}
-                onClick={() =>
-                  setOpenSeasons((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(season)) next.delete(season);
-                    else next.add(season);
-                    return next;
-                  })
-                }
-              >
-                <span>
-                  Season {season}
-                  <span className="ml-2 text-xs font-normal text-white/40">{eps.length} ep</span>
-                </span>
-                <ChevronDown
-                  className={cn(
-                    "h-4 w-4 text-white/50 transition-transform duration-200",
-                    isOpen && "rotate-180 text-primary"
-                  )}
-                  aria-hidden
-                />
-              </button>
-              <AnimatePresence initial={false}>
-                {isOpen && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.2, ease: EASE_ENTER }}
-                    className="overflow-hidden"
+        ) : (
+          <>
+            {seasons.length > 1 && (
+              <div role="tablist" aria-label="Seasons" className="flex flex-wrap gap-2">
+                {seasons.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    role="tab"
+                    aria-selected={n === season}
+                    onClick={() => setSeason(n)}
+                    className={cn(
+                      "rounded-full px-3 py-1 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      n === season
+                        ? "bg-white text-neutral-950"
+                        : "bg-white/10 text-white/75 hover:bg-white/20"
+                    )}
                   >
-                    <div className="divide-y divide-white/5">
-                      {eps.map((ep) => (
-                        <button
-                          key={ep.id}
-                          onClick={() => onPlayEpisode(ep)}
-                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-white/[0.04] focus:outline-none focus:bg-white/[0.04]"
-                          aria-label={`Play ${series.seriesTitle} S${season} E${ep.episode}`}
-                        >
-                          <Artwork
-                            src={ep.logoUrl}
-                            alt=""
-                            loading="lazy"
-                            decoding="async"
-                            className="w-16 h-9 object-cover rounded flex-shrink-0 bg-neutral-800"
-                            fallback={
-                              <div className="w-16 h-9 rounded bg-neutral-800 flex-shrink-0" />
-                            }
-                          />
-                          <span className="text-sm text-white/80">{episodeLabel(ep, false)}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+                    {seasonName(n)}
+                  </button>
+                ))}
+              </div>
+            )}
+            {seasons.length === 1 && season !== null && (
+              <h2 className="text-sm font-medium text-white/85">{seasonName(season)}</h2>
+            )}
+            <EpisodeList
+              episodes={episodes.data}
+              loading={all.isLoading || episodes.isLoading}
+              currentId={action?.episodeId}
+              onPlay={playEpisode}
+            />
+          </>
+        )}
+      </section>
+    </TitleHero>
   );
 }

@@ -382,3 +382,66 @@ export interface TitleArt {
   /** Text-free backdrop; null keeps the title's existing backdrop. */
   backdropUrl: string | null;
 }
+
+// ── Detail-page facts (M4.6: TMDB + provider) ─────────────────────────────────
+// Mirror `commands::title_facts::{TitleFactsView, EpisodeView}`.
+
+export interface CastEntry {
+  name: string;
+  character?: string | null;
+  profileUrl?: string | null;
+}
+
+export interface SeasonSummary {
+  number: number;
+  name: string;
+  episodeCount: number;
+  airDate?: string | null;
+  posterUrl?: string | null;
+}
+
+export interface UpcomingEpisode {
+  season: number;
+  episode: number;
+  name?: string | null;
+  airDate: string;
+}
+
+export interface TitleFactsView {
+  tagline: string | null;
+  runtimeMin: number | null;
+  /** Out of 10. */
+  rating: number | null;
+  ratingSource: "tmdb" | "provider" | null;
+  certification: string | null;
+  /** YouTube watch URL, opened in the browser via `open_trailer`. */
+  trailerUrl: string | null;
+  cast: CastEntry[];
+  directors: string[];
+  studios: string[];
+  status: string | null;
+  firstYear: number | null;
+  lastYear: number | null;
+  seasons: SeasonSummary[];
+  numberOfEpisodes: number | null;
+  nextEpisode: UpcomingEpisode | null;
+  collection: { id: number; name: string } | null;
+  /** Provider plot (used when there is no TMDB overview). */
+  plot: string | null;
+  genre: string | null;
+}
+
+export interface EpisodeView {
+  id: number;
+  season: number;
+  episode: number;
+  numbering: SeriesEpisode["numbering"];
+  title: string | null;
+  overview: string | null;
+  stillUrl: string | null;
+  airDate: string | null;
+  runtimeMin: number | null;
+  positionSec: number;
+  durationSec: number | null;
+  completed: boolean;
+}

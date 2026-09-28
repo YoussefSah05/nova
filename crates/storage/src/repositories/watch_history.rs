@@ -477,6 +477,21 @@ impl<'a> WatchHistoryRepository<'a> {
             .collect())
     }
 
+    /// Where a series continues: its latest unfinished episode, or the one
+    /// after its latest finished episode (`up_next`). `None` when nothing was
+    /// watched or the last watched episode was the final one.
+    pub async fn series_resume(
+        &self,
+        source_id: i64,
+        series_title: &str,
+    ) -> Result<Option<ContinueWatchingItem>, StorageError> {
+        Ok(self
+            .continue_series(source_id, Some(series_title), 1)
+            .await?
+            .into_iter()
+            .next())
+    }
+
     /// Progress of a series' episodes by episode row id:
     /// `(position_sec, duration_sec, completed)`.
     pub async fn episode_progress(
@@ -510,7 +525,7 @@ impl<'a> WatchHistoryRepository<'a> {
     ) -> Result<Vec<ContinueWatchingItem>, StorageError> {
         match section {
             ContinueSection::Movies => self.continue_movies(source_id, limit).await,
-            ContinueSection::Series => self.continue_series(source_id, limit).await,
+            ContinueSection::Series => self.continue_series(source_id, None, limit).await,
             ContinueSection::Live => self.recent_channels(source_id, limit).await,
         }
     }
@@ -567,6 +582,7 @@ impl<'a> WatchHistoryRepository<'a> {
     async fn continue_series(
         &self,
         source_id: i64,
+        series: Option<&str>,
         limit: i64,
     ) -> Result<Vec<ContinueWatchingItem>, StorageError> {
         let rows = sqlx::query!(
@@ -589,8 +605,11 @@ impl<'a> WatchHistoryRepository<'a> {
                LEFT JOIN series_meta sm
                  ON sm.source_id = e.source_id AND sm.series_title = e.series_title
                WHERE wh.media_kind = 'episode' AND e.source_id = ?
+                 AND (? IS NULL OR e.series_title = ?)
                ORDER BY wh.watched_at DESC, e.season DESC, e.episode DESC"#,
             source_id,
+            series,
+            series,
         )
         .fetch_all(self.pool)
         .await?;

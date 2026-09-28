@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use nova_core::catalog::EntityId;
-use nova_core::{EpisodeNumberingKind, ProviderFacts, SeriesEpisode};
+use nova_core::{ContinueWatchingItem, EpisodeNumberingKind, ProviderFacts, SeriesEpisode};
 use nova_enrich::tmdb_facts::{
     parse_movie_facts, parse_season, parse_tv_facts, CastEntry, CollectionRef, SeasonSummary,
     TitleFacts, TmdbEpisode, UpcomingEpisode, FACTS_VERSION,
@@ -431,6 +431,40 @@ pub async fn get_season_episodes(
     Ok(merge_season(&provider, &facts, &tmdb, &progress))
 }
 
+/// Where a series continues (see `WatchHistoryRepository::series_resume`).
+#[tauri::command]
+pub async fn get_series_resume(
+    profile_id: String,
+    source_id: i64,
+    series_title: String,
+    state: State<'_, AppState>,
+) -> Result<Option<ContinueWatchingItem>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    WatchHistoryRepository::new(&pool)
+        .series_resume(source_id, &series_title)
+        .await
+        .map_err(Into::into)
+}
+
+/// The canonical watch URL of a YouTube trailer link, or `None` for anything
+/// else (the only external pages Nova opens).
+pub(crate) fn trailer_watch_url(url: &str) -> Option<String> {
+    let id = nova_core::provider_facts::youtube_id(url)?;
+    Some(format!("https://www.youtube.com/watch?v={id}"))
+}
+
+/// Open a trailer in the default browser. Only YouTube trailers are opened.
+#[tauri::command]
+pub async fn open_trailer(url: String, app: tauri::AppHandle) -> Result<(), ApiError> {
+    use tauri_plugin_shell::ShellExt;
+    let url = trailer_watch_url(&url)
+        .ok_or_else(|| ApiError::InvalidInput("not a trailer link".into()))?;
+    #[allow(deprecated)] // `open` is the shell plugin's URL opener in this version
+    app.shell()
+        .open(url, None)
+        .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
 /// Longest wait for a provider's movie details; the page renders without them.
 const VOD_INFO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
 
@@ -621,6 +655,20 @@ mod tests {
         // Placeholder numbering never borrows TMDB episode 3's name.
         assert_eq!(season[2].title.as_deref(), Some("Provider 3"));
         assert_eq!(season[2].still_url.as_deref(), Some("https://still/3.jpg"));
+    }
+
+    #[test]
+    fn only_youtube_trailers_are_opened() {
+        assert_eq!(
+            trailer_watch_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=x").as_deref(),
+            Some("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        );
+        assert_eq!(
+            trailer_watch_url("https://evil.example/watch?v=dQw4w9WgXcQ"),
+            None
+        );
+        assert_eq!(trailer_watch_url("file:///etc/passwd"), None);
+        assert_eq!(trailer_watch_url("javascript:alert(1)"), None);
     }
 
     #[test]

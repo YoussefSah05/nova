@@ -33,7 +33,13 @@ export function useTitleArt(
   profileId: string,
   item: BrowseItem | null | undefined
 ): TitleArt | undefined {
-  const subject = titleArtSubject(item);
+  return useTitleArtFor(profileId, titleArtSubject(item));
+}
+
+export function useTitleArtFor(
+  profileId: string,
+  subject: TitleArtSubject | null
+): TitleArt | undefined {
   const { data } = useQuery({
     queryKey: ["title-art", profileId, subject ? subjectKey(subject) : null],
     queryFn: () => invoke<TitleArt>("get_title_art", { profileId, subject }),

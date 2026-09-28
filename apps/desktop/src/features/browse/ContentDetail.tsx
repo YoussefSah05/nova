@@ -1,7 +1,8 @@
-//! Per-content "starting screen" for movies (and the header reused by series):
-//! a backdrop hero with the TMDB overview/genres and the primary actions — Play,
-//! preferred-audio language, Translate (coming later), favourite / watchlist, and
-//! a version picker when the catalog had quality/backup duplicates.
+//! Per-content "starting screen" for movies (the frame is shared with series,
+//! `detail/TitleHero`): backdrop, title logo, facts (rating, runtime, age
+//! rating, cast), and the actions: Play/Resume, versions, preferred audio,
+//! trailer, Translate (coming later), watchlist and favourite. Live brand
+//! bundles get a channel grid instead.
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -18,17 +19,17 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
-import { AmbientGlow, useAmbientColor } from "@/lib/ambient";
-import { motion, useReducedMotion, EASE_ENTER } from "@/lib/motion";
 import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
 import { fetchChannelsInGroup, type BrowseItem } from "./queries";
 import type { CanonicalMediaDetail } from "@/types";
-import { Artwork } from "@/components/Artwork";
-import { useArtworkSrc } from "@/lib/artwork";
-import { TitleLogo } from "./TitleLogo";
-import { useTitleArt } from "./titleArt";
+import { titleArtSubject, useTitleArt } from "./titleArt";
 import { ChannelTile } from "./ChannelTile";
+import { CastStrip } from "./detail/CastStrip";
+import { TitleHero } from "./detail/TitleHero";
+import { TrailerButton } from "./detail/TrailerButton";
+import { useTitleFacts } from "./detail/data";
+import { metaLine } from "./detail/meta";
 
 /// Preferred audio language choices. `null` = keep the stream's original track.
 const AUDIO_LANGS: { value: string | null; label: string }[] = [
@@ -153,7 +154,6 @@ export function ContentDetail({
   onToggleWatchlist,
 }: ContentDetailProps) {
   const { settings, setSettings } = useProfileSettings(profileId);
-  const reduce = useReducedMotion();
   // Canonical movie detail (entity-owned resume state); the card's summary
   // renders immediately and the detail refines it when it arrives.
   const { data: detail } = useQuery({
@@ -165,10 +165,10 @@ export function ContentDetail({
   });
   const movie = detail ?? item.movie;
   const art = useTitleArt(profileId, item);
-  const backdrop =
-    art?.backdropUrl ?? movie?.backdropUrl ?? item.vod?.backdropUrl ?? item.posterUrl;
-  const [usableBackdrop, onBackdropError] = useArtworkSrc(backdrop);
-  const ambient = useAmbientColor(usableBackdrop);
+  const { data: facts } = useTitleFacts(
+    profileId,
+    item.kind === "movie" ? titleArtSubject(item) : null
+  );
 
   // Live brand bundle → channel grid; movies → the overview hero below.
   if (item.kind === "live") {
@@ -191,73 +191,19 @@ export function ContentDetail({
     AUDIO_LANGS.find((l) => l.value === settings.preferredAudioLang)?.label ?? "Original";
 
   return (
-    <div className="relative min-h-screen bg-neutral-950 text-white">
-      <DragRegion />
-      {/* Backdrop */}
-      <div className="absolute inset-x-0 top-0 h-[60vh] overflow-hidden">
-        {usableBackdrop ? (
-          <motion.img
-            src={usableBackdrop}
-            alt=""
-            onError={onBackdropError}
-            decoding="async"
-            className="h-full w-full object-cover object-top"
-            initial={reduce ? false : { scale: 1.06, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.6, ease: EASE_ENTER }}
-          />
-        ) : (
-          <div className="h-full w-full bg-gradient-to-br from-primary/20 via-neutral-900 to-neutral-950" />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/60 to-transparent" />
-        <div className="absolute inset-0 bg-gradient-to-r from-neutral-950/85 to-transparent" />
-      </div>
-
-      {/* Ambient tint from the artwork's own palette — a coloured aura over the
-          darkened hero that bleeds down into the page (screen-blended so it adds
-          light rather than covering content). */}
-      <AmbientGlow color={ambient} className="h-[70vh] mix-blend-screen" />
-
-      <motion.div
-        className="relative z-10 flex flex-col gap-6 px-8 pb-12 pt-10"
-        initial={reduce ? false : { y: 16, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.4, ease: EASE_ENTER, delay: 0.08 }}
-      >
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onBack}
-          className="w-fit gap-2 text-white/70 hover:text-white"
-        >
-          <ArrowLeft className="h-4 w-4" /> Back
-        </Button>
-
-        <div className="mt-[34vh] flex items-end gap-5">
-          <Artwork
-            src={item.posterUrl}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            className="hidden h-52 w-36 shrink-0 rounded-xl object-cover shadow-2xl sm:block"
-          />
-          <div className="min-w-0 max-w-2xl">
-            <TitleLogo
-              title={item.title}
-              logoUrl={art?.logoUrl}
-              className="font-display text-3xl font-semibold tracking-tight drop-shadow-lg md:text-4xl"
-            />
-            {item.subtitle && <p className="mt-2 text-sm text-white/70">{item.subtitle}</p>}
-            {overview && (
-              <p className="mt-3 line-clamp-4 max-w-xl text-sm leading-6 text-white/75">
-                {overview}
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="flex flex-wrap items-center gap-3">
+    <TitleHero
+      title={item.title}
+      posterUrl={item.posterUrl}
+      backdropUrl={
+        art?.backdropUrl ?? movie?.backdropUrl ?? item.vod?.backdropUrl ?? item.posterUrl
+      }
+      logoUrl={art?.logoUrl}
+      meta={metaLine(facts, { kind: "movie", year: movie?.year, genre: movie?.category })}
+      tagline={facts?.tagline}
+      overview={overview ?? facts?.plot}
+      onBack={onBack}
+      actions={
+        <>
           {/* Version picker (quality/backup variants) sits next to Play. */}
           {versions.length > 1 ? (
             <div className="flex items-center overflow-hidden rounded-md">
@@ -308,6 +254,8 @@ export function ContentDetail({
             </DropdownMenuContent>
           </DropdownMenu>
 
+          <TrailerButton url={facts?.trailerUrl} />
+
           {/* Translation arrives in a later phase. */}
           <Button variant="secondary" disabled className="gap-2 opacity-60">
             <Languages className="h-4 w-4" /> Translate
@@ -324,8 +272,14 @@ export function ContentDetail({
             onToggle={(next) => onToggleFavorite(item, next)}
             label={item.title}
           />
-        </div>
-      </motion.div>
-    </div>
+        </>
+      }
+    >
+      <CastStrip
+        cast={facts?.cast ?? []}
+        people={facts?.directors ?? []}
+        peopleLabel="Directed by"
+      />
+    </TitleHero>
   );
 }

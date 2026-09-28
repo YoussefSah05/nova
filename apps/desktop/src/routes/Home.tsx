@@ -45,7 +45,7 @@ import { PlayerModal, type PlayMedia } from "@/features/player/PlayerModal";
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
 import { useAccentTheme } from "@/lib/useAccentTheme";
 import { cn } from "@/lib/utils";
-import { episodeLabel } from "@/features/player/episodeMedia";
+import { invalidateDetailProgress } from "@/features/browse/detail/data";
 
 type Tab = BrowseTab;
 
@@ -380,6 +380,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   const closePlayer = useCallback(() => {
     setPlayingMedia(null);
     void qc.invalidateQueries({ queryKey: browseKeys.continueWatching(profile.id) });
+    invalidateDetailProgress(qc, profile.id);
   }, [qc, profile.id]);
 
   const activate = useCallback(
@@ -468,25 +469,22 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
   if (selectedSeries) {
     return (
       <>
-        <div className="relative min-h-screen bg-neutral-950 p-6 pt-10">
-          <DragRegion />
-          <SeriesDetail
-            profileId={profile.id}
-            series={selectedSeries}
-            onBack={() => setSelectedSeries(null)}
-            onToggleFavorite={(next) => toggleSeriesFavorite(selectedSeries, next)}
-            onToggleWatchlist={(next) => toggleSeriesWatchlist(selectedSeries, next)}
-            onPlayEpisode={(episode) =>
-              setPlayingMedia({
-                kind: "episode",
-                id: episode.id,
-                title: selectedSeries.displayTitle,
-                subtitle: episodeLabel(episode),
-                posterUrl: episode.logoUrl ?? selectedSeries.posterUrl,
-              })
-            }
-          />
-        </div>
+        <SeriesDetail
+          profileId={profile.id}
+          series={selectedSeries}
+          onBack={() => setSelectedSeries(null)}
+          onToggleFavorite={(next) => toggleSeriesFavorite(selectedSeries, next)}
+          onToggleWatchlist={(next) => toggleSeriesWatchlist(selectedSeries, next)}
+          onPlayEpisode={(episode) =>
+            setPlayingMedia({
+              kind: "episode",
+              id: episode.id,
+              title: selectedSeries.displayTitle,
+              subtitle: episode.label,
+              posterUrl: episode.stillUrl ?? selectedSeries.posterUrl,
+            })
+          }
+        />
         {playingMedia && (
           <PlayerModal
             profileId={profile.id}

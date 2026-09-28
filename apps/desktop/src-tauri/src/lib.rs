@@ -207,6 +207,8 @@ pub fn run() {
             commands::title_art::get_title_art,
             commands::title_facts::get_title_facts,
             commands::title_facts::get_season_episodes,
+            commands::title_facts::get_series_resume,
+            commands::title_facts::open_trailer,
             commands::channel_logos::match_channel_logos,
             commands::channel_logos::clear_channel_logo_matches,
             commands::channel_logos::get_logo_directory_status,
