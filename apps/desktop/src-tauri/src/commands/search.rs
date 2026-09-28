@@ -109,6 +109,27 @@ async fn embed_query_vec(lease: ModelLease, query: String) -> Result<Vec<f32>, A
         .map_err(|e| ApiError::Internal(e.to_string()))?
 }
 
+/// Run an optional semantic leg. Any failure — inference, vector load, a
+/// busy or offline model — yields no semantic hits, so the caller still
+/// returns its lexical results: exact and FTS search must never depend on the
+/// embedding model (bootstrap §22, §45).
+async fn semantic_leg<T>(
+    what: &'static str,
+    leg: impl std::future::Future<Output = Result<Vec<T>, ApiError>>,
+) -> Vec<T> {
+    match leg.await {
+        Ok(hits) => hits,
+        Err(error) => {
+            tracing::warn!(
+                leg = what,
+                ?error,
+                "semantic search leg failed; lexical results only"
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Dedupe keys preserving first-seen order — turns hit lists (which may repeat a
 /// key, e.g. a segment matched as both source + translation, or several channels
 /// in one brand group) into one ranked list for RRF.
@@ -233,26 +254,13 @@ pub async fn search_transcript(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    // Semantic leg (optional). Lexical-only when the model isn't installed.
-    let sem_ids: Vec<i64> = match semantic_embedder(&app, &state).await {
-        Some(embedder) => {
-            ensure_segments_embedded(&pool, transcript_id, &embedder).await?;
-            let vectors = EmbeddingRepository::new(&pool)
-                .load_segments(transcript_id, MODEL_ID)
-                .await
-                .map_err(|e| ApiError::Internal(e.to_string()))?;
-            if vectors.is_empty() {
-                Vec::new()
-            } else {
-                let qvec = embed_query_vec(embedder, query.clone()).await?;
-                nova_search::top_k(&qvec, &vectors, 50)
-                    .into_iter()
-                    .map(|(id, _)| id)
-                    .collect()
-            }
-        }
-        None => Vec::new(),
-    };
+    // Semantic leg (optional). Lexical-only when the model isn't installed
+    // or fails.
+    let sem_ids = semantic_leg(
+        "transcript",
+        semantic_segment_ids(&app, &state, &pool, transcript_id, &query),
+    )
+    .await;
 
     if sem_ids.is_empty() {
         return Ok(fts_hits.into_iter().map(hit_to_dto).collect());
@@ -295,6 +303,33 @@ pub async fn search_transcript(
     Ok(out)
 }
 
+/// Transcript segments nearest to `query`, best first; embeds any segments
+/// not yet embedded. Empty when the model isn't installed.
+async fn semantic_segment_ids(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    pool: &SqlitePool,
+    transcript_id: i64,
+    query: &str,
+) -> Result<Vec<i64>, ApiError> {
+    let Some(embedder) = semantic_embedder(app, state).await else {
+        return Ok(Vec::new());
+    };
+    ensure_segments_embedded(pool, transcript_id, &embedder).await?;
+    let vectors = EmbeddingRepository::new(pool)
+        .load_segments(transcript_id, MODEL_ID)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if vectors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let qvec = embed_query_vec(embedder, query.to_string()).await?;
+    Ok(nova_search::top_k(&qvec, &vectors, 50)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect())
+}
+
 /// Hybrid catalog (movies) search: the LIKE lexical leg fused with a semantic
 /// leg (cosine over the catalog embeddings enrichment persisted) so a
 /// concept query — "space adventure" — surfaces thematically-matching titles,
@@ -335,8 +370,11 @@ pub async fn semantic_search_catalog(
     let lexical_ids = dedup_preserve_order(lexical.iter().map(|v| v.id));
 
     // Semantic leg (optional).
-    let sem_ids =
-        semantic_movie_rows(&app, &state, &pool, source_id, &q, (limit as usize).max(60)).await?;
+    let sem_ids = semantic_leg(
+        "catalog",
+        semantic_movie_rows(&app, &state, &pool, source_id, &q, (limit as usize).max(60)),
+    )
+    .await;
 
     let ordered: Vec<i64> = if sem_ids.is_empty() {
         lexical_ids
@@ -471,8 +509,25 @@ pub async fn search_movies(
     }
     let limit = limit.unwrap_or(60).clamp(1, 200) as usize;
     let pool = require_profile_pool(&profile_id, &state).await?;
-    let rows = semantic_movie_rows(&app, &state, &pool, source_id, &q, limit.max(60)).await?;
-    let canonical = CanonicalRepository::new(&pool);
+    let semantic = semantic_leg(
+        "movies",
+        semantic_movie_entities(&app, &state, &pool, source_id, &q, limit.max(60)),
+    )
+    .await;
+    rank_movie_search(&pool, source_id, &q, limit, &semantic).await
+}
+
+/// Canonical entities of the provider rows nearest to `query`, best first.
+async fn semantic_movie_entities(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    pool: &std::sync::Arc<SqlitePool>,
+    source_id: i64,
+    query: &str,
+    k: usize,
+) -> Result<Vec<EntityId>, ApiError> {
+    let rows = semantic_movie_rows(app, state, pool, source_id, query, k).await?;
+    let canonical = CanonicalRepository::new(pool);
     let mut semantic: Vec<EntityId> = Vec::with_capacity(rows.len());
     for row in rows {
         if let Some(entity) = canonical.entity_for_vod(row).await? {
@@ -481,7 +536,7 @@ pub async fn search_movies(
             }
         }
     }
-    rank_movie_search(&pool, source_id, &q, limit, &semantic).await
+    Ok(semantic)
 }
 
 /// Hybrid live-channel search. Channel vectors are keyed by raw channel id, but
@@ -523,41 +578,11 @@ pub async fn semantic_search_channels(
     let lexical_keys = dedup_preserve_order(lexical.iter().map(|g| g.group.clone()));
 
     // Semantic leg (optional) → map channel-id hits to their group keys.
-    let sem_keys: Vec<String> = match semantic_embedder(&app, &state).await {
-        Some(embedder) => {
-            let count = EmbeddingRepository::new(&pool)
-                .count_catalog(source_id, "live", MODEL_ID)
-                .await
-                .map_err(|e| ApiError::Internal(e.to_string()))?;
-            if count == 0 {
-                Vec::new()
-            } else {
-                let pool2 = pool.clone();
-                let vectors = state
-                    .catalog_vectors(|| async move {
-                        EmbeddingRepository::new(&pool2)
-                            .load_catalog(source_id, "live", MODEL_ID)
-                            .await
-                            .map_err(|e| e.to_string())
-                    })
-                    .await
-                    .map_err(ApiError::Internal)?;
-                let qvec = embed_query_vec(embedder, q.clone()).await?;
-                let ids: Vec<i64> = nova_search::top_k(&qvec, &vectors, (limit as usize).max(60))
-                    .into_iter()
-                    .map(|(id, _)| id)
-                    .collect();
-                let key_of: HashMap<i64, String> = ch
-                    .group_keys_for_ids(source_id, &ids)
-                    .await
-                    .map_err(|e| ApiError::Internal(e.to_string()))?
-                    .into_iter()
-                    .collect();
-                dedup_preserve_order(ids.into_iter().filter_map(|id| key_of.get(&id).cloned()))
-            }
-        }
-        None => Vec::new(),
-    };
+    let sem_keys = semantic_leg(
+        "channels",
+        semantic_channel_keys(&app, &state, &pool, source_id, &q, (limit as usize).max(60)),
+    )
+    .await;
 
     let ordered: Vec<String> = if sem_keys.is_empty() {
         lexical_keys
@@ -587,6 +612,51 @@ pub async fn semantic_search_channels(
         .into_iter()
         .filter_map(|k| by_key.remove(&k))
         .collect())
+}
+
+/// Brand-group keys of the live channels nearest to `query`, best first.
+async fn semantic_channel_keys(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    pool: &std::sync::Arc<SqlitePool>,
+    source_id: i64,
+    query: &str,
+    k: usize,
+) -> Result<Vec<String>, ApiError> {
+    let Some(embedder) = semantic_embedder(app, state).await else {
+        return Ok(Vec::new());
+    };
+    let count = EmbeddingRepository::new(pool)
+        .count_catalog(source_id, "live", MODEL_ID)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let pool2 = pool.clone();
+    let vectors = state
+        .catalog_vectors(|| async move {
+            EmbeddingRepository::new(&pool2)
+                .load_catalog(source_id, "live", MODEL_ID)
+                .await
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(ApiError::Internal)?;
+    let qvec = embed_query_vec(embedder, query.to_string()).await?;
+    let ids: Vec<i64> = nova_search::top_k(&qvec, &vectors, k)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    let key_of: HashMap<i64, String> = ChannelRepository::new(pool)
+        .group_keys_for_ids(source_id, &ids)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .into_iter()
+        .collect();
+    Ok(dedup_preserve_order(
+        ids.into_iter().filter_map(|id| key_of.get(&id).cloned()),
+    ))
 }
 
 /// Hybrid series search. Series are title-keyed, so vectors live in
@@ -628,24 +698,11 @@ pub async fn semantic_search_series(
     let lexical_keys = dedup_preserve_order(lexical.iter().map(|s| s.series_title.clone()));
 
     // Semantic leg (optional).
-    let sem_keys: Vec<String> = match semantic_embedder(&app, &state).await {
-        Some(embedder) => {
-            let vectors = series
-                .load_embeddings(source_id, MODEL_ID)
-                .await
-                .map_err(|e| ApiError::Internal(e.to_string()))?;
-            if vectors.is_empty() {
-                Vec::new()
-            } else {
-                let qvec = embed_query_vec(embedder, q.clone()).await?;
-                nova_search::top_k(&qvec, &vectors, (limit as usize).max(60))
-                    .into_iter()
-                    .map(|(title, _)| title)
-                    .collect()
-            }
-        }
-        None => Vec::new(),
-    };
+    let sem_keys = semantic_leg(
+        "series",
+        semantic_series_titles(&app, &state, &pool, source_id, &q, (limit as usize).max(60)),
+    )
+    .await;
 
     let ordered: Vec<String> = if sem_keys.is_empty() {
         lexical_keys
@@ -678,6 +735,32 @@ pub async fn semantic_search_series(
         .filter_map(|t| by_title.remove(&t))
         .collect();
     Ok(exact_titles_first(&q, fused))
+}
+
+/// Series titles nearest to `query`, best first.
+async fn semantic_series_titles(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    pool: &SqlitePool,
+    source_id: i64,
+    query: &str,
+    k: usize,
+) -> Result<Vec<String>, ApiError> {
+    let Some(embedder) = semantic_embedder(app, state).await else {
+        return Ok(Vec::new());
+    };
+    let vectors = SeriesRepository::new(pool)
+        .load_embeddings(source_id, MODEL_ID)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if vectors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let qvec = embed_query_vec(embedder, query.to_string()).await?;
+    Ok(nova_search::top_k(&qvec, &vectors, k)
+        .into_iter()
+        .map(|(title, _)| title)
+        .collect())
 }
 
 /// Series have no canonical search index yet: after fusion, move title-tier
@@ -951,6 +1034,20 @@ mod canonical_search_tests {
             .unwrap();
         assert_eq!(indexed, 1, "no document for the merged-away entity");
         assert_eq!(search(&db, db.b, "heat").await, vec!["Heat"]);
+    }
+
+    #[tokio::test]
+    async fn semantic_leg_passes_hits_through_and_swallows_failures() {
+        let ok = semantic_leg("test", async { Ok::<_, ApiError>(vec![3, 1, 2]) }).await;
+        assert_eq!(ok, vec![3, 1, 2]);
+        for error in [
+            ApiError::Internal("inference failed".into()),
+            ApiError::Conflict("model busy".into()),
+            ApiError::NotFound("vectors".into()),
+        ] {
+            let failed: Vec<i64> = semantic_leg("test", async { Err(error) }).await;
+            assert!(failed.is_empty());
+        }
     }
 
     #[tokio::test]
