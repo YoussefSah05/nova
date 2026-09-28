@@ -759,14 +759,18 @@ impl<'a> SeriesRepository<'a> {
     /// the decision (`entity_external_matches`, namespace `tmdb:tv`, with its
     /// provenance), so it survives refreshes and provider renames; the
     /// per-source `series_meta` row and the episodes' genre are its mirror.
-    /// A series with no entity binding (not expected after the series
-    /// compiler) is recorded on the mirror only.
+    /// A title no entity holds any more (renamed or delisted by an import
+    /// that ran while this decision was being made) is skipped; its series
+    /// is queued again under its current title.
     pub async fn apply_tmdb(
         &self,
         source_id: i64,
         updates: &[SeriesTmdbWrite],
     ) -> Result<(), StorageError> {
-        let mut tx = self.pool.begin().await?;
+        // Take the write lock up front: a read-first deferred transaction
+        // overlapping an import would fail with SQLITE_BUSY instead of
+        // waiting out the busy timeout.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let now = nova_core::now_ts();
         for u in updates {
             let entity = sqlx::query_scalar!(
@@ -778,7 +782,6 @@ impl<'a> SeriesRepository<'a> {
             .fetch_optional(&mut *tx)
             .await?;
             let Some(entity) = entity else {
-                Self::apply_tmdb_mirror_only_tx(&mut tx, source_id, u, now).await?;
                 continue;
             };
             // Matched means a TMDB id; anything else is unresolved.
@@ -839,90 +842,6 @@ impl<'a> SeriesRepository<'a> {
             crate::ExternalMatchRepository::mirror_series_tx(&mut tx, None, Some(&entity)).await?;
         }
         tx.commit().await?;
-        Ok(())
-    }
-
-    /// The pre-entity write path: `series_meta` plus the episodes' genre.
-    async fn apply_tmdb_mirror_only_tx(
-        tx: &mut Transaction<'_, Sqlite>,
-        source_id: i64,
-        u: &SeriesTmdbWrite,
-        now: i64,
-    ) -> Result<(), StorageError> {
-        let status = if u.matched { "matched" } else { "unmatched" };
-        let confidence = u.confidence_bp.map(i64::from);
-        let version = i64::from(u.matcher_version);
-        sqlx::query!(
-            "INSERT INTO series_meta
-               (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,
-                tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,
-                evidence_json, checked_at, original_title, title_language, tmdb_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(source_id, series_title) DO UPDATE SET
-               tmdb_id = excluded.tmdb_id,
-               canonical_title = excluded.canonical_title,
-               poster_url = excluded.poster_url,
-               backdrop_url = excluded.backdrop_url,
-               overview = excluded.overview,
-               tmdb_genres = excluded.tmdb_genres,
-               tmdb_status = excluded.tmdb_status,
-               match_method = excluded.match_method,
-               confidence_bp = excluded.confidence_bp,
-               matcher_version = excluded.matcher_version,
-               evidence_json = excluded.evidence_json,
-               checked_at = excluded.checked_at,
-               original_title = excluded.original_title,
-               title_language = excluded.title_language",
-            source_id,
-            u.series_title,
-            u.canonical_title,
-            u.poster_url,
-            u.backdrop_url,
-            u.overview,
-            u.genres_csv,
-            status,
-            u.method,
-            confidence,
-            version,
-            u.evidence_json,
-            now,
-            u.original_title,
-            u.title_language,
-            u.tmdb_id,
-        )
-        .execute(&mut **tx)
-        .await?;
-        // Same genre precedence as movies: a confident TMDB genre wins, an
-        // unresolved decision removes only a TMDB genre, and the browse
-        // facet `category` is recomputed as COALESCE(genre, collection).
-        let genre = u.primary_genre.as_deref();
-        let matched_flag: i64 = u.matched.into();
-        sqlx::query!(
-            "UPDATE series_episodes
-             SET genre = CASE WHEN ? IS NOT NULL THEN ?
-                              WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
-                              ELSE genre END,
-                 genre_source = CASE WHEN ? IS NOT NULL THEN 'tmdb'
-                                     WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
-                                     ELSE genre_source END,
-                 category = COALESCE(CASE WHEN ? IS NOT NULL THEN ?
-                                          WHEN ? = 0 AND genre_source = 'tmdb' THEN NULL
-                                          ELSE genre END,
-                                     collection, category)
-             WHERE source_id = ? AND series_title = ?",
-            genre,
-            genre,
-            matched_flag,
-            genre,
-            matched_flag,
-            genre,
-            genre,
-            matched_flag,
-            source_id,
-            u.series_title,
-        )
-        .execute(&mut **tx)
-        .await?;
         Ok(())
     }
 
@@ -1130,6 +1049,12 @@ mod tests {
         repo.insert_batch(&[episode(source, "BREAKING BAD"), episode(source, "Dark")])
             .await
             .unwrap();
+        // As an import does: bind the series to canonical entities.
+        let mut tx = pool.begin().await.unwrap();
+        crate::CanonicalRepository::compile_series_tx(&mut tx, source)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
         repo.apply_tmdb(
             source,
             &[SeriesTmdbWrite {

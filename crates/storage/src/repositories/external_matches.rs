@@ -444,20 +444,42 @@ impl<'a> ExternalMatchRepository<'a> {
     }
 
     /// Mirror a source's series matches after an import replaced its rows
-    /// (runs in the import transaction, after the series compiler).
+    /// (runs in the import transaction, after the series compiler), then
+    /// drop the source's `series_meta` rows no entity-owned match backs: the
+    /// old title of a renamed series, or a title no longer listed. Otherwise
+    /// a different series later listed under that title would show — and on
+    /// the next open inherit — the stale match.
     pub async fn mirror_series_for_source_tx(
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
     ) -> Result<(), StorageError> {
-        Self::mirror_series_tx(tx, Some(source_id), None).await
+        Self::mirror_series_tx(tx, Some(source_id), None).await?;
+        sqlx::query!(
+            r#"DELETE FROM series_meta
+               WHERE source_id = ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM series_bindings b
+                   JOIN entity_external_matches m
+                     ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'
+                   WHERE b.source_id = series_meta.source_id
+                     AND b.series_title = series_meta.series_title)"#,
+            source_id,
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
     }
 
     /// Upgrade step run after the series backfill: series matches decided
-    /// before they were entity-owned (per-source `series_meta` rows) become
-    /// `tmdb:tv` matches of the bound entity, with their provenance. Rows
+    /// before they were entity-owned (per-source `series_meta` rows, keyed by
+    /// title) become `tmdb:tv` matches of the entity now bound to that title,
+    /// with their provenance. They are **provisional**: carried over with
+    /// matcher version 0, so the match queue re-confirms each one (a legacy
+    /// row may describe a different series that used the title before). Rows
     /// that can't satisfy the entity schema (a "matched" row without an ID)
-    /// carry over as unresolved, so the queue re-decides them. Idempotent:
-    /// entities that already own a decision are skipped.
+    /// carry over as unresolved. Idempotent: entities that already own a
+    /// decision are skipped, and after an import only rows backed by an
+    /// entity-owned match remain in `series_meta`.
     pub async fn backfill_series_matches(&self) -> Result<u64, StorageError> {
         let copied = sqlx::query!(
             r#"INSERT INTO entity_external_matches
@@ -471,7 +493,7 @@ impl<'a> ExternalMatchRepository<'a> {
                            THEN CAST(sm.tmdb_id AS TEXT) END,
                       CASE WHEN sm.match_method = 'trusted_id' THEN 'trusted_id' ELSE 'search' END,
                       CASE WHEN sm.confidence_bp BETWEEN 0 AND 10000 THEN sm.confidence_bp END,
-                      COALESCE(sm.matcher_version, 0),
+                      0,
                       COALESCE(sm.evidence_json, '{}'),
                       CASE WHEN sm.tmdb_status = 'matched' AND sm.tmdb_id IS NOT NULL
                            THEN sm.canonical_title END,

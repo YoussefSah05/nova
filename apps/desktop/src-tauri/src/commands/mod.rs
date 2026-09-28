@@ -2670,6 +2670,141 @@ mod stabilization_tests {
     }
 
     #[tokio::test]
+    async fn a_new_series_under_an_old_title_does_not_inherit_its_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.db");
+        let pool = open_db(&path).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        import(
+            pool.clone(),
+            id,
+            vec![Ok(episode_entry("FR Dark", 0, 0, "xtream://series/42"))],
+            ImportMode::Append,
+        )
+        .await;
+        let repo = SeriesRepository::new(&pool);
+        repo.apply_tmdb(id, &[tv_match("FR Dark", 70523, "Dark")])
+            .await
+            .unwrap();
+        // Series 42 is renamed; a different series 77 takes its old title.
+        import(
+            pool.clone(),
+            id,
+            vec![
+                Ok(episode_entry("Dark", 0, 0, "xtream://series/42")),
+                Ok(episode_entry("FR Dark", 0, 0, "xtream://series/77")),
+            ],
+            ImportMode::Replace,
+        )
+        .await;
+        let check = |pool: Arc<sqlx::SqlitePool>| async move {
+            let list = SeriesRepository::new(&pool)
+                .list_series(id, None, None, false, false, ContentSort::Default, 10, 0)
+                .await
+                .unwrap();
+            let by = |t: &str| list.iter().find(|s| s.series_title == t).unwrap().clone();
+            assert_eq!(by("Dark").canonical_title.as_deref(), Some("Dark"));
+            assert_eq!(by("FR Dark").canonical_title, None, "no stale match shown");
+            let queued = SeriesRepository::new(&pool)
+                .list_for_tmdb(id, 3, 0, "en-US")
+                .await
+                .unwrap();
+            assert_eq!(
+                queued
+                    .iter()
+                    .map(|q| q.series_title.as_str())
+                    .collect::<Vec<_>>(),
+                ["FR Dark"],
+                "the newcomer is matched on its own"
+            );
+        };
+        check(pool.clone()).await;
+        // Reopening must not promote a stale row onto the newcomer's entity.
+        pool.close().await;
+        let reopened = open_db(&path).await;
+        check(reopened.clone()).await;
+        let owned: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM entity_external_matches WHERE namespace = 'tmdb:tv'",
+        )
+        .fetch_one(&*reopened)
+        .await
+        .unwrap();
+        assert_eq!(owned, 1, "only series 42 owns a match");
+    }
+
+    #[tokio::test]
+    async fn an_unresolved_decision_clears_the_series_mirror() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        import(
+            pool.clone(),
+            id,
+            vec![Ok(episode_entry("Dark", 0, 0, "xtream://series/42"))],
+            ImportMode::Append,
+        )
+        .await;
+        let repo = SeriesRepository::new(&pool);
+        repo.apply_tmdb(id, &[tv_match("Dark", 70523, "Dark")])
+            .await
+            .unwrap();
+        let unresolved = nova_storage::SeriesTmdbWrite {
+            series_title: "Dark".into(),
+            matched: false,
+            method: "search",
+            matcher_version: 4,
+            evidence_json: "{}".into(),
+            ..Default::default()
+        };
+        repo.apply_tmdb(id, &[unresolved]).await.unwrap();
+        let mirror: (Option<String>, Option<i64>, String) = sqlx::query_as(
+            "SELECT canonical_title, tmdb_id, tmdb_status FROM series_meta WHERE series_title = 'Dark'",
+        )
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(mirror, (None, None, "unmatched".into()));
+        let genre: (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT genre, genre_source FROM series_episodes WHERE series_title = 'Dark'",
+        )
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(genre, (None, None), "only the TMDB genre is removed");
+    }
+
+    #[tokio::test]
+    async fn a_decision_for_a_title_no_series_holds_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        // Renamed by an import while this decision was being made.
+        SeriesRepository::new(&pool)
+            .apply_tmdb(id, &[tv_match("Gone", 1, "Gone")])
+            .await
+            .unwrap();
+        let rows: (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM series_meta), (SELECT COUNT(*) FROM entity_external_matches)",
+        )
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, (0, 0), "no orphan mirror row to promote later");
+    }
+
+    #[tokio::test]
     async fn movie_user_state_apis_refuse_a_series_entity() {
         let dir = tempfile::tempdir().unwrap();
         let pool = open_db(&dir.path().join("p.db")).await;

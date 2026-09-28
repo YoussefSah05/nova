@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO entity_external_matches\n                   (entity_id, namespace, status, external_id, method, confidence_bp,\n                    matcher_version, evidence_json, canonical_title, poster_url, backdrop_url,\n                    overview, genres, primary_genre, checked_at, original_title, title_language)\n               SELECT b.entity_id, 'tmdb:tv',\n                      CASE WHEN sm.tmdb_status = 'matched' AND sm.tmdb_id IS NOT NULL\n                           THEN 'matched' ELSE 'unresolved' END,\n                      CASE WHEN sm.tmdb_status = 'matched' AND sm.tmdb_id IS NOT NULL\n                           THEN CAST(sm.tmdb_id AS TEXT) END,\n                      CASE WHEN sm.match_method = 'trusted_id' THEN 'trusted_id' ELSE 'search' END,\n                      CASE WHEN sm.confidence_bp BETWEEN 0 AND 10000 THEN sm.confidence_bp END,\n                      0,\n                      COALESCE(sm.evidence_json, '{}'),\n                      CASE WHEN sm.tmdb_status = 'matched' AND sm.tmdb_id IS NOT NULL\n                           THEN sm.canonical_title END,\n                      sm.poster_url, sm.backdrop_url, sm.overview, sm.tmdb_genres,\n                      CASE WHEN instr(sm.tmdb_genres, ', ') > 0\n                           THEN substr(sm.tmdb_genres, 1, instr(sm.tmdb_genres, ', ') - 1)\n                           ELSE NULLIF(sm.tmdb_genres, '') END,\n                      COALESCE(sm.checked_at, 0), sm.original_title, sm.title_language\n               FROM series_meta sm\n               JOIN series_bindings b\n                 ON b.source_id = sm.source_id AND b.series_title = sm.series_title\n               WHERE sm.tmdb_status IS NOT NULL\n                 AND NOT EXISTS (SELECT 1 FROM entity_external_matches x\n                                 WHERE x.entity_id = b.entity_id AND x.namespace = 'tmdb:tv')\n               ON CONFLICT(entity_id, namespace) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "b0258681f57b49e776eb36ee3c424dfb40e6c965fc22f1d323b4baa685bb5e64"
+}

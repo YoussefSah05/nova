@@ -451,6 +451,14 @@ async fn upgrade_to_canonical_series_keeps_movie_identity_and_seeds_series() {
                 ("Lost".into(), "unresolved".into(), None, None)
             ]
         );
+        // Carried-over decisions are provisional: queued for re-confirmation.
+        let queued = nova_storage::SeriesRepository::new(&upgraded)
+            .list_for_tmdb(1, 3, i64::MIN, "en-US")
+            .await
+            .unwrap();
+        let mut titles: Vec<_> = queued.iter().map(|q| q.series_title.as_str()).collect();
+        titles.sort();
+        assert_eq!(titles, ["Dark", "Lost", "Ozark"]);
         let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
             .fetch_one(&upgraded)
             .await

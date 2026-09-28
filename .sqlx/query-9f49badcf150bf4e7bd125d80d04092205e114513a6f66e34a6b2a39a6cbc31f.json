@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM series_meta\n               WHERE source_id = ?\n                 AND NOT EXISTS (\n                   SELECT 1 FROM series_bindings b\n                   JOIN entity_external_matches m\n                     ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'\n                   WHERE b.source_id = series_meta.source_id\n                     AND b.series_title = series_meta.series_title)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9f49badcf150bf4e7bd125d80d04092205e114513a6f66e34a6b2a39a6cbc31f"
+}
