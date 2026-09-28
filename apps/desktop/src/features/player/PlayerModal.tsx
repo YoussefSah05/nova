@@ -237,6 +237,9 @@ export function PlayerModal({
   const [recoveryNote, setRecoveryNote] = useState<string | null>(null);
   // Bumped to reopen the same item (a recovery retry).
   const [reopenNonce, setReopenNonce] = useState(0);
+  // The next open was asked for by recovery (keep its note); any other open
+  // is the user's and clears it.
+  const recoveringRef = useRef(false);
   const [loadingProgress, setLoadingProgress] = useState(8);
   const [forceHlsJs, setForceHlsJs] = useState(false);
   const [nativeToken, setNativeToken] = useState<string | null>(null);
@@ -323,10 +326,11 @@ export function PlayerModal({
   // opens what it is handed, for its own session.
   const onPlayMediaRef = useRef(onPlayMedia);
   onPlayMediaRef.current = onPlayMedia;
-  usePlaybackEnded(USE_MPV_ENGINE, nativeTokenRef, nativeOpeningRef, (next) =>
+  usePlaybackEnded(USE_MPV_ENGINE, nativeToken, (next) =>
     onPlayMediaRef.current?.(episodeToMedia(next, media.posterUrl, media.title))
   );
-  usePlaybackRecover(USE_MPV_ENGINE, nativeTokenRef, nativeOpeningRef, (attempt) => {
+  usePlaybackRecover(USE_MPV_ENGINE, nativeToken, (attempt) => {
+    recoveringRef.current = true;
     setError(null);
     setRecoveryNote(attempt.otherSource ? "Trying another source…" : "Retrying…");
     if (attempt.mediaKind === media.kind && attempt.mediaId === media.id) {
@@ -386,6 +390,8 @@ export function PlayerModal({
 
     let cancelled = false;
     nativeOpeningRef.current = true;
+    if (!recoveringRef.current) setRecoveryNote(null);
+    recoveringRef.current = false;
     setNativeToken(null);
     setNativeEmbedded(false);
     setHasPainted(false);

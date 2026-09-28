@@ -41,9 +41,16 @@ const RESUME_RETRY_MS: i64 = 2_000;
 /// Give up resuming after this many seeks: playback continues from where the
 /// engine actually is, and that becomes the stored position.
 const RESUME_MAX_SEEKS: u32 = 3;
-/// Recovery attempts for one title before the error is left to the user:
-/// one retry of the same source, then other sources.
-const MAX_RECOVERY_ATTEMPTS: u32 = 3;
+/// A source counts as working once it has played this long (a source that
+/// plays briefly and then fails is not "healthy").
+const HEALTHY_AFTER_MS: i64 = 20_000;
+/// Recovery per title: one retry of the same item, then at most this many
+/// switches to other sources...
+const MAX_SOURCE_SWITCHES: u32 = 3;
+/// ...and never more than this many recoveries in [`RECOVERY_WINDOW_MS`],
+/// however often a source plays and fails again.
+const MAX_RECOVERIES_PER_WINDOW: u32 = 5;
+const RECOVERY_WINDOW_MS: i64 = 10 * 60 * 1000;
 
 /// What the policy asks the coordinator to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,8 +63,8 @@ pub enum PolicyAction {
     },
     /// The media played to its end (emitted once per session).
     Ended,
-    /// The media reached playback (once per session): its source works.
-    Started,
+    /// The source has played for [`HEALTHY_AFTER_MS`] (once per session).
+    Healthy,
     /// The engine reported an error (once per session): try to recover.
     Failed,
 }
@@ -78,6 +85,9 @@ pub struct SessionPolicy {
     ready: bool,
     ended: bool,
     failed: bool,
+    healthy: bool,
+    /// When playback was first seen after the resume took effect.
+    first_play_ms: Option<i64>,
     /// Playing or buffering on the previous snapshot (a pause after it is
     /// written at once).
     active: bool,
@@ -99,6 +109,8 @@ impl SessionPolicy {
             ready: false,
             ended: false,
             failed: false,
+            healthy: false,
+            first_play_ms: None,
             active: false,
             last_write_ms: None,
             position_sec: 0.0,
@@ -162,7 +174,6 @@ impl SessionPolicy {
                 return actions;
             }
             self.ready = true;
-            actions.push(PolicyAction::Started);
             if let Some(at) = self.resume_at.take() {
                 self.pending = Some(PendingResume {
                     at,
@@ -195,6 +206,13 @@ impl SessionPolicy {
 
         if position_sec.is_finite() {
             self.position_sec = position_sec;
+        }
+        if matches!(phase, MpvPlaybackPhase::Playing) {
+            let since = *self.first_play_ms.get_or_insert(now_ms);
+            if !self.healthy && now_ms - since >= HEALTHY_AFTER_MS {
+                self.healthy = true;
+                actions.push(PolicyAction::Healthy);
+            }
         }
         match phase {
             MpvPlaybackPhase::Ended => {
@@ -291,19 +309,32 @@ impl ActiveSession {
     }
 }
 
-/// What recovery has tried for one title since it last played.
+/// What recovery has tried for one title.
 #[derive(Debug, Default)]
 struct RecoveryChain {
-    attempts: u32,
     retried_same: bool,
+    switches: u32,
     tried_variants: Vec<VariantId>,
+    window_start_ms: i64,
+    recoveries_in_window: u32,
+}
+
+impl RecoveryChain {
+    /// The title played for a while: its sources get a fresh start, but the
+    /// per-window cap keeps counting (a play-then-fail loop stays bounded).
+    fn source_worked(&mut self) {
+        self.retried_same = false;
+        self.switches = 0;
+        self.tried_variants.clear();
+    }
 }
 
 enum Msg {
     /// The engine woke up: snapshot it and decide.
     Poke,
-    /// Decide on a given snapshot (tests; the engine path uses `Poke`).
-    Observe(Box<MpvPlayerState>, oneshot::Sender<()>),
+    /// Decide on a given snapshot at a given monotonic time (tests; the
+    /// engine path uses `Poke`).
+    Observe(Box<MpvPlayerState>, i64, oneshot::Sender<()>),
     Begin {
         token: String,
         pool: Arc<SqlitePool>,
@@ -398,8 +429,13 @@ impl PlaybackCoordinator {
 
     /// Decide on one given snapshot, in order with everything else (tests).
     pub async fn observe(&self, state: MpvPlayerState) {
+        self.observe_at(state, self.now_ms()).await;
+    }
+
+    /// [`Self::observe`] at a given monotonic time in ms (tests).
+    pub async fn observe_at(&self, state: MpvPlayerState, now_ms: i64) {
         let (done, wait) = oneshot::channel();
-        let _ = self.tx.send(Msg::Observe(Box::new(state), done));
+        let _ = self.tx.send(Msg::Observe(Box::new(state), now_ms, done));
         let _ = wait.await;
     }
 
@@ -410,6 +446,9 @@ impl PlaybackCoordinator {
     async fn run(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<Msg>) {
         let mut active: Option<ActiveSession> = None;
         let mut chains: HashMap<String, RecoveryChain> = HashMap::new();
+        // The item a `playback:recover` asked the player to open next: when
+        // it arrives its chain continues; any other open is the user's.
+        let mut expected: Option<(String, i64)> = None;
         while let Some(msg) = rx.recv().await {
             match msg {
                 Msg::Poke => {
@@ -419,11 +458,13 @@ impl PlaybackCoordinator {
                     let Ok(state) = self.engine.state(Some(&session.token)) else {
                         continue; // a replaced/closed engine session
                     };
-                    self.apply(session, &state, &mut chains).await;
+                    self.apply(session, &state, self.now_ms(), &mut chains, &mut expected)
+                        .await;
                 }
-                Msg::Observe(state, done) => {
+                Msg::Observe(state, now, done) => {
                     if let Some(session) = active.as_mut() {
-                        self.apply(session, &state, &mut chains).await;
+                        self.apply(session, &state, now, &mut chains, &mut expected)
+                            .await;
                     }
                     let _ = done.send(());
                 }
@@ -437,7 +478,13 @@ impl PlaybackCoordinator {
                     if let Some(previous) = active.take() {
                         self.close_session(previous).await;
                     }
-                    active = Some(Self::open_session(token, pool, media_kind, media_id).await);
+                    let from_recovery = expected.take() == Some((media_kind.clone(), media_id));
+                    let session = Self::open_session(token, pool, media_kind, media_id).await;
+                    if !from_recovery {
+                        // The user started this: a fresh set of recoveries.
+                        chains.remove(&session.chain_key());
+                    }
+                    active = Some(session);
                     let _ = done.send(());
                 }
                 Msg::Finish { token, done } => {
@@ -518,7 +565,9 @@ impl PlaybackCoordinator {
         &self,
         session: &mut ActiveSession,
         state: &MpvPlayerState,
+        now_ms: i64,
         chains: &mut HashMap<String, RecoveryChain>,
+        expected: &mut Option<(String, i64)>,
     ) {
         if state.token.as_deref() != Some(session.token.as_str()) {
             return; // a snapshot of a replaced session
@@ -527,7 +576,7 @@ impl PlaybackCoordinator {
             state.phase.clone(),
             state.position_sec,
             state.duration_sec,
-            self.now_ms(),
+            now_ms,
         );
         for action in actions {
             match action {
@@ -538,14 +587,17 @@ impl PlaybackCoordinator {
                 }
                 PolicyAction::Record { .. } => Self::record(session, &action).await,
                 PolicyAction::Ended => self.announce_end(session),
-                PolicyAction::Started => {
+                PolicyAction::Healthy => {
                     Self::record_outcome(session, true).await;
-                    chains.remove(&session.chain_key());
+                    if let Some(chain) = chains.get_mut(&session.chain_key()) {
+                        chain.source_worked();
+                    }
                 }
                 PolicyAction::Failed => {
                     Self::record_outcome(session, false).await;
                     let chain = chains.entry(session.chain_key()).or_default();
-                    if let Some(recover) = Self::next_attempt(session, chain).await {
+                    if let Some(recover) = Self::next_attempt(session, chain, now_ms).await {
+                        *expected = Some((recover.media_kind.clone(), recover.media_id));
                         self.emit(PlaybackEvent::Recover(recover));
                     }
                 }
@@ -571,14 +623,21 @@ impl PlaybackCoordinator {
         }
     }
 
-    /// Bounded recovery (bootstrap §25): the same item once (transient
-    /// failures), then the next-ranked untried source of the title, up to
-    /// [`MAX_RECOVERY_ATTEMPTS`]; `None` leaves the error to the user.
+    /// Bounded recovery (bootstrap §25): one retry of the same item per title
+    /// (transient failures), then the next-ranked untried source, at most
+    /// [`MAX_SOURCE_SWITCHES`] times, and never more than
+    /// [`MAX_RECOVERIES_PER_WINDOW`] recoveries per [`RECOVERY_WINDOW_MS`].
+    /// `None` leaves the error to the user.
     async fn next_attempt(
         session: &ActiveSession,
         chain: &mut RecoveryChain,
+        now_ms: i64,
     ) -> Option<PlaybackRecover> {
-        if chain.attempts >= MAX_RECOVERY_ATTEMPTS {
+        if chain.recoveries_in_window == 0 || now_ms - chain.window_start_ms >= RECOVERY_WINDOW_MS {
+            chain.window_start_ms = now_ms;
+            chain.recoveries_in_window = 0;
+        }
+        if chain.recoveries_in_window >= MAX_RECOVERIES_PER_WINDOW {
             return None;
         }
         let (media_id, other_source) = if !chain.retried_same {
@@ -586,6 +645,9 @@ impl PlaybackCoordinator {
             (session.media_id, false)
         } else {
             let (entity, variant) = session.variant.as_ref()?;
+            if chain.switches >= MAX_SOURCE_SWITCHES {
+                return None;
+            }
             if !chain.tried_variants.contains(variant) {
                 chain.tried_variants.push(variant.clone());
             }
@@ -599,16 +661,15 @@ impl PlaybackCoordinator {
                 .await
                 .ok()
                 .flatten()?;
-            // The next source's own attempt gets one same-item retry too.
-            chain.retried_same = false;
+            chain.switches += 1;
             (next.media_id, true)
         };
-        chain.attempts += 1;
+        chain.recoveries_in_window += 1;
         Some(PlaybackRecover {
             token: session.token.clone(),
             media_kind: session.media_kind.clone(),
             media_id,
-            attempt: chain.attempts,
+            attempt: chain.recoveries_in_window,
             other_source,
         })
     }
@@ -723,7 +784,7 @@ mod tests {
         assert_eq!(p.finish(300), None, "never ready: nothing to write");
         assert_eq!(
             p.observe(Playing, 0.0, D, 400),
-            vec![PolicyAction::Started, PolicyAction::Seek(600.0)]
+            vec![PolicyAction::Seek(600.0)]
         );
     }
 
@@ -732,7 +793,7 @@ mod tests {
         let mut p = SessionPolicy::new(false, Some((600.0, false)));
         assert_eq!(
             p.observe(Playing, 0.0, D, 1_000),
-            vec![PolicyAction::Started, PolicyAction::Seek(600.0)]
+            vec![PolicyAction::Seek(600.0)]
         );
         // Until the engine reports the seek, the start is never written.
         assert!(p.observe(Playing, 0.4, D, 1_500).is_empty());
@@ -835,9 +896,7 @@ mod tests {
     #[test]
     fn an_error_asks_for_recovery_once_and_decides_nothing_else() {
         let mut p = SessionPolicy::new(false, None);
-        assert!(p
-            .observe(Playing, 10.0, Some(100.0), 0)
-            .contains(&PolicyAction::Started));
+        p.observe(Playing, 10.0, Some(100.0), 0);
         assert_eq!(
             p.observe(Error, 0.0, None, 10_000),
             vec![PolicyAction::Failed]
@@ -868,6 +927,35 @@ mod tests {
         assert!(
             done.observe(Error, 0.0, None, 200).is_empty(),
             "already finished"
+        );
+    }
+
+    #[test]
+    fn a_source_is_healthy_only_after_it_has_really_played() {
+        let mut p = SessionPolicy::new(false, Some((600.0, false)));
+        p.observe(Playing, 0.0, D, 0); // resume seek
+        assert!(!p
+            .observe(Playing, 600.0, D, 1_000)
+            .contains(&PolicyAction::Healthy));
+        assert!(!p
+            .observe(Playing, 610.0, D, 20_500)
+            .contains(&PolicyAction::Healthy));
+        assert!(p
+            .observe(Playing, 621.0, D, 21_000)
+            .contains(&PolicyAction::Healthy));
+        assert!(
+            !p.observe(Playing, 630.0, D, 30_000)
+                .contains(&PolicyAction::Healthy),
+            "once"
+        );
+        // Playing briefly before failing never counts as healthy.
+        let mut brief = SessionPolicy::new(true, None);
+        assert!(!brief
+            .observe(Playing, 0.0, None, 0)
+            .contains(&PolicyAction::Healthy));
+        assert_eq!(
+            brief.observe(Error, 0.0, None, 1_000),
+            vec![PolicyAction::Failed]
         );
     }
 }

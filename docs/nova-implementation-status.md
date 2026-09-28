@@ -38,8 +38,8 @@
 | M11 TMDB identification / progressive enrichment | PARTIAL | Movies and series: entity-owned matches with provenance and trusted IDs (`tmdb:movie`, `tmdb:tv`); tiered on-demand facts (0035). | No episode-level identification; no manual match correction. |
 | M12 Canonical naming / localization | PARTIAL | Localized + original titles stored (0028); one policy function. | Policy not applied uniformly (see M07); no correction tier. |
 | M13 Canonical search | PARTIAL | `search_movies` over `movie_search` FTS with aliases, exact-first; every semantic leg falls back to lexical on failure. | Series/live search is LIKE over legacy DTOs; no cross-kind search; a slow semantic leg still delays lexical results. |
-| M14 PlaybackCoordinator / resolver / selector | PARTIAL | `PlaybackCoordinator` (Rust) owns the native session's resume, progress, completion, end and next episode. | No StreamResolver/VariantSelector (`resolve_movie_playback` picks the lowest row); media addressed by row ID; web fallback path still React-owned; not verified on device. |
-| M15 Recovery / QoE | MISSING | Manual "Retry" only. | No bounded retry, variant failover, decoder fallback or QoE store. |
+| M14 PlaybackCoordinator / resolver / selector | PARTIAL | `PlaybackCoordinator` (Rust) owns the native session's resume, progress, completion, end, next episode and recovery; `VariantSelector` (`catalog::variants`) ranks a movie's sources. | Media addressed by row ID; series/live have one source each; web fallback path still React-owned; not verified on device. |
+| M15 Recovery / QoE | PARTIAL | Bounded recovery (same item once, then other sources, ≤ 5 per 10 min per title) and per-source health (`variant_health`, 0039). | No decoder fallback; no QoE metrics (startup latency, rebuffering); buffering stalls aren't failures. |
 | M16 Jobs / bounded queues | PARTIAL | Persisted `JobQueue` for import, EPG, enrichment: dedup, cancel, startup recovery. | No retry/backoff; `auto_refresh_hours` never scheduled; several bare spawns (M05). |
 | M17 Streaming transcription | PARTIAL | VOD caption sessions: segment-aligned windows, Realtime leases, subprocess kill on cancel. | Not playback-fed PCM/VAD; live transcription never merged (see skipped work). |
 | M18 Timed translation | MISSING | Engine removed (protobuf clash); legacy rows readable. | Engine choice pending. |
@@ -407,13 +407,48 @@ Branch `feat/playback-coordinator`.
   frontend), `cargo fmt --check`, `git diff --check` pass. **Not verified on device:** the engine's
   `FILE_LOADED`/`eof-reached` phase changes and autoplay need a run with a real stream (`just dev`).
 
+### Playback coordinator, slice 2: variant selection and recovery (M14/M15) — 2026-09-29
+
+Branch `feat/variant-selection`.
+
+- **Variant selector** (`nova_core::catalog::variants::rank_variants`, pure): explicit choice, no
+  recent failure, the profile's preferred audio language (provider prefixes mapped from country to
+  language — `UK`/`US` → en, `BE` → fr —, `VF*` → fr, then multi-language, then unknown; `en-US`,
+  `eng`, `fra` all understood), picture quality (full HD first: IPTV 4K tends to stall rather than
+  fail, so recovery can't help), then the previous lowest-row rule. `resolve_movie_playback` and
+  recovery use it (`CanonicalRepository::resolve_playback_with`, `playback_candidates`).
+- **Health:** migration 0039 `variant_health`; the coordinator records a source as working after
+  20 s of real playback and as failing on an engine error; a failure within 24 h and after the last
+  success demotes it.
+- **Recovery** (coordinator): on an error, one retry of the same item per title, then the next-ranked
+  untried source (≤ 3 switches), never more than 5 recoveries per title in 10 minutes (so a source
+  that plays and fails again can't loop), `playback:recover { token, mediaKind, mediaId, attempt,
+  otherSource }`; an open the user starts resets the title's recoveries. The player buffers events
+  for a session it doesn't hold yet (a very fast failure can beat the open's reply), reopens the
+  item (same id) or opens the other source, and shows "Retrying…" / "Trying another source…".
+- **Tests (12 new or reworked):** selector (language, country prefixes, 3-letter codes, quality,
+  explicit choice, failures); policy (healthy only after sustained play, failure once); a desktop
+  test through a real profile DB (retry → failover → healthy after 20 s → demotion → all sources
+  tried → user replay resets → a live play-then-fail loop capped at 5; fails if a healthy source
+  resets the cap); frontend (an event announced before its open settles is handled, stale ones
+  dropped).
+- **Independent review:** no Critical. **High, confirmed and fixed:** a source that played and then
+  failed was retried forever (the chain reset on reaching playback). **Medium, fixed:** an exhausted
+  chain blocked recovery until restart; with 3+ sources only 2 were tried; a very fast failure's
+  recover event was dropped; country prefixes and 3-letter codes didn't match languages. **Low,
+  fixed:** a stale recovery note on the next user open; 4K ranked above full HD. Low, recorded:
+  the error overlay can flash before a recovery clears it; an offline laptop demotes sources for up
+  to 24 h (until one plays); the in-entity explicit choice has no UI yet.
+- **Validation:** `just lint`, `just typecheck`, `just test` (575 Rust, 0 failed, 5 opt-in ignored; 64
+  frontend), `cargo fmt --check`, `git diff --check` pass. **Not verified on device** (recovery needs a
+  real failing stream).
+
 ### Next dependency
 
-**Playback coordinator, slice 2 — variant selection and recovery (M14/M15):** a Rust `VariantSelector`
-over a canonical entity's stream variants (preferred language, availability, recent failures)
-replacing the lowest-row pick, with bounded retry and failover to another variant on a playback error,
-and the player addressing movies/episodes by entity rather than row ID. Before that, confirm slice 1
-on device.
+**Live / EPG boundary (M24):** programmes are keyed by `channel_tvg_id` profile-wide (overlapping feeds
+overwrite each other) and the XMLTV feed is downloaded whole with no size cap. Bind programmes to
+source channels, bound the download and parse, then the macOS lifecycle (M29: sleep/wake, playback
+guards released when the webview reloads). Confirm the playback slices on device first.
 
 ---
 

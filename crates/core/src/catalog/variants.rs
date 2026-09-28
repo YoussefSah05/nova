@@ -6,8 +6,12 @@
 //! 2. no recent playback failure (health recorded by the playback
 //!    coordinator);
 //! 3. the profile's preferred audio language: a source announcing it, then a
-//!    multi-language source, then one with no language evidence, then others;
-//! 4. picture quality: UHD, then full HD, then HD, then unknown, then SD;
+//!    multi-language source, then one with no language evidence, then others
+//!    (provider prefixes are countries or languages — `UK`, `US`, `BE` — and
+//!    are mapped to the language they mean);
+//! 4. picture quality: full HD first (IPTV 4K is the most bandwidth- and
+//!    CDN-sensitive, and tends to stall rather than fail, so recovery can't
+//!    help), then UHD, then HD, then unknown, then SD;
 //! 5. the lowest provider row (the previous rule), so ties stay stable.
 
 use crate::clean::{parse_source_title, TitleKind};
@@ -28,22 +32,67 @@ pub struct VariantCandidate {
     pub recently_failed: bool,
 }
 
+/// The ISO 639-1 language a preference names: `en`, `en-US`, `eng`, `fra`.
+fn preferred_language(preferred: &str) -> Option<String> {
+    let base = preferred
+        .trim()
+        .to_ascii_lowercase()
+        .split(['-', '_'])
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let code = match base.as_str() {
+        "eng" => "en",
+        "fra" | "fre" => "fr",
+        "deu" | "ger" => "de",
+        "spa" => "es",
+        "ita" => "it",
+        "por" => "pt",
+        "ara" => "ar",
+        "tur" => "tr",
+        "rus" => "ru",
+        "nld" | "dut" => "nl",
+        "pol" => "pl",
+        "jpn" => "ja",
+        "kor" => "ko",
+        "zho" | "chi" => "zh",
+        "hin" => "hi",
+        other => other,
+    };
+    (code.len() == 2).then(|| code.to_string())
+}
+
+/// The language a provider prefix announces: providers mix country codes
+/// (`UK`, `US`, `BE`) with language codes (`EN`, `FR`, and `AR` for Arabic).
+fn prefix_language(prefix: &str) -> String {
+    match prefix.to_ascii_lowercase().as_str() {
+        "uk" | "gb" | "us" | "ca" | "au" | "ie" | "nz" => "en",
+        "be" | "ch" | "qc" => "fr",
+        "at" => "de",
+        "mx" | "co" | "cl" | "pe" => "es",
+        "br" => "pt",
+        "sa" | "ae" | "eg" | "ma" | "dz" | "tn" | "lb" | "iq" | "kw" | "qa" => "ar",
+        "cn" | "tw" | "hk" => "zh",
+        "jp" => "ja",
+        "kr" => "ko",
+        "in" => "hi",
+        other => return other.to_string(),
+    }
+    .to_string()
+}
+
 /// How a source's audio language matches the preference (lower is better).
 fn language_rank(c: &VariantCandidate, preferred: Option<&str>) -> u8 {
-    let Some(preferred) = preferred.map(|p| p.trim().to_ascii_lowercase()) else {
+    let Some(preferred) = preferred.and_then(preferred_language) else {
         return 0;
     };
-    let preferred = preferred.split(['-', '_']).next().unwrap_or("").to_string();
-    if preferred.is_empty() {
-        return 0;
-    }
     let tags: Vec<&str> = c.language_hints.iter().map(String::as_str).collect();
     // French audio versions (version française / québécoise).
     let dubbed_fr = tags.iter().any(|t| matches!(*t, "VF" | "VFF" | "VFQ"));
     let multi = tags.iter().any(|t| matches!(*t, "MULTI" | "DUAL"));
     let prefix = parse_source_title(&c.raw_title, TitleKind::Movie)
         .country_prefix
-        .map(|p| p.to_ascii_lowercase());
+        .map(|p| prefix_language(&p));
     let announced: Vec<String> = prefix
         .into_iter()
         .chain(dubbed_fr.then(|| "fr".to_string()))
@@ -62,9 +111,9 @@ fn language_rank(c: &VariantCandidate, preferred: Option<&str>) -> u8 {
 /// Picture quality from the source's tags (lower is better).
 fn quality_rank(c: &VariantCandidate) -> u8 {
     let has = |tags: &[&str]| c.quality_hints.iter().any(|q| tags.contains(&q.as_str()));
-    if has(&["4K", "UHD", "2160P", "8K"]) {
+    if has(&["FHD", "1080P", "1080I"]) {
         0
-    } else if has(&["FHD", "1080P", "1080I"]) {
+    } else if has(&["4K", "UHD", "2160P", "8K"]) {
         1
     } else if has(&["HD", "720P"]) {
         2
@@ -128,14 +177,21 @@ mod tests {
             ["vf-hd", "fr-sd", "multi-4k", "plain", "en-fhd"],
             "announced French first (by quality), then multi, then unknown, then other"
         );
+        for english in ["en-US", "eng", "EN"] {
+            assert_eq!(
+                order(rank_variants(&cands, None, Some(english))),
+                ["en-fhd", "multi-4k", "plain", "vf-hd", "fr-sd"],
+                "{english}"
+            );
+        }
         assert_eq!(
-            order(rank_variants(&cands, None, Some("en-US"))),
-            ["en-fhd", "multi-4k", "plain", "vf-hd", "fr-sd"]
+            order(rank_variants(&cands, None, Some("fra"))),
+            ["vf-hd", "fr-sd", "multi-4k", "plain", "en-fhd"]
         );
         assert_eq!(
             order(rank_variants(&cands, None, None)),
-            ["multi-4k", "en-fhd", "vf-hd", "plain", "fr-sd"],
-            "no preference: quality, then row"
+            ["en-fhd", "multi-4k", "vf-hd", "plain", "fr-sd"],
+            "no preference: full HD, UHD, HD, unknown, SD"
         );
     }
 
@@ -166,5 +222,21 @@ mod tests {
             variant("y", 4, "Heat", &[], &[]),
         ];
         assert_eq!(order(rank_variants(&cands, None, Some("fr"))), ["y", "x"]);
+    }
+
+    #[test]
+    fn country_prefixes_count_as_the_language_they_mean() {
+        let cands = [
+            variant("de", 1, "DE | Heat (1995)", &[], &[]),
+            variant("uk", 2, "UK: Heat (1995)", &[], &[]),
+            variant("be", 3, "BE | Heat (1995)", &[], &[]),
+        ];
+        assert_eq!(order(rank_variants(&cands, None, Some("en")))[0], "uk");
+        assert_eq!(order(rank_variants(&cands, None, Some("fr")))[0], "be");
+        assert_eq!(
+            order(rank_variants(&cands, None, Some("uk"))),
+            ["de", "uk", "be"],
+            "a Ukrainian preference is not a British source"
+        );
     }
 }

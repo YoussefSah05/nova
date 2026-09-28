@@ -40,18 +40,12 @@ beforeEach(() => {
 
 it("opens the next episode it is handed, for its own session only", async () => {
   const openNext = vi.fn();
-  const tokenRef = { current: "tok-1" };
-  const openingRef = { current: false };
-  const { unmount } = renderHook(() => usePlaybackEnded(true, tokenRef, openingRef, openNext));
+  const { unmount } = renderHook(() => usePlaybackEnded(true, "tok-1", openNext));
   await waitFor(() => expect(mocks.handlers.has("playback:ended")).toBe(true));
 
   ended({ token: "tok-old" });
   ended({ autoplay: false });
   ended({ nextEpisode: null });
-  // The user is already switching to something else: their choice wins.
-  openingRef.current = true;
-  ended({});
-  openingRef.current = false;
   expect(openNext).not.toHaveBeenCalled();
 
   ended({});
@@ -61,26 +55,33 @@ it("opens the next episode it is handed, for its own session only", async () => 
   expect(mocks.unlisten).toHaveBeenCalled();
 });
 
-it("acts on a recovery decision for its own session only", async () => {
+it("handles a recovery announced before its open settled, and drops stale ones", async () => {
   const act = vi.fn();
-  const tokenRef = { current: "tok-1" };
-  const openingRef = { current: false };
-  renderHook(() => usePlaybackRecover(true, tokenRef, openingRef, act));
+  const { rerender } = renderHook(({ token }) => usePlaybackRecover(true, token, act), {
+    initialProps: { token: null as string | null },
+  });
   await waitFor(() => expect(mocks.handlers.has("playback:recover")).toBe(true));
 
-  recover({ token: "tok-old" });
-  openingRef.current = true;
-  recover({});
-  openingRef.current = false;
+  // Opening: the new session fails before the player knows its token.
+  recover({ token: "tok-old", attempt: 9 });
+  recover({ token: "tok-new", attempt: 2 });
   expect(act).not.toHaveBeenCalled();
 
-  recover({ attempt: 2 });
+  rerender({ token: "tok-new" });
   expect(act).toHaveBeenCalledTimes(1);
-  expect(act).toHaveBeenCalledWith(expect.objectContaining({ mediaId: 12, attempt: 2 }));
+  expect(act).toHaveBeenCalledWith(expect.objectContaining({ token: "tok-new", attempt: 2 }));
+
+  // A later switch never replays the stale event.
+  rerender({ token: null });
+  rerender({ token: "tok-old" });
+  expect(act).toHaveBeenCalledTimes(1);
+
+  recover({ token: "tok-old", attempt: 3 });
+  expect(act).toHaveBeenCalledTimes(2);
 });
 
 it("does not listen when the native engine is off", () => {
-  renderHook(() => usePlaybackEnded(false, { current: "tok-1" }, { current: false }, vi.fn()));
-  renderHook(() => usePlaybackRecover(false, { current: "tok-1" }, { current: false }, vi.fn()));
+  renderHook(() => usePlaybackEnded(false, "tok-1", vi.fn()));
+  renderHook(() => usePlaybackRecover(false, "tok-1", vi.fn()));
   expect(mocks.handlers.size).toBe(0);
 });

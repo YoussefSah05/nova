@@ -3552,7 +3552,7 @@ mod stabilization_tests {
             quality_hints: quality.iter().map(|q| q.to_string()).collect(),
             ..xtream_movie(raw, id, "p")
         };
-        // One film, two providers: the 4K copy ranks first.
+        // One film, two providers: the full-HD copy ranks first.
         let a = sources
             .create("xtream", "a", "http://a/get.php")
             .await
@@ -3566,7 +3566,7 @@ mod stabilization_tests {
         import(
             pool.clone(),
             a,
-            vec![Ok(heat("Heat (1995) 4K", &["4K"], 1))],
+            vec![Ok(heat("Heat (1995) FHD", &["FHD"], 1))],
             ImportMode::Append,
         )
         .await;
@@ -3585,11 +3585,6 @@ mod stabilization_tests {
         .await
         .unwrap();
         let entity = nova_core::catalog::EntityId::new(entity).unwrap();
-        let first = canonical
-            .resolve_playback(&entity, None)
-            .await
-            .unwrap()
-            .unwrap();
         let row = |url: &str| {
             let pool = pool.clone();
             let url = url.to_string();
@@ -3601,11 +3596,16 @@ mod stabilization_tests {
                     .unwrap()
             }
         };
-        let (row_4k, row_plain) = (
+        let (row_fhd, row_plain) = (
             row("http://host/movie/user/p/1.mkv").await,
             row("http://host/movie/user/p/2.mkv").await,
         );
-        assert_eq!(first.media_id, row_4k, "the 4K copy plays first");
+        let first = canonical
+            .resolve_playback(&entity, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.media_id, row_fhd, "the full-HD copy plays first");
 
         let coordinator = PlaybackCoordinator::new(nova_mpv_player::MpvEngine::new());
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -3614,14 +3614,21 @@ mod stabilization_tests {
                 let _ = tx.send(r);
             }
         }));
-        let fail = |token: &'static str, row: i64| {
+        let begin = |token: &'static str, kind: &'static str, row: i64| {
             let coordinator = coordinator.clone();
             let pool = pool.clone();
             async move {
                 coordinator
-                    .begin(token.into(), pool, "vod".into(), row)
-                    .await;
-                coordinator.observe(engine_state(token, Error, 0.0)).await;
+                    .begin(token.into(), pool, kind.into(), row)
+                    .await
+            }
+        };
+        let at = |token: &'static str, phase, now: i64| {
+            let coordinator = coordinator.clone();
+            async move {
+                coordinator
+                    .observe_at(engine_state(token, phase, 1.0), now)
+                    .await
             }
         };
         let expect = |r: PlaybackRecover, token: &str, row: i64, attempt: u32, other: bool| {
@@ -3631,43 +3638,70 @@ mod stabilization_tests {
             );
         };
 
-        // A fails: one retry of the same source, then the other source.
-        fail("t1", row_4k).await;
-        expect(rx.try_recv().unwrap(), "t1", row_4k, 1, false);
-        fail("t2", row_4k).await;
+        // The first source fails: one retry of it, then the other source.
+        begin("t1", "vod", row_fhd).await;
+        at("t1", Error, 0).await;
+        expect(rx.try_recv().unwrap(), "t1", row_fhd, 1, false);
+        begin("t2", "vod", row_fhd).await;
+        at("t2", Error, 1_000).await;
         expect(rx.try_recv().unwrap(), "t2", row_plain, 2, true);
-        // B plays: its success is recorded and the recovery chain resets.
-        coordinator
-            .begin("t3".into(), pool.clone(), "vod".into(), row_plain)
-            .await;
-        coordinator.observe(engine_state("t3", Playing, 1.0)).await;
-        assert!(rx.try_recv().is_err(), "nothing to recover");
-        let health: Vec<(i64, bool)> = sqlx::query_as(
-            "SELECT failures, last_success_at IS NOT NULL FROM variant_health h
-             JOIN stream_variants s ON s.id = h.variant_id
-             ORDER BY s.vod_item_id",
-        )
-        .fetch_all(&*pool)
-        .await
-        .unwrap();
-        assert_eq!(health, [(2, false), (0, true)], "per-source evidence");
-        // The failing 4K copy is demoted until it plays again.
+        // The other source plays; after 20 s it counts as working.
+        begin("t3", "vod", row_plain).await;
+        at("t3", Playing, 2_000).await;
+        let health = || async {
+            sqlx::query_as::<_, (i64, bool)>(
+                "SELECT failures, last_success_at IS NOT NULL FROM variant_health h
+                 JOIN stream_variants s ON s.id = h.variant_id ORDER BY s.vod_item_id",
+            )
+            .fetch_all(&*pool)
+            .await
+            .unwrap()
+        };
+        assert_eq!(health().await, [(2, false)], "not healthy after 1 s");
+        at("t3", Playing, 23_000).await;
+        assert_eq!(
+            health().await,
+            [(2, false), (0, true)],
+            "per-source evidence"
+        );
         let next = canonical
             .resolve_playback(&entity, None)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(next.media_id, row_plain);
+        assert_eq!(next.media_id, row_plain, "the failing copy is demoted");
 
-        // Bounded: a title that keeps failing stops after three attempts.
-        fail("t4", row_plain).await;
-        expect(rx.try_recv().unwrap(), "t4", row_plain, 1, false);
-        fail("t5", row_plain).await;
-        expect(rx.try_recv().unwrap(), "t5", row_4k, 2, true);
-        fail("t6", row_4k).await;
-        expect(rx.try_recv().unwrap(), "t6", row_4k, 3, false);
-        fail("t7", row_4k).await;
-        assert!(rx.try_recv().is_err(), "the error is left to the user");
+        // Later it fails too: every source gets tried once, then it stops.
+        at("t3", Error, 60_000).await;
+        expect(rx.try_recv().unwrap(), "t3", row_plain, 3, false);
+        begin("t4", "vod", row_plain).await;
+        at("t4", Error, 61_000).await;
+        expect(rx.try_recv().unwrap(), "t4", row_fhd, 4, true);
+        begin("t5", "vod", row_fhd).await;
+        at("t5", Error, 62_000).await;
+        assert!(rx.try_recv().is_err(), "no untried source left");
+
+        // Pressing play again is the user's call: a fresh set of recoveries.
+        begin("t6", "vod", row_fhd).await;
+        at("t6", Error, 63_000).await;
+        expect(rx.try_recv().unwrap(), "t6", row_fhd, 1, false);
+
+        // A live channel that plays and drops again and again stays bounded.
+        let mut recoveries = 0;
+        for n in 0..8_i64 {
+            let token: &'static str = Box::leak(format!("live-{n}").into_boxed_str());
+            let start = 100_000 + n * 30_000;
+            begin(token, "live", 999).await;
+            at(token, Playing, start).await;
+            at(token, Playing, start + 21_000).await; // healthy, then drops
+            at(token, Error, start + 22_000).await;
+            // The player reopens only what recovery asks for.
+            if rx.try_recv().is_err() {
+                break;
+            }
+            recoveries += 1;
+        }
+        assert_eq!(recoveries, 5, "at most five recoveries per ten minutes");
     }
 
     #[tokio::test]
