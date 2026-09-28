@@ -1,11 +1,140 @@
-# Nova implementation status — P00 stabilization and M1 architecture audit
+# Nova Implementation Status
 
-> **Architecture target (2026-09-28):** Nova's long-term architecture is now
+> **Architecture target (2026-09-28):** Nova's long-term architecture is
 > [`docs/architecture/long-term-architecture.md`](architecture/long-term-architecture.md).
-> The earlier plans cited below (`master-plan.md`, `ARCHITECTURE.md`, the production blueprint and the
-> 100K intelligence architecture) were moved to [`docs/archive/`](archive/README.md); milestone IDs such as
-> `M4.6` refer to `docs/archive/master-plan.md`. The next reconciliation pass should re-map this status
-> against the bootstrap's milestones (§59–61).
+> The reconciliation below maps the repository onto its milestones (M00–M31, AI01–AI24). Everything
+> after it is the historical per-increment log (P00–P12 and later slices); milestone IDs such as
+> `M4.6` there refer to [`docs/archive/master-plan.md`](archive/master-plan.md), not the bootstrap.
+
+## Bootstrap reconciliation — 2026-09-28
+
+### Repository baseline
+
+- Branch / commit: `main` at `1e0a170`. Clean tree.
+- Build and tests: `just test` passes: 528 Rust tests/doctests, 0 failed, 5 opt-in ignored; 56
+  frontend tests in 16 files.
+- Known blockers: none for development. Real-provider, live TMDB, native-device, signing and scale
+  qualification remain open gates (see the milestones below).
+- Method: a code map, three independent read-only investigations (catalog/naming/search/frontend,
+  playback/jobs/security, AI), each key claim re-checked in source. One investigation claim was refuted:
+  ffmpeg stderr is already replaced with a fixed message before reaching captions
+  (`crates/media/src/audio.rs:143`).
+
+### Milestone reconciliation
+
+| Milestone | Status | Evidence | Remaining gap |
+|---|---|---|---|
+| M00 Current-main stabilization | COMPLETE | P00 section below; fixes plus regressions. | — |
+| M01 Source-aware audit | COMPLETE | M1 audit below; superseded as the status map by this reconciliation. | — |
+| M02 Model library domain/persistence | COMPLETE | `nova-core::models`, app migrations 0002/0003, `model_registry.rs`. | Descriptor set is fixed at compile time (Whisper, E5); `artifact_revision` always null. |
+| M03 External model storage | COMPLETE (unqualified) | Bookmarks in `mac_model_library.rs`; offline → `unavailable`, reconnect restores. | No physical-drive or sandbox qualification; downloads always go to the internal library. |
+| M04 Runtime manager / leases | COMPLETE (backend) | `model_runtime.rs`: shared load, leases, LRU eviction, residency budget. | `model_runtime_status` / `unload_model` have no React consumer. |
+| M05 Resource governor | PARTIAL | `resource_policy.rs` lanes; playback guards suspend background classes. | Channel-logo matching, series refetch, `url-tvg` registration and on-demand TMDB/Xtream fetches bypass admission. Playback guards are released only by frontend calls, so a webview reload leaves background work suspended. |
+| M06 Canonical domain / provider boundary | PARTIAL, **RISKY** | Movies: `canonical_entities` / `stream_variants` (0021). | Series, seasons, episodes and live are provider rows (`kind CHECK ('movie')`). **Credentials cross IPC:** `Source.url` (Xtream user/password) is returned by `list_sources` and shown in Settings (`SourcesEpgSection.tsx:81`); `Channel`/`VodItem`/`SeriesEpisode.stream_url` are serialized. |
+| M07 Naming / normalization / classification | PARTIAL | Naming v1 parser; raw title/group kept (0026); `naming::display_title`. | Media type is endpoint/URL-heuristic only, M3U defaults to Live, no `Unknown` in `MediaKind`. Movie cards use a hand-written SQL COALESCE instead of `display_title`; series `raw` fallback is set to the parsed title. |
+| M08 Fingerprints / candidate blocking | PARTIAL | `catalog::{fingerprint, reconcile}`; blocking used by movie resolution. | Refresh still deletes and reinserts. Unchanged/changed/new/deleted classification is unwired; movie/live embeddings and enrichment status are discarded on every refresh. |
+| M09 Entity resolution / identity history | PARTIAL | P09: deterministic resolver, redirects, lineage, cannot-link (movies). | No split or user correction; series/episodes/live have no entities. |
+| M10 Atomic catalog snapshots | PARTIAL | P10: validate + per-source `catalog_publications`. | No profile-wide generation/head; protected snapshot store (`catalog-ingest`) unwired. |
+| M11 TMDB identification / progressive enrichment | PARTIAL | Movies: entity-owned matches with provenance and trusted IDs (P11); tiered on-demand facts (0035). | Series matches live on `series_meta` keyed by `(source_id, series_title)`. |
+| M12 Canonical naming / localization | PARTIAL | Localized + original titles stored (0028); one policy function. | Policy not applied uniformly (see M07); no correction tier. |
+| M13 Canonical search | PARTIAL, **RISKY** | `search_movies` over `movie_search` FTS with aliases, exact-first. | Series/live search is LIKE over legacy DTOs; no cross-kind search. A query-embedding failure returns an error and discards lexical hits (`commands/search.rs:247,402,545,640`). |
+| M14 PlaybackCoordinator / resolver / selector | MISSING | `resolve_movie_playback` picks the lowest row. | React owns resume, progress timer, completion threshold, end handling and next-episode choice (`PlayerModal.tsx`). |
+| M15 Recovery / QoE | MISSING | Manual "Retry" only. | No bounded retry, variant failover, decoder fallback or QoE store. |
+| M16 Jobs / bounded queues | PARTIAL | Persisted `JobQueue` for import, EPG, enrichment: dedup, cancel, startup recovery. | No retry/backoff; `auto_refresh_hours` never scheduled; several bare spawns (M05). |
+| M17 Streaming transcription | PARTIAL | VOD caption sessions: segment-aligned windows, Realtime leases, subprocess kill on cancel. | Not playback-fed PCM/VAD; live transcription never merged (see skipped work). |
+| M18 Timed translation | MISSING | Engine removed (protobuf clash); legacy rows readable. | Engine choice pending. |
+| M19 Embeddings / dialogue search | PARTIAL | Per-title dialogue search seeks playback (`TranscriptPanel` → `seekTo`). | Entity vectors belong to provider rows, not entities; no cross-library dialogue search. |
+| M20 Command-K typed intents | MISSING | `CommandPalette` is search + navigation. | No intent model or validator. |
+| M21 Smart discovery / personalization | PARTIAL | TMDB related/collections/trending intersected with the library. | No embedding similarity or history-based personalization. |
+| M22 Frontend canonicalization | PARTIAL | Movie browse/detail/favorites/search/Continue Watching on canonical DTOs. | Series, live, player, transcripts and episode/live Continue Watching are row-centric; client `seriesGroupKey`/`prettyBrand` grouping remains. |
+| M23 Series / autoplay | PARTIAL | Resume/Up next in Rust (`series_resume`); autoplay uses the normal play path. | In-player next episode chosen in React; no canonical episode identity. |
+| M24 Live / EPG boundary | MISSING, RISKY | XMLTV parser streams. | Programs keyed by `channel_tvg_id` profile-wide; feed downloaded whole with no size cap (`commands/epg.rs:203`). |
+| M25 Security / privacy | **RISKY** | TMDB credential write-only; proxy/EPG errors drop URLs. | Credential exposure (M06); `csp: null`; `/proxy` has no session token. |
+| M26 Migration-chain qualification | PARTIAL | Upgrade-chain tests; `real_profile_upgrade` (opt-in). | Never run against a real profile copy. |
+| M27 Scale qualification | PARTIAL | 30k release scale probes; `tools/catalog-scale`. | No 100k/250k app-level measurements. |
+| M28 AI failure matrix | PARTIAL | Missing/offline model and cancellation tests exist. | No matrix; see M13 inference-failure case. |
+| M29 macOS lifecycle | MISSING | — | No sleep/wake or window-event handling; guard/session leak on webview reload. |
+| M30 Accessibility / signing | PARTIAL / MISSING | 46 `aria-label`s over 78 components. | Keyboard handling minimal; no signing, notarization or entitlements. |
+| M31 Final convergence review | NOT STARTED | — | — |
+
+| AI milestone | Status | Note |
+|---|---|---|
+| AI01 Model domain / libraries | COMPLETE | = M02 |
+| AI02 External storage | COMPLETE (unqualified) | = M03 |
+| AI03 Registry / discovery | PARTIAL | Fixed descriptor set; no revision/digest. |
+| AI04 Runtime / leases | COMPLETE | = M04 |
+| AI05 Governor integration | COMPLETE for ASR/embeddings | Reasoner would bypass it if wired as-is. |
+| AI06 ASR baseline | COMPLETE | Whisper subprocess, Core ML, DTW timestamps. |
+| AI07 Streaming transcription | PARTIAL | = M17 |
+| AI08 / AI09 Translation | MISSING | = M18 |
+| AI10 Entity embeddings | PARTIAL | Provider-row owners; lost on refresh. |
+| AI11 Transcript embeddings | COMPLETE (per title) | Lazy segment embedding, model-keyed. |
+| AI12 Semantic search | PARTIAL, RISKY | = M13 inference-failure case. |
+| AI13 Dialogue search | PARTIAL | Within the playing title only. |
+| AI14 Reranker | MISSING | Optional by design. |
+| AI15 Catalog ambiguity reasoning | LIBRARY-ONLY | `catalog-reasoner` and `assess_ai_verdict` unused by the app. |
+| AI16 Command-K | MISSING | = M20 |
+| AI17 Smart discovery | PARTIAL | TMDB-based, not AI. |
+| AI18 Personalization | MISSING | |
+| AI19 Derived content | MISSING | "About this title" never merged. |
+| AI20 AI settings UX | PARTIAL | Installed / not installed plus external library state. |
+| AI21 AI failure UX | MISSING | Runtime errors map to generic `Internal`; no capability-specific states. |
+| AI22 Evaluation harness | PARTIAL | `tools/catalog-eval` (reasoner smoke only); no ASR/search eval. |
+| AI23 Provenance / versioning | PARTIAL | Model ID stored on transcripts/embeddings; no revision. |
+| AI24 Privacy / offline | PARTIAL | No LLM prompts in the app; credential exposure is a UI/IPC issue (M25). |
+
+### Skipped or stranded work
+
+- `feat/local-llm-about` (6 commits, June: llama.cpp "About this title") and
+  `feat/phase-9-live-transcription` (2 commits: rolling live captions) were never merged and are 77+
+  commits behind `main`. They predate the model registry, runtime manager and governor, so merging
+  them as-is would create AI paths that bypass leases and admission. Treat them as reference only.
+- `update/nova-next` and `tooling/orchestrator-v2` hold unmerged developer tooling, not product code.
+
+### Coexisting legacy and new systems
+
+- Movie state is written to entities and mirrored to `vod_items` flags / `watch_history`; movie TMDB
+  data is stored on `entity_external_matches` and mirrored onto rows (read paths use the mirror).
+- Enrichment `dedup_group` clustering coexists with P09 entity resolution; `dedupGroup` still ships.
+- Legacy `list_vod`, `count_vod`, `set_vod_*`, `semantic_search_catalog` remain registered (no UI caller).
+- Two Continue Watching queries; `get_profile_overview.lastTitle` uses the legacy one with raw names.
+- Unwired parallel pipeline: `catalog-ingest`, `catalog-reasoner`, `catalog::{snapshot, fingerprint,
+  reconcile, intelligence}` beside the production importer. No `*-v2` systems exist.
+
+### Architecture invariants currently violated
+
+1. Credentials reach React (§4, §24, §53): `Source.url` rendered in Settings; `stream_url` fields
+   serialized over IPC.
+2. Deterministic search must survive AI failure (§22, §45): query-inference errors discard lexical
+   results.
+3. Playback truth belongs to Rust (§24): progress, completion, resume and next episode are React-owned.
+4. User state belongs to canonical identity (§3): series, episode and live state is keyed to provider
+   rows and restored by URL/title matching.
+5. Jobs are bounded (§29): the EPG download has no size cap.
+
+### Answers to the §60 questions
+
+Q1–Q5 and Q18–Q23 are answered by the tables above. Q6: `stream_url`, `Source.url`, numeric provider
+row IDs and `(sourceId, seriesTitle)` keys reach React. Q7: movies — SQL COALESCE of TMDB title,
+entity title, raw name; series — `display_title` over `series_meta`; live — polished provider name.
+Q8: localized TMDB titles work for matched movies/series. Q9: yes for movies; series lack a true raw
+fallback; live has no layers. Q10: movies only. Q11: yes (opaque `mov-…` IDs; TMDB IDs are matches,
+not identity). Q12: yes for movies (tested upgrade chain); non-movie state relies on URL/title
+restore. Q13: yes when the model is absent; no when inference fails. Q14: no. Q15: commands are
+Rust-token-checked; state events are filtered in React. Q16: yes for persisted jobs. Q17: running
+model work finishes its current bounded unit; new background work is suspended. Q24: no LLM prompts
+exist; credentials reach the webview instead. Q25: no — discovery intersects with the library. Q26:
+yes, per title. Q27: movies abstain honestly; unmatched series fall back to the parsed title. Q28: no.
+Q29: yes, except movies. Q30: see below.
+
+### Next dependency
+
+**Secret-free IPC boundary (M06/M25).** It is a live invariant violation — Xtream credentials are shown
+on screen and held in webview memory — and every later frontend canonicalization slice (series, live)
+needs secret-free DTOs first. It is small and needs no schema change. After it: the M13 lexical
+fallback, then canonical series identity (M06/M09/M11 for series).
+
+---
 
 Updated: 2026-09-25. P00 stabilized the existing application; M1 below audits its
 source against the target plan. No architecture implementation, UI redesign,
