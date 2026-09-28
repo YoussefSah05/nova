@@ -60,7 +60,7 @@ impl AppState {
             profile_open: Mutex::new(()),
             hls_proxy_port,
             hls_sessions,
-            playback: Arc::new(PlaybackCoordinator::new(mpv_engine.clone())),
+            playback: PlaybackCoordinator::new(mpv_engine.clone()),
             mpv_engine,
             airplay: AirPlayEngine::new(),
             caption_sessions: Arc::new(CaptionSessionManager::new()),

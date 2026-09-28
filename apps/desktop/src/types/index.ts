@@ -138,7 +138,6 @@ export interface ContentFilters {
   sort?: ContentSort;
 }
 
-/// One card on a tab's Continue Watching rail (`list_continue_watching`).
 /// `playback:ended` — the Rust playback coordinator saw the native session's
 /// media play to its end. The player opens `nextEpisode` when `autoplay`.
 export interface PlaybackEnded {
@@ -147,6 +146,7 @@ export interface PlaybackEnded {
   autoplay: boolean;
 }
 
+/// One card on a tab's Continue Watching rail (`list_continue_watching`).
 export interface ContinueWatchingItem {
   /// What plays on click: "vod" | "episode" | "live".
   mediaKind: string;

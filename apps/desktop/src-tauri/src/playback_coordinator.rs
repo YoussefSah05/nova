@@ -4,22 +4,25 @@
 //! The engine keeps executing commands and rendering; React keeps the
 //! presentation. What used to be decided in the React player — seek to the
 //! resume point, write progress on a timer, decide "finished", pick the next
-//! episode — is decided here, from the engine's own state snapshots, so it
-//! can't be lost to a webview reload, an unmount race or a stale callback.
+//! episode — is decided here, from the engine's own state, so it can't be lost
+//! to a webview reload, an unmount race or a stale callback.
 //!
 //! [`SessionPolicy`] is the pure decision core (state snapshot in, actions
-//! out), tested with synthetic states; [`PlaybackCoordinator`] owns the one
-//! active session and executes the actions against storage and the engine.
+//! out). [`PlaybackCoordinator`] runs it on one ordered actor task: engine
+//! wakeups only *poke* the actor, which snapshots the engine itself, so
+//! snapshots are handled in order and never delay the `mpv:state` stream;
+//! `begin`/`finish` go through the same queue, so a session's final write
+//! can't race its own progress writes.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::Instant;
 
 use nova_core::SeriesEpisode;
 use nova_mpv_player::{MpvEngine, MpvPlaybackPhase, MpvPlayerState};
 use nova_storage::{ProfileSettingsRepository, SeriesRepository, WatchHistoryRepository};
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, oneshot};
 
 /// Progress is persisted at most this often while playing.
 pub const PROGRESS_INTERVAL_MS: i64 = 5_000;
@@ -27,9 +30,13 @@ pub const PROGRESS_INTERVAL_MS: i64 = 5_000;
 pub const COMPLETED_THRESHOLD: f64 = 0.95;
 /// A stored position this close to the start isn't worth resuming.
 const MIN_RESUME_SEC: f64 = 5.0;
-/// After the resume seek, positions are not written until the engine has had
-/// time to report the new position (so a stale 0:00 can't overwrite it).
-const RESUME_SETTLE_MS: i64 = 3_000;
+/// The resume seek counts as done once the reported position is this close.
+const RESUME_TOLERANCE_SEC: f64 = 2.0;
+/// Re-issue the resume seek when it hasn't taken effect after this long.
+const RESUME_RETRY_MS: i64 = 2_000;
+/// Give up resuming after this many seeks: playback continues from where the
+/// engine actually is, and that becomes the stored position.
+const RESUME_MAX_SEEKS: u32 = 3;
 
 /// What the policy asks the coordinator to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,16 +51,25 @@ pub enum PolicyAction {
     Ended,
 }
 
+#[derive(Debug)]
+struct PendingResume {
+    at: f64,
+    seeks: u32,
+    last_seek_ms: i64,
+}
+
 /// The playback decisions of one loaded media item.
 #[derive(Debug)]
 pub struct SessionPolicy {
     live: bool,
     resume_at: Option<f64>,
+    pending: Option<PendingResume>,
     ready: bool,
     ended: bool,
-    playing: bool,
+    /// Playing or buffering on the previous snapshot (a pause after it is
+    /// written at once).
+    active: bool,
     last_write_ms: Option<i64>,
-    settle_until_ms: i64,
     position_sec: f64,
     duration_sec: Option<f64>,
 }
@@ -67,11 +83,11 @@ impl SessionPolicy {
         Self {
             live,
             resume_at,
+            pending: None,
             ready: false,
             ended: false,
-            playing: false,
+            active: false,
             last_write_ms: None,
-            settle_until_ms: 0,
             position_sec: 0.0,
             duration_sec: None,
         }
@@ -94,7 +110,7 @@ impl SessionPolicy {
         }
     }
 
-    /// Decide on one engine snapshot of this session.
+    /// Decide on one engine snapshot of this session. `now_ms` is monotonic.
     pub fn observe(
         &mut self,
         phase: MpvPlaybackPhase,
@@ -106,32 +122,59 @@ impl SessionPolicy {
         if self.ended || matches!(phase, MpvPlaybackPhase::Error) {
             return actions;
         }
-        let was_playing = self.playing;
-        self.playing = matches!(phase, MpvPlaybackPhase::Playing);
-        let loaded = matches!(
+        let was_active = self.active;
+        self.active = matches!(
             phase,
-            MpvPlaybackPhase::Playing | MpvPlaybackPhase::Paused | MpvPlaybackPhase::Ended
+            MpvPlaybackPhase::Playing | MpvPlaybackPhase::Buffering
         );
-        if !self.ready {
-            if !loaded {
-                return actions; // still opening: positions are meaningless
-            }
-            self.ready = true;
-            if let Some(at) = self.resume_at.take() {
-                actions.push(PolicyAction::Seek(at));
-                self.settle_until_ms = now_ms + RESUME_SETTLE_MS;
-                // The stored position stands until the engine reports the seek.
-                self.position_sec = at;
-            }
-        }
-        let settling = now_ms < self.settle_until_ms;
-        if position_sec.is_finite() && !settling {
-            self.position_sec = position_sec;
-        }
         if let Some(d) = duration_sec.filter(|d| d.is_finite() && *d > 0.0) {
             self.duration_sec = Some(d);
         }
 
+        if !self.ready {
+            let loaded = matches!(
+                phase,
+                MpvPlaybackPhase::Playing | MpvPlaybackPhase::Paused | MpvPlaybackPhase::Ended
+            );
+            // A VOD item is ready once the engine knows its duration (before
+            // that a seek is rejected and positions are meaningless).
+            if !loaded || (!self.live && self.duration_sec.is_none()) {
+                return actions;
+            }
+            self.ready = true;
+            if let Some(at) = self.resume_at.take() {
+                self.pending = Some(PendingResume {
+                    at,
+                    seeks: 1,
+                    last_seek_ms: now_ms,
+                });
+                self.position_sec = at;
+                actions.push(PolicyAction::Seek(at));
+                return actions;
+            }
+        }
+
+        // Resume in flight: the stored position stands until the engine
+        // reports the seek; re-seek a bounded number of times.
+        if let Some(pending) = self.pending.as_mut() {
+            if position_sec.is_finite() && position_sec >= pending.at - RESUME_TOLERANCE_SEC {
+                self.pending = None;
+            } else if now_ms - pending.last_seek_ms >= RESUME_RETRY_MS {
+                if pending.seeks < RESUME_MAX_SEEKS {
+                    pending.seeks += 1;
+                    pending.last_seek_ms = now_ms;
+                    actions.push(PolicyAction::Seek(pending.at));
+                    return actions;
+                }
+                self.pending = None; // the engine won't resume: keep playing
+            } else {
+                return actions;
+            }
+        }
+
+        if position_sec.is_finite() {
+            self.position_sec = position_sec;
+        }
         match phase {
             MpvPlaybackPhase::Ended => {
                 self.ended = true;
@@ -145,8 +188,7 @@ impl SessionPolicy {
                 });
                 actions.push(PolicyAction::Ended);
             }
-            _ if settling => {}
-            MpvPlaybackPhase::Paused if was_playing => actions.push(self.record(now_ms)),
+            MpvPlaybackPhase::Paused if was_active => actions.push(self.record(now_ms)),
             MpvPlaybackPhase::Playing
                 if self
                     .last_write_ms
@@ -160,10 +202,10 @@ impl SessionPolicy {
     }
 
     /// The final write when the session closes or is replaced: nothing if it
-    /// never loaded, already ended, or is still settling after the resume seek
-    /// (the stored position is the right one then).
+    /// never became ready, already ended, or its resume seek hasn't taken
+    /// effect (the stored position is the right one then).
     pub fn finish(&mut self, now_ms: i64) -> Option<PolicyAction> {
-        if !self.ready || self.ended || now_ms < self.settle_until_ms {
+        if !self.ready || self.ended || self.pending.is_some() {
             return None;
         }
         Some(self.record(now_ms))
@@ -177,9 +219,12 @@ pub struct PlaybackEnded {
     pub token: String,
     /// The episode after this one, when it is an episode with a successor.
     pub next_episode: Option<SeriesEpisode>,
-    /// The profile's "autoplay next episode" setting.
+    /// The profile's "autoplay next episode" setting, read at the end.
     pub autoplay: bool,
 }
+
+/// Where `playback:ended` goes (the Tauri event bus; a channel in tests).
+pub type EndedSink = Arc<dyn Fn(PlaybackEnded) + Send + Sync>;
 
 struct ActiveSession {
     token: String,
@@ -187,33 +232,69 @@ struct ActiveSession {
     media_kind: String,
     media_id: i64,
     caption_mode: Option<String>,
-    autoplay: bool,
     policy: SessionPolicy,
 }
 
-/// Owns the one native playback session's policy.
-pub struct PlaybackCoordinator {
-    engine: Arc<MpvEngine>,
-    active: Mutex<Option<ActiveSession>>,
+enum Msg {
+    /// The engine woke up: snapshot it and decide.
+    Poke,
+    /// Decide on a given snapshot (tests; the engine path uses `Poke`).
+    Observe(Box<MpvPlayerState>, oneshot::Sender<()>),
+    Begin {
+        token: String,
+        pool: Arc<SqlitePool>,
+        media_kind: String,
+        media_id: i64,
+        done: oneshot::Sender<()>,
+    },
+    Finish {
+        token: Option<String>,
+        done: oneshot::Sender<()>,
+    },
+    CaptionMode {
+        token: String,
+        mode: Option<String>,
+    },
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or_default()
+/// Owns the one native playback session's policy, on an ordered actor task.
+pub struct PlaybackCoordinator {
+    tx: mpsc::UnboundedSender<Msg>,
+    rx: StdMutex<Option<mpsc::UnboundedReceiver<Msg>>>,
+    engine: Arc<MpvEngine>,
+    ended_sink: OnceLock<EndedSink>,
+    clock: Instant,
 }
 
 impl PlaybackCoordinator {
-    pub fn new(engine: Arc<MpvEngine>) -> Self {
-        Self {
+    pub fn new(engine: Arc<MpvEngine>) -> Arc<Self> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        Arc::new(Self {
+            tx,
+            rx: StdMutex::new(Some(rx)),
             engine,
-            active: Mutex::new(None),
-        }
+            ended_sink: OnceLock::new(),
+            clock: Instant::now(),
+        })
     }
 
-    /// Start the policy of a freshly opened engine token. The previous
-    /// session must have been finished ([`Self::finish`]) first.
+    /// Start the actor (once) with where `playback:ended` goes.
+    pub fn start(self: &Arc<Self>, sink: EndedSink) {
+        let Some(rx) = self.rx.lock().ok().and_then(|mut rx| rx.take()) else {
+            return;
+        };
+        let _ = self.ended_sink.set(sink);
+        let this = self.clone();
+        tauri::async_runtime::spawn(async move { this.run(rx).await });
+    }
+
+    /// The engine has new state; never blocks.
+    pub fn poke(&self) {
+        let _ = self.tx.send(Msg::Poke);
+    }
+
+    /// Start the policy of a freshly opened engine token, finishing any
+    /// session still active.
     pub async fn begin(
         &self,
         token: String,
@@ -221,6 +302,105 @@ impl PlaybackCoordinator {
         media_kind: String,
         media_id: i64,
     ) {
+        let (done, wait) = oneshot::channel();
+        let _ = self.tx.send(Msg::Begin {
+            token,
+            pool,
+            media_kind,
+            media_id,
+            done,
+        });
+        let _ = wait.await;
+    }
+
+    /// Final progress write of the active session (closing, or replaced by
+    /// other media), then forget it. `token` limits this to that session.
+    pub async fn finish(&self, token: Option<&str>) {
+        let (done, wait) = oneshot::channel();
+        let _ = self.tx.send(Msg::Finish {
+            token: token.map(str::to_string),
+            done,
+        });
+        let _ = wait.await;
+    }
+
+    /// The user's caption selection, persisted with the session's progress.
+    pub fn set_caption_mode(&self, token: &str, mode: Option<String>) {
+        let _ = self.tx.send(Msg::CaptionMode {
+            token: token.to_string(),
+            mode,
+        });
+    }
+
+    /// Decide on one given snapshot, in order with everything else (tests).
+    pub async fn observe(&self, state: MpvPlayerState) {
+        let (done, wait) = oneshot::channel();
+        let _ = self.tx.send(Msg::Observe(Box::new(state), done));
+        let _ = wait.await;
+    }
+
+    fn now_ms(&self) -> i64 {
+        self.clock.elapsed().as_millis() as i64
+    }
+
+    async fn run(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<Msg>) {
+        let mut active: Option<ActiveSession> = None;
+        while let Some(msg) = rx.recv().await {
+            match msg {
+                Msg::Poke => {
+                    let Some(session) = active.as_mut() else {
+                        continue;
+                    };
+                    let Ok(state) = self.engine.state(Some(&session.token)) else {
+                        continue; // a replaced/closed engine session
+                    };
+                    self.apply(session, &state).await;
+                }
+                Msg::Observe(state, done) => {
+                    if let Some(session) = active.as_mut() {
+                        self.apply(session, &state).await;
+                    }
+                    let _ = done.send(());
+                }
+                Msg::Begin {
+                    token,
+                    pool,
+                    media_kind,
+                    media_id,
+                    done,
+                } => {
+                    if let Some(previous) = active.take() {
+                        self.close_session(previous).await;
+                    }
+                    active = Some(Self::open_session(token, pool, media_kind, media_id).await);
+                    let _ = done.send(());
+                }
+                Msg::Finish { token, done } => {
+                    let stale = token
+                        .as_deref()
+                        .is_some_and(|t| active.as_ref().is_some_and(|s| s.token != t));
+                    if !stale {
+                        if let Some(session) = active.take() {
+                            self.close_session(session).await;
+                        }
+                    }
+                    let _ = done.send(());
+                }
+                Msg::CaptionMode { token, mode } => {
+                    if let Some(session) = active.as_mut().filter(|s| s.token == token) {
+                        session.caption_mode = mode;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn open_session(
+        token: String,
+        pool: Arc<SqlitePool>,
+        media_kind: String,
+        media_id: i64,
+    ) -> ActiveSession {
         let live = media_kind == "live";
         let resume = if live {
             None
@@ -234,100 +414,74 @@ impl PlaybackCoordinator {
                 })
                 .map(|r| (r.position_sec, r.completed))
         };
-        let autoplay = ProfileSettingsRepository::new(&pool)
-            .get()
-            .await
-            .map(|s| s.autoplay_next)
-            .unwrap_or(true);
-        *self.active.lock().await = Some(ActiveSession {
+        ActiveSession {
             token,
             pool,
             media_kind,
             media_id,
             caption_mode: None,
-            autoplay,
             policy: SessionPolicy::new(live, resume),
-        });
+        }
     }
 
-    /// Final progress write of the active session (closing, or replacing it
-    /// with other media), then forget it. `token` limits this to that
-    /// session; `None` finishes whatever is active.
-    pub async fn finish(&self, token: Option<&str>) {
-        let mut active = self.active.lock().await;
-        if token.is_some_and(|t| active.as_ref().is_some_and(|s| s.token != t)) {
-            return; // a stale token: the live session stays
-        }
-        let Some(mut session) = active.take() else {
-            return;
-        };
-        drop(active);
-        if let Some(action) = session.policy.finish(now_ms()) {
+    async fn close_session(&self, mut session: ActiveSession) {
+        if let Some(action) = session.policy.finish(self.now_ms()) {
             Self::record(&session, &action).await;
         }
     }
 
-    /// The user's caption selection, persisted with the session's progress.
-    pub async fn set_caption_mode(&self, token: &str, mode: Option<String>) {
-        if let Some(session) = self.active.lock().await.as_mut() {
-            if session.token == token {
-                session.caption_mode = mode;
-            }
-        }
-    }
-
-    /// Apply the policy to one engine snapshot. Snapshots of any other token
-    /// (a replaced or closed session) are ignored.
-    pub async fn observe(&self, app: &AppHandle, state: &MpvPlayerState) {
-        self.observe_with(state, |payload| {
-            if let Err(e) = app.emit("playback:ended", payload) {
-                tracing::debug!(error = %e, "failed to emit playback:ended");
-            }
-        })
-        .await;
-    }
-
-    /// [`Self::observe`] with the `playback:ended` sink supplied (tests).
-    pub async fn observe_with(&self, state: &MpvPlayerState, emit: impl FnOnce(PlaybackEnded)) {
-        let mut emit = Some(emit);
-        let mut active = self.active.lock().await;
-        let Some(session) = active.as_mut() else {
-            return;
-        };
+    async fn apply(&self, session: &mut ActiveSession, state: &MpvPlayerState) {
         if state.token.as_deref() != Some(session.token.as_str()) {
-            return;
+            return; // a snapshot of a replaced session
         }
         let actions = session.policy.observe(
             state.phase.clone(),
             state.position_sec,
             state.duration_sec,
-            now_ms(),
+            self.now_ms(),
         );
         for action in actions {
             match action {
                 PolicyAction::Seek(at) => {
                     if let Err(e) = self.engine.seek_absolute(&session.token, at) {
-                        tracing::debug!(error = %e, "resume seek failed");
+                        tracing::warn!(error = %e, "resume seek rejected; will retry");
                     }
                 }
                 PolicyAction::Record { .. } => Self::record(session, &action).await,
-                PolicyAction::Ended => {
-                    let next_episode = if session.media_kind == "episode" {
-                        next_episode(&session.pool, session.media_id).await
-                    } else {
-                        None
-                    };
-                    let payload = PlaybackEnded {
-                        token: session.token.clone(),
-                        next_episode,
-                        autoplay: session.autoplay,
-                    };
-                    if let Some(emit) = emit.take() {
-                        emit(payload);
-                    }
-                }
+                PolicyAction::Ended => self.announce_end(session),
             }
         }
+    }
+
+    /// Look up what follows and emit `playback:ended` off the actor, so a
+    /// provider fetch for the series can't hold up the queue.
+    fn announce_end(&self, session: &ActiveSession) {
+        let Some(sink) = self.ended_sink.get().cloned() else {
+            return;
+        };
+        let (token, pool, kind, id) = (
+            session.token.clone(),
+            session.pool.clone(),
+            session.media_kind.clone(),
+            session.media_id,
+        );
+        tauri::async_runtime::spawn(async move {
+            let next_episode = if kind == "episode" {
+                next_episode(&pool, id).await
+            } else {
+                None
+            };
+            let autoplay = ProfileSettingsRepository::new(&pool)
+                .get()
+                .await
+                .map(|s| s.autoplay_next)
+                .unwrap_or(true);
+            sink(PlaybackEnded {
+                token,
+                next_episode,
+                autoplay,
+            });
+        });
     }
 
     async fn record(session: &ActiveSession, action: &PolicyAction) {
@@ -376,6 +530,8 @@ mod tests {
     use super::*;
     use MpvPlaybackPhase::*;
 
+    const D: Option<f64> = Some(2400.0);
+
     fn records(actions: &[PolicyAction]) -> Vec<(f64, bool)> {
         actions
             .iter()
@@ -390,61 +546,95 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn nothing_is_decided_while_opening() {
-        let mut p = SessionPolicy::new(false, Some((600.0, false)));
-        assert!(p.observe(Opening, 0.0, None, 0).is_empty());
-        assert!(p.observe(Buffering, 0.0, Some(2400.0), 100).is_empty());
-        assert_eq!(p.finish(200), None, "never loaded: nothing to write");
+    fn seeks(actions: &[PolicyAction]) -> usize {
+        actions
+            .iter()
+            .filter(|a| matches!(a, PolicyAction::Seek(_)))
+            .count()
     }
 
     #[test]
-    fn resumes_once_then_writes_every_five_seconds_while_playing() {
+    fn nothing_is_decided_until_the_engine_knows_the_media() {
         let mut p = SessionPolicy::new(false, Some((600.0, false)));
-        let first = p.observe(Playing, 0.0, Some(2400.0), 1_000);
-        assert_eq!(first, vec![PolicyAction::Seek(600.0)]);
-        // Settling after the seek: a stale 0:00 is never written.
-        assert!(p.observe(Playing, 0.0, Some(2400.0), 2_000).is_empty());
-        assert_eq!(p.finish(2_500), None);
-        let settled = p.observe(Playing, 601.0, Some(2400.0), 4_100);
-        assert_eq!(records(&settled), vec![(601.0, false)]);
-        assert!(p.observe(Playing, 603.0, Some(2400.0), 6_000).is_empty());
+        assert!(p.observe(Opening, 0.0, None, 0).is_empty());
+        assert!(p.observe(Buffering, 0.0, None, 100).is_empty());
+        // The engine says "Playing" while still loading: no duration yet.
+        assert!(p.observe(Playing, 0.0, None, 200).is_empty());
+        assert_eq!(p.finish(300), None, "never ready: nothing to write");
         assert_eq!(
-            records(&p.observe(Playing, 606.0, Some(2400.0), 9_200)),
+            p.observe(Playing, 0.0, D, 400),
+            vec![PolicyAction::Seek(600.0)]
+        );
+    }
+
+    #[test]
+    fn resumes_then_writes_every_five_seconds_while_playing() {
+        let mut p = SessionPolicy::new(false, Some((600.0, false)));
+        assert_eq!(
+            p.observe(Playing, 0.0, D, 1_000),
+            vec![PolicyAction::Seek(600.0)]
+        );
+        // Until the engine reports the seek, the start is never written.
+        assert!(p.observe(Playing, 0.4, D, 1_500).is_empty());
+        assert_eq!(p.finish(1_600), None);
+        assert_eq!(
+            records(&p.observe(Playing, 600.2, D, 1_900)),
+            vec![(600.2, false)]
+        );
+        assert!(p.observe(Playing, 603.0, D, 4_000).is_empty());
+        assert_eq!(
+            records(&p.observe(Playing, 606.0, D, 7_000)),
             vec![(606.0, false)]
         );
-        assert!(
-            !p.observe(Playing, 607.0, Some(2400.0), 9_300)
-                .iter()
-                .any(|a| matches!(a, PolicyAction::Seek(_))),
+        assert_eq!(
+            seeks(&p.observe(Playing, 607.0, D, 7_100)),
+            0,
             "resumes once"
         );
+    }
+
+    #[test]
+    fn a_rejected_resume_seek_is_retried_and_never_overwrites_the_resume_point() {
+        let mut p = SessionPolicy::new(false, Some((600.0, false)));
+        assert_eq!(seeks(&p.observe(Playing, 0.0, D, 0)), 1);
+        assert!(p.observe(Playing, 1.0, D, 1_000).is_empty());
+        assert_eq!(seeks(&p.observe(Playing, 2.0, D, 2_100)), 1, "retry");
+        assert_eq!(seeks(&p.observe(Playing, 4.0, D, 4_200)), 1, "last retry");
+        assert_eq!(p.finish(4_300), None, "still the stored position");
+        // Three rejected seeks: playback continues from where it really is.
+        let given_up = p.observe(Playing, 6.5, D, 6_300);
+        assert_eq!(seeks(&given_up), 0);
+        assert_eq!(records(&given_up), vec![(6.5, false)]);
     }
 
     #[test]
     fn a_finished_or_near_start_position_is_not_resumed() {
         for resume in [Some((2390.0, true)), Some((3.0, false)), None] {
             let mut p = SessionPolicy::new(false, resume);
-            let actions = p.observe(Playing, 0.0, Some(2400.0), 0);
-            assert!(!actions.iter().any(|a| matches!(a, PolicyAction::Seek(_))));
+            assert_eq!(seeks(&p.observe(Playing, 0.0, D, 0)), 0);
         }
     }
 
     #[test]
-    fn pausing_writes_immediately_and_finish_writes_the_last_position() {
+    fn pausing_writes_immediately_even_from_buffering_and_finish_writes_the_last_position() {
         let mut p = SessionPolicy::new(false, None);
-        p.observe(Playing, 10.0, Some(2400.0), 0);
+        p.observe(Playing, 10.0, D, 0);
         assert_eq!(
-            records(&p.observe(Paused, 12.0, Some(2400.0), 1_000)),
+            records(&p.observe(Paused, 12.0, D, 1_000)),
             vec![(12.0, false)]
         );
-        assert!(p.observe(Paused, 12.0, Some(2400.0), 9_000).is_empty());
-        p.observe(Playing, 30.0, Some(2400.0), 9_500);
+        assert!(p.observe(Paused, 12.0, D, 9_000).is_empty());
+        p.observe(Buffering, 20.0, D, 9_100);
+        assert_eq!(
+            records(&p.observe(Paused, 21.0, D, 9_200)),
+            vec![(21.0, false)]
+        );
+        p.observe(Playing, 30.0, D, 9_500);
         assert_eq!(
             p.finish(10_000),
             Some(PolicyAction::Record {
                 position_sec: 30.0,
-                duration_sec: Some(2400.0),
+                duration_sec: D,
                 completed: false
             })
         );
@@ -465,6 +655,10 @@ mod tests {
             p.observe(Ended, 1000.0, Some(1000.0), 300).is_empty(),
             "once"
         );
+        assert!(
+            p.observe(Playing, 500.0, Some(1000.0), 400).is_empty(),
+            "late snapshot"
+        );
         assert_eq!(p.finish(400), None, "already written at the end");
     }
 
@@ -473,7 +667,7 @@ mod tests {
         let mut p = SessionPolicy::new(true, Some((600.0, false)));
         let first = p.observe(Playing, 0.0, None, 0);
         assert_eq!(records(&first), vec![(0.0, false)]);
-        assert!(!first.iter().any(|a| matches!(a, PolicyAction::Seek(_))));
+        assert_eq!(seeks(&first), 0);
         let end = p.observe(Ended, 50.0, None, 100);
         assert_eq!(records(&end), vec![(50.0, false)]);
     }

@@ -27,12 +27,17 @@ beforeEach(() => {
 it("opens the next episode it is handed, for its own session only", async () => {
   const openNext = vi.fn();
   const tokenRef = { current: "tok-1" };
-  const { unmount } = renderHook(() => usePlaybackEnded(true, tokenRef, openNext));
+  const openingRef = { current: false };
+  const { unmount } = renderHook(() => usePlaybackEnded(true, tokenRef, openingRef, openNext));
   await waitFor(() => expect(mocks.handler).not.toBeNull());
 
   ended({ token: "tok-old" });
   ended({ autoplay: false });
   ended({ nextEpisode: null });
+  // The user is already switching to something else: their choice wins.
+  openingRef.current = true;
+  ended({});
+  openingRef.current = false;
   expect(openNext).not.toHaveBeenCalled();
 
   ended({});
@@ -43,6 +48,6 @@ it("opens the next episode it is handed, for its own session only", async () => 
 });
 
 it("does not listen when the native engine is off", () => {
-  renderHook(() => usePlaybackEnded(false, { current: "tok-1" }, vi.fn()));
+  renderHook(() => usePlaybackEnded(false, { current: "tok-1" }, { current: false }, vi.fn()));
   expect(mocks.handler).toBeNull();
 });

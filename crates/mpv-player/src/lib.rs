@@ -406,6 +406,13 @@ struct MpvSession {
     last_phase: MpvPlaybackPhase,
     last_error: Option<String>,
     opened_at: Instant,
+    /// Set by each `loadfile` until libmpv reports `FILE_LOADED` for it: until
+    /// then the properties still describe the previous file (or nothing), so
+    /// the new token reports `Opening`.
+    awaiting_load: bool,
+    /// The current file played to its end (`END_FILE` EOF, or `eof-reached`
+    /// under `keep-open`, which pauses on the last frame instead).
+    ended: bool,
     handler: Arc<dyn RenderLifecycleHandler>,
     /// Boxed so the address stays stable; libmpv stores this raw pointer for
     /// the lifetime of the handle as the wakeup-callback userdata.
@@ -436,6 +443,8 @@ impl MpvSession {
             last_phase: MpvPlaybackPhase::Opening,
             last_error: None,
             opened_at: Instant::now(),
+            awaiting_load: true,
+            ended: false,
             handler,
             wakeup_ctx: None,
         };
@@ -484,6 +493,7 @@ impl MpvSession {
             "pause",
             "paused-for-cache",
             "idle-active",
+            "eof-reached",
             "volume",
             "mute",
             "seekable",
@@ -529,6 +539,8 @@ impl MpvSession {
         self.last_phase = MpvPlaybackPhase::Opening;
         self.last_error = None;
         self.opened_at = Instant::now();
+        self.awaiting_load = true;
+        self.ended = false;
         Ok(token)
     }
 
@@ -556,6 +568,10 @@ impl MpvSession {
         let paused = self.property_bool("pause").unwrap_or(false);
         let paused_for_cache = self.property_bool("paused-for-cache").unwrap_or(false);
         let idle = self.property_bool("idle-active").unwrap_or(false);
+        // `keep-open=yes` pauses on the last frame at EOF instead of ending
+        // the file, so the end is read from `eof-reached` (seeking back
+        // clears it).
+        let eof_reached = self.property_bool("eof-reached").unwrap_or(false);
         let seekable = self.property_bool("seekable").unwrap_or(duration.is_some());
         let speed = self.property_f64("speed").unwrap_or(1.0);
         let audio_track_id = self.property_track_id("aid");
@@ -565,9 +581,11 @@ impl MpvSession {
 
         let phase = if self.last_error.is_some() {
             MpvPlaybackPhase::Error
-        } else if matches!(self.last_phase, MpvPlaybackPhase::Ended) {
+        } else if self.ended || (eof_reached && !self.awaiting_load) {
             MpvPlaybackPhase::Ended
-        } else if idle && position <= 0.0 && self.opened_at.elapsed().as_secs_f32() < 2.0 {
+        } else if self.awaiting_load
+            || (idle && position <= 0.0 && self.opened_at.elapsed().as_secs_f32() < 2.0)
+        {
             MpvPlaybackPhase::Opening
         } else if paused {
             MpvPlaybackPhase::Paused
@@ -651,7 +669,14 @@ impl MpvSession {
             let event = unsafe { &*event };
             match event.event_id {
                 MPV_EVENT_NONE => break,
-                MPV_EVENT_FILE_LOADED | MPV_EVENT_PLAYBACK_RESTART => {
+                MPV_EVENT_FILE_LOADED => {
+                    self.last_phase = MpvPlaybackPhase::Playing;
+                    self.last_error = None;
+                    // Only the load itself ends the loading state: a restart
+                    // left over from a seek in the previous file must not.
+                    self.awaiting_load = false;
+                }
+                MPV_EVENT_PLAYBACK_RESTART => {
                     self.last_phase = MpvPlaybackPhase::Playing;
                     self.last_error = None;
                 }
@@ -662,12 +687,15 @@ impl MpvSession {
                     if end.reason == MPV_END_FILE_REASON_ERROR {
                         self.last_phase = MpvPlaybackPhase::Error;
                         self.last_error = Some(mpv_error_to_string(end.error));
+                        self.awaiting_load = false;
                     } else if end.reason == MPV_END_FILE_REASON_EOF {
                         self.last_phase = MpvPlaybackPhase::Ended;
+                        self.ended = true;
                     }
                 }
                 MPV_EVENT_SHUTDOWN => {
                     self.last_phase = MpvPlaybackPhase::Ended;
+                    self.ended = true;
                     break;
                 }
                 _ => {}

@@ -3466,15 +3466,22 @@ mod stabilization_tests {
             .await
             .unwrap();
         let coordinator = PlaybackCoordinator::new(nova_mpv_player::MpvEngine::new());
-        let ignore = |_: PlaybackEnded| panic!("not ended");
+        let (ended_tx, mut ended_rx) = tokio::sync::mpsc::unbounded_channel::<PlaybackEnded>();
+        coordinator.start(std::sync::Arc::new(move |p| {
+            let _ = ended_tx.send(p);
+        }));
 
-        // E1 resumes: the coordinator asks for the seek and, while it settles,
-        // never writes the stale start position — not even when closed.
+        // E1 resumes: the coordinator asks for the seek (rejected here: no
+        // engine session) and never writes the start position while the
+        // resume hasn't taken effect, not even when closed.
         coordinator
             .begin("tok-1".into(), pool.clone(), "episode".into(), e1)
             .await;
         coordinator
-            .observe_with(&engine_state("tok-1", Playing, 0.0), ignore)
+            .observe(engine_state("tok-1", Playing, 0.0))
+            .await;
+        coordinator
+            .observe(engine_state("tok-1", Playing, 0.5))
             .await;
         coordinator.finish(Some("tok-1")).await;
         let e1_resume = history
@@ -3490,7 +3497,7 @@ mod stabilization_tests {
             .begin("tok-2".into(), pool.clone(), "episode".into(), e2)
             .await;
         coordinator
-            .observe_with(&engine_state("tok-2", Playing, 42.0), ignore)
+            .observe(engine_state("tok-2", Playing, 42.0))
             .await;
         let written = history
             .resume_position("episode", e2)
@@ -3499,14 +3506,25 @@ mod stabilization_tests {
             .unwrap();
         assert_eq!((written.position_sec, written.completed), (42.0, false));
         coordinator
-            .observe_with(&engine_state("stale", Ended, 2400.0), ignore)
+            .observe(engine_state("stale", Ended, 2400.0))
             .await;
         coordinator.finish(Some("stale")).await;
-        let mut ended = None;
+        let still_playing = history
+            .resume_position("episode", e2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !still_playing.completed,
+            "a replaced session's snapshot is ignored"
+        );
         coordinator
-            .observe_with(&engine_state("tok-2", Ended, 2400.0), |p| ended = Some(p))
+            .observe(engine_state("tok-2", Ended, 2400.0))
             .await;
-        let ended = ended.expect("playback:ended emitted");
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(5), ended_rx.recv())
+            .await
+            .expect("playback:ended announced")
+            .unwrap();
         assert_eq!(ended.token, "tok-2");
         assert!(ended.autoplay, "the profile default");
         assert_eq!(ended.next_episode.map(|e| e.id), Some(e3));

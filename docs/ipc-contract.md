@@ -39,6 +39,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `stop_playback` | `{ token: string }` | `void` | 5 |
 | `mpv_open_stream` | `{ profileId, mediaKind, mediaId, title }` | `{ token, engine: 'mpv', embedded }` | 5 |
 | `mpv_close` | `{ token }` | `void` | 5 |
+| `playback_caption_mode` | `{ token, captionMode }` | `void` | M14 — the caption selection, persisted with the native session's progress by the playback coordinator |
 | `mpv_player_state` | `{ token? }` | `MpvPlayerState` | 5 |
 | `mpv_toggle_pause` | `{ token }` | `void` | 5 |
 | `mpv_seek_relative` | `{ token, deltaSec }` | `void` | 5 |
@@ -59,7 +60,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `airplay_set_volume` | `{ volume }` | `void` | 5 |
 | `airplay_set_mute` | `{ muted }` | `void` | 5 |
 | `airplay_status` | `{}` | `AirPlayStatus` | 5 |
-| `record_watch_progress` | `{ profileId, mediaKind, mediaId, positionSec, durationSec?, completed, captionMode? }` | `void` | 5 |
+| `record_watch_progress` | `{ profileId, mediaKind, mediaId, positionSec, durationSec?, completed, captionMode? }` | `void` | 5 — web (hls.js) fallback path only; native progress is written by the playback coordinator |
 | `get_resume_position` | `{ profileId, mediaKind, mediaId }` | `ResumeInfo \| null` | 5 |
 | `get_proxy_port` | `{}` | `number` (deprecated - use `resolve_stream`) | 5 |
 | `get_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | 6 / M2 |
@@ -351,7 +352,9 @@ type ResolvedStream = {
 Player flow:
 
 1. `invoke("mpv_open_stream", { profileId, mediaKind, mediaId, title })` opens native playback.
-2. Subscribe to `mpv:state` events for time, duration, volume, mute, and phase updates. The
+2. Subscribe to `mpv:state` events for time, duration, volume, mute, and phase updates. A newly
+   loaded file reports `opening` until libmpv has loaded it, and `ended` when it plays to its end
+   (`keep-open` pauses on the last frame, so the end is read from `eof-reached`). The
    backend emits these whenever libmpv signals new events (driven by a wakeup callback). Call
    `mpv_player_state` once on mount for the initial snapshot, and keep a long-interval (~2.5s)
    poll as a fallback in case an event is dropped.

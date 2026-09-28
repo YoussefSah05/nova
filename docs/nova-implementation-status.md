@@ -38,7 +38,7 @@
 | M11 TMDB identification / progressive enrichment | PARTIAL | Movies and series: entity-owned matches with provenance and trusted IDs (`tmdb:movie`, `tmdb:tv`); tiered on-demand facts (0035). | No episode-level identification; no manual match correction. |
 | M12 Canonical naming / localization | PARTIAL | Localized + original titles stored (0028); one policy function. | Policy not applied uniformly (see M07); no correction tier. |
 | M13 Canonical search | PARTIAL | `search_movies` over `movie_search` FTS with aliases, exact-first; every semantic leg falls back to lexical on failure. | Series/live search is LIKE over legacy DTOs; no cross-kind search; a slow semantic leg still delays lexical results. |
-| M14 PlaybackCoordinator / resolver / selector | MISSING | `resolve_movie_playback` picks the lowest row. | React owns resume, progress timer, completion threshold, end handling and next-episode choice (`PlayerModal.tsx`). |
+| M14 PlaybackCoordinator / resolver / selector | PARTIAL | `PlaybackCoordinator` (Rust) owns the native session's resume, progress, completion, end and next episode. | No StreamResolver/VariantSelector (`resolve_movie_playback` picks the lowest row); media addressed by row ID; web fallback path still React-owned; not verified on device. |
 | M15 Recovery / QoE | MISSING | Manual "Retry" only. | No bounded retry, variant failover, decoder fallback or QoE store. |
 | M16 Jobs / bounded queues | PARTIAL | Persisted `JobQueue` for import, EPG, enrichment: dedup, cancel, startup recovery. | No retry/backoff; `auto_refresh_hours` never scheduled; several bare spawns (M05). |
 | M17 Streaming transcription | PARTIAL | VOD caption sessions: segment-aligned windows, Realtime leases, subprocess kill on cancel. | Not playback-fed PCM/VAD; live transcription never merged (see skipped work). |
@@ -106,7 +106,8 @@
 1. ~~Credentials reach React~~ — fixed by the secret-free IPC boundary below, except the loopback
    playback locator (`/proxy?url=…`), which still carries the upstream URL.
 2. ~~Deterministic search must survive AI failure~~ — fixed by the lexical fallback below.
-3. Playback truth belongs to Rust (§24): progress, completion, resume and next episode are React-owned.
+3. ~~Playback truth belongs to Rust~~ — resume, progress, completion and next episode moved to the
+   playback coordinator (native path); variant selection is still a single SQL pick.
 4. User state belongs to canonical identity (§3): series favorite/watchlist and episode progress are
    now entity-owned; live state is still keyed to provider rows and restored by URL matching.
 5. Jobs are bounded (§29): the EPG download has no size cap.
@@ -362,13 +363,57 @@ Branch `feat/series-frontend-canonical`.
 - Validation: `just lint`, `just typecheck`, `just test` (559 Rust, 0 failed, 5 opt-in ignored; 61
   frontend), `cargo fmt --check`, `git diff --check` pass. Not verified in the running app.
 
+### Playback coordinator, slice 1 (M14) — 2026-09-29
+
+Branch `feat/playback-coordinator`.
+
+- **`PlaybackCoordinator`** (`apps/desktop/src-tauri/src/playback_coordinator.rs`) owns the native
+  (libmpv) session's policy on one ordered actor task: engine wakeups only poke it (it snapshots the
+  engine itself, in order; `mpv:state` is emitted independently and never waits on it), and
+  `begin`/`finish` go through the same queue. It seeks to the resume point, persists progress every
+  5 s while playing, on pause (also from buffering), at the end, on close and when the next item has
+  opened (the previous item's last observed position), decides completion (≥ 95 %), and announces
+  `playback:ended { token, nextEpisode, autoplay }` — the next-episode lookup and the autoplay
+  setting are read off the queue, at the end.
+- **`SessionPolicy`** is the pure decision core: a VOD item is ready only once the engine knows its
+  duration; the resume seek is confirmed against the reported position and retried (3 seeks, 2 s
+  apart) — until then the stored position is never overwritten, even by the final write; time is
+  monotonic.
+- **Engine (`nova-mpv-player`):** a new load reports `opening` until libmpv's `FILE_LOADED` for it
+  (the new token no longer carries the previous file's state), and the end of a file is read from
+  `eof-reached` (under `keep-open` libmpv pauses on the last frame instead of `END_FILE`, so
+  autoplay never fired before — in the React player too).
+- **Frontend:** the native path drops its resume effect, 5 s progress timer, next-episode lookup and
+  ended handling; `usePlaybackEnded` opens the episode it is handed, for its own token and not while
+  another open is in flight; caption changes go to `playback_caption_mode`. The hls.js fallback keeps
+  its own logic.
+- **Tests (12 new or reworked):** 8 policy tests (readiness before duration, confirmed/retried/abandoned
+  resume that never overwrites the stored point, 5 s writes, pause from playing and buffering, final
+  write, completion, late snapshots after the end, live, errors); a desktop test driving the actor
+  against a real profile database (resume kept while unconfirmed, progress written by Rust, a
+  replaced token ignored, end → completed + next episode + autoplay announced); 2 frontend tests for
+  the autoplay handoff (other tokens, autoplay off, no next, open in flight).
+- **Independent review:** no Critical. **High, confirmed and fixed:** (1) the engine reports
+  "playing" while still loading, so the one-shot resume seek failed and the stored point was
+  overwritten ~3 s later; (2) the coordinator lock was held across DB writes in front of the
+  `mpv:state` stream; (3) `ended` never fired under `keep-open`, so autoplay was dead.
+  **Medium, fixed:** a new token briefly carried the previous file's state; out-of-order wake tasks;
+  the previous session was dropped before a possibly failing open; `begin` could replace a session
+  without finishing it. **Low, fixed:** an end event could override a user's in-flight switch;
+  autoplay read at the start of the item; no pause write from buffering; seek failures only at debug.
+  Low, recorded: while AirPlay plays, mpv is paused and the close writes the pre-AirPlay position
+  (as before); progress-write errors are logged, not surfaced.
+- **Validation:** `just lint`, `just typecheck`, `just test` (568 Rust, 0 failed, 5 opt-in ignored; 63
+  frontend), `cargo fmt --check`, `git diff --check` pass. **Not verified on device:** the engine's
+  `FILE_LOADED`/`eof-reached` phase changes and autoplay need a run with a real stream (`just dev`).
+
 ### Next dependency
 
-**Playback coordinator (M14).** React still owns resume sampling (a 5 s timer), the completion
-threshold, end-of-media handling and next-episode choice (`PlayerModal.tsx`), and the player
-addresses media by row ID. Move that policy into a Rust playback session that owns the canonical
-entity, the chosen variant, progress, completion and next episode, while keeping the working
-libmpv engine and render path. Then live/EPG boundary (M24) and macOS lifecycle (M29).
+**Playback coordinator, slice 2 — variant selection and recovery (M14/M15):** a Rust `VariantSelector`
+over a canonical entity's stream variants (preferred language, availability, recent failures)
+replacing the lowest-row pick, with bounded retry and failover to another variant on a playback error,
+and the player addressing movies/episodes by entity rather than row ID. Before that, confirm slice 1
+on device.
 
 ---
 

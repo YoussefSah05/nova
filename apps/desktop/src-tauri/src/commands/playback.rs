@@ -44,9 +44,6 @@ pub async fn mpv_open_stream(
         .resolve_stream_url(&media_kind, media_id)
         .await?;
 
-    // The engine replaces the loaded file in place: persist where the
-    // previous item stopped before its session is replaced.
-    state.playback.finish(None).await;
     let opened = state
         .mpv_engine
         .open(MpvOpenOptions {
@@ -56,6 +53,9 @@ pub async fn mpv_open_stream(
         })
         .map_err(|e| ApiError::Internal(format!("native player failed: {e}")))?;
     *state.mpv_activity.lock().await = Some(state.model_runtime.playback_activity());
+    // Only now that the new file opened: the coordinator writes where the
+    // previous item stopped (its last observed position), then tracks this
+    // one. A failed open leaves the previous session tracked.
     state
         .playback
         .begin(opened.token.clone(), pool, media_kind, media_id)
@@ -85,7 +85,7 @@ pub async fn playback_caption_mode(
     caption_mode: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), ApiError> {
-    state.playback.set_caption_mode(&token, caption_mode).await;
+    state.playback.set_caption_mode(&token, caption_mode);
     Ok(())
 }
 

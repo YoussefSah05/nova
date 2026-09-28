@@ -96,6 +96,16 @@ pub fn run() {
 
             // Wire the wakeup callback → "mpv:state" Tauri event. The
             // frontend `PlayerModal` listens for this instead of polling.
+            // The playback coordinator's actor, announcing ends as
+            // `playback:ended` for the player to autoplay.
+            let ended_app = app.handle().clone();
+            app.state::<state::AppState>()
+                .playback
+                .start(Arc::new(move |payload| {
+                    if let Err(e) = ended_app.emit("playback:ended", payload) {
+                        tracing::debug!(error = %e, "failed to emit playback:ended");
+                    }
+                }));
             let emitter = AppEventEmitter::new(app.handle().clone(), engine.clone());
             if let Err(e) = engine.set_event_emitter(Arc::new(emitter)) {
                 tracing::warn!(error = %e, "failed to register mpv event emitter");
@@ -261,6 +271,9 @@ impl AppEventEmitter {
 
 impl EventEmitter for AppEventEmitter {
     fn wake(&self) {
+        // Rust-owned playback policy (resume, progress, end) runs on its own
+        // ordered task; the poke never blocks and never delays `mpv:state`.
+        self.app.state::<state::AppState>().playback.poke();
         let app = self.app.clone();
         let engine = self.engine.clone();
         // The wakeup callback must return immediately. Snapshot + emit on a
@@ -270,10 +283,6 @@ impl EventEmitter for AppEventEmitter {
         tauri::async_runtime::spawn(async move {
             match engine.state(None) {
                 Ok(state) => {
-                    // Rust-owned playback policy (resume, progress, end) sees
-                    // every snapshot first; React only renders it.
-                    let coordinator = app.state::<state::AppState>().playback.clone();
-                    coordinator.observe(&app, &state).await;
                     if let Err(e) = app.emit("mpv:state", state) {
                         tracing::debug!(error = %e, "failed to emit mpv:state");
                     }

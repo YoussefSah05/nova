@@ -319,7 +319,7 @@ export function PlayerModal({
   // opens what it is handed, for its own session.
   const onPlayMediaRef = useRef(onPlayMedia);
   onPlayMediaRef.current = onPlayMedia;
-  usePlaybackEnded(USE_MPV_ENGINE, nativeTokenRef, (next) =>
+  usePlaybackEnded(USE_MPV_ENGINE, nativeTokenRef, nativeOpeningRef, (next) =>
     onPlayMediaRef.current?.(episodeToMedia(next, media.posterUrl, media.title))
   );
 
