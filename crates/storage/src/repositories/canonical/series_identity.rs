@@ -296,6 +296,26 @@ impl CanonicalRepository<'_> {
         Ok(total)
     }
 
+    /// Where a series entity is currently listed: its `(source_id,
+    /// series_title)` binding. `None` when the entity doesn't exist, isn't a
+    /// series, or its series is no longer listed by any source.
+    pub async fn series_source(
+        &self,
+        entity_id: &str,
+    ) -> Result<Option<(i64, String)>, StorageError> {
+        let row = sqlx::query!(
+            r#"SELECT b.source_id as "source_id!: i64", b.series_title as "series_title!: String"
+               FROM series_bindings b
+               JOIN canonical_entities e ON e.id = b.entity_id
+               WHERE b.entity_id = ? AND e.kind = 'series' AND b.series_title IS NOT NULL
+               ORDER BY b.source_id LIMIT 1"#,
+            entity_id,
+        )
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|r| (r.source_id, r.series_title)))
+    }
+
     /// The canonical series entity a source's series is bound to.
     pub async fn series_entity(
         &self,

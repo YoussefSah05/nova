@@ -21,7 +21,7 @@ use tauri::State;
 
 use super::enrich::{CachedTmdb, TmdbFetch, TmdbRequest};
 use super::require_profile_pool;
-use super::title_art::{tmdb_access, tmdb_work, TitleArtSubject};
+use super::title_art::{resolve_subject, tmdb_access, tmdb_work, ResolvedSubject, TitleArtSubject};
 use super::title_facts::resolve_title_facts;
 use crate::ipc::ApiError;
 use crate::state::AppState;
@@ -144,6 +144,7 @@ pub async fn get_related_titles(
     state: State<'_, AppState>,
 ) -> Result<RelatedTitles, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    let subject = resolve_subject(&pool, &subject).await?;
     let Some((media, tmdb_id)) = tmdb_work(&pool, &subject).await? else {
         return Ok(RelatedTitles::default());
     };
@@ -169,7 +170,7 @@ pub async fn get_related_titles(
 
     let mut related = RelatedTitles::default();
     match &subject {
-        TitleArtSubject::Movie { entity_id } => {
+        ResolvedSubject::Movie { entity_id } => {
             let skip = Some(entity_id.as_str());
             // The collection comes from the movie's facts (usually cached by
             // the page already).
@@ -207,7 +208,7 @@ pub async fn get_related_titles(
             });
             related.movies = movies;
         }
-        TitleArtSubject::Series { series_title, .. } => {
+        ResolvedSubject::Series { series_title, .. } => {
             let skip = Some(series_title.as_str());
             let mut series = library_series(&pool, source_id, &recommended, skip).await?;
             if series.is_empty() {

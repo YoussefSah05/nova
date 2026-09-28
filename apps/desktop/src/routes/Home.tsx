@@ -33,6 +33,7 @@ import {
   patchItemEverywhere,
   prefetchPersonalRails,
   prefetchSourceOverview,
+  seriesKey,
   useBrowseCount,
   useCategories,
   useCountries,
@@ -486,7 +487,7 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
     return (
       <>
         <SeriesDetail
-          key={`${selectedSeries.sourceId}:${selectedSeries.seriesTitle}`}
+          key={seriesKey(selectedSeries)}
           profileId={profile.id}
           series={selectedSeries}
           onOpenTitle={openFromDetail}
@@ -771,8 +772,7 @@ function invokeFavorite(item: BrowseItem, profileId: string, next: boolean): Pro
     return invoke("set_vod_favorite", { profileId, vodId: item.id, isFavorite: next });
   return invoke("set_series_favorite", {
     profileId,
-    sourceId: item.series!.sourceId,
-    seriesTitle: item.series!.seriesTitle,
+    seriesId: item.series!.entityId,
     isFavorite: next,
   });
 }
@@ -790,8 +790,7 @@ function invokeWatchlist(item: BrowseItem, profileId: string, next: boolean): Pr
     return invoke("set_vod_in_watchlist", { profileId, vodId: item.id, inWatchlist: next });
   return invoke("set_series_in_watchlist", {
     profileId,
-    sourceId: item.series!.sourceId,
-    seriesTitle: item.series!.seriesTitle,
+    seriesId: item.series!.entityId,
     inWatchlist: next,
   });
 }
@@ -802,7 +801,7 @@ function tabForKind(kind: BrowseItem["kind"]): BrowseTab {
 
 function seriesItem(s: SeriesSummary): BrowseItem {
   return {
-    key: `series-${s.sourceId}-${s.seriesTitle}`,
+    key: seriesKey(s),
     kind: "series",
     id: s.sourceId,
     title: s.seriesTitle,
@@ -820,12 +819,7 @@ function patchSelected(
   patch: Partial<Pick<SeriesSummary, "isFavorite" | "isInWatchlist">>
 ): (cur: SeriesSummary | null) => SeriesSummary | null {
   return (cur) =>
-    cur &&
-    item.series &&
-    cur.seriesTitle === item.series.seriesTitle &&
-    cur.sourceId === item.series.sourceId
-      ? { ...cur, ...patch }
-      : cur;
+    cur && item.series && seriesKey(cur) === seriesKey(item.series) ? { ...cur, ...patch } : cur;
 }
 
 // ── Idle scheduling (WebKit has no requestIdleCallback) ───────────────────────

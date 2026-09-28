@@ -10,23 +10,19 @@ import type { BrowseItem } from "./queries";
 
 export type TitleArtSubject =
   | { kind: "movie"; entityId: string }
-  | { kind: "series"; sourceId: number; seriesTitle: string };
+  | { kind: "series"; seriesId: string };
 
 export function titleArtSubject(item: BrowseItem | null | undefined): TitleArtSubject | null {
   if (!item) return null;
   if (item.kind === "movie" && item.entityId) return { kind: "movie", entityId: item.entityId };
-  if (item.kind === "series" && item.series) {
-    return {
-      kind: "series",
-      sourceId: item.series.sourceId,
-      seriesTitle: item.series.seriesTitle,
-    };
+  if (item.kind === "series" && item.series?.entityId) {
+    return { kind: "series", seriesId: item.series.entityId };
   }
   return null;
 }
 
 function subjectKey(s: TitleArtSubject): string {
-  return s.kind === "movie" ? `movie:${s.entityId}` : `series:${s.sourceId}:${s.seriesTitle}`;
+  return s.kind === "movie" ? `movie:${s.entityId}` : `series:${s.seriesId}`;
 }
 
 export function useTitleArt(

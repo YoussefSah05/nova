@@ -16,7 +16,7 @@ import type {
 import type { TitleArtSubject } from "../titleArt";
 
 const subjectKey = (s: TitleArtSubject) =>
-  s.kind === "movie" ? `movie:${s.entityId}` : `series:${s.sourceId}:${s.seriesTitle}`;
+  s.kind === "movie" ? `movie:${s.entityId}` : `series:${s.seriesId}`;
 
 export function useTitleFacts(profileId: string, subject: TitleArtSubject | null) {
   return useQuery({
@@ -28,37 +28,40 @@ export function useTitleFacts(profileId: string, subject: TitleArtSubject | null
   });
 }
 
+/// Series are addressed by their canonical entity: Rust resolves where the
+/// series is listed now, so a provider rename can't leave a stale reference.
 const seriesArgs = (profileId: string, series: SeriesSummary) => ({
   profileId,
-  sourceId: series.sourceId,
-  seriesTitle: series.seriesTitle,
+  seriesId: series.entityId,
 });
 
 /// All provider episodes (fetched from an Xtream panel on first open): the
 /// season list comes from here.
 export function useSeriesEpisodes(profileId: string, series: SeriesSummary) {
   return useQuery({
-    queryKey: ["series-episodes", profileId, series.sourceId, series.seriesTitle],
+    queryKey: ["series-episodes", profileId, series.entityId],
     queryFn: () => invoke<SeriesEpisode[]>("list_series_episodes", seriesArgs(profileId, series)),
+    enabled: series.entityId !== null,
     staleTime: 5 * 60 * 1000,
   });
 }
 
 export function useSeasonEpisodes(profileId: string, series: SeriesSummary, season: number | null) {
   return useQuery({
-    queryKey: ["season-episodes", profileId, series.sourceId, series.seriesTitle, season],
+    queryKey: ["season-episodes", profileId, series.entityId, season],
     queryFn: () =>
       invoke<EpisodeView[]>("get_season_episodes", { ...seriesArgs(profileId, series), season }),
-    enabled: season !== null,
+    enabled: season !== null && series.entityId !== null,
     staleTime: 5 * 60 * 1000,
   });
 }
 
 export function useSeriesResume(profileId: string, series: SeriesSummary) {
   return useQuery({
-    queryKey: ["series-resume", profileId, series.sourceId, series.seriesTitle],
+    queryKey: ["series-resume", profileId, series.entityId],
     queryFn: () =>
       invoke<ContinueWatchingItem | null>("get_series_resume", seriesArgs(profileId, series)),
+    enabled: series.entityId !== null,
     staleTime: 0,
   });
 }

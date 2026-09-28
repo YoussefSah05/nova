@@ -65,9 +65,9 @@ export function SeriesDetail({
   onToggleItemFavorite,
   onToggleItemWatchlist,
 }: SeriesDetailProps) {
-  const subject: TitleArtSubject = useMemo(
-    () => ({ kind: "series", sourceId: series.sourceId, seriesTitle: series.seriesTitle }),
-    [series.sourceId, series.seriesTitle]
+  const subject: TitleArtSubject | null = useMemo(
+    () => (series.entityId ? { kind: "series", seriesId: series.entityId } : null),
+    [series.entityId]
   );
   const art = useTitleArtFor(profileId, subject);
   const { data: facts } = useTitleFacts(profileId, subject);

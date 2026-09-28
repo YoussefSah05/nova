@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.source_id as \"source_id!: i64\", b.series_title as \"series_title!: String\"\n               FROM series_bindings b\n               JOIN canonical_entities e ON e.id = b.entity_id\n               WHERE b.entity_id = ? AND e.kind = 'series' AND b.series_title IS NOT NULL\n               ORDER BY b.source_id LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "source_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "series_title!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "034b9effc79704bf43b8f6b39833947745b5ebddc4509f1784648a5eabf6424d"
+}

@@ -663,12 +663,25 @@ pub async fn list_series_categories(
 #[tauri::command]
 pub async fn list_series_episodes(
     profile_id: String,
-    source_id: i64,
-    series_title: String,
+    series_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<SeriesEpisode>, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    let (source_id, series_title) = series_key(&pool, &series_id).await?;
     fetch_series_episodes(&pool, source_id, &series_title).await
+}
+
+/// Where a canonical series (`series_id`, its entity ID) is listed now:
+/// `(source_id, series_title)`. The frontend addresses series by entity, so
+/// a provider rename or refresh can't make its references stale.
+pub(crate) async fn series_key(
+    pool: &sqlx::SqlitePool,
+    series_id: &str,
+) -> Result<(i64, String), ApiError> {
+    CanonicalRepository::new(pool)
+        .series_source(series_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("series is not listed".into()))
 }
 
 /// Episodes of the series the given episode belongs to — for the player's
@@ -814,12 +827,12 @@ pub async fn set_vod_favorite(
 #[tauri::command]
 pub async fn set_series_favorite(
     profile_id: String,
-    source_id: i64,
-    series_title: String,
+    series_id: String,
     is_favorite: bool,
     state: State<'_, AppState>,
 ) -> Result<(), ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    let (source_id, series_title) = series_key(&pool, &series_id).await?;
     SeriesRepository::new(&pool)
         .set_favorite(source_id, &series_title, is_favorite)
         .await
@@ -858,12 +871,12 @@ pub async fn set_vod_in_watchlist(
 #[tauri::command]
 pub async fn set_series_in_watchlist(
     profile_id: String,
-    source_id: i64,
-    series_title: String,
+    series_id: String,
     in_watchlist: bool,
     state: State<'_, AppState>,
 ) -> Result<(), ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    let (source_id, series_title) = series_key(&pool, &series_id).await?;
     SeriesRepository::new(&pool)
         .set_in_watchlist(source_id, &series_title, in_watchlist)
         .await
@@ -3354,6 +3367,46 @@ mod stabilization_tests {
         assert_eq!(card.len(), 1, "on the rail through the new title's entity");
         assert_eq!(card[0].series_title.as_deref(), Some("The Show"));
         assert_eq!(card[0].position_sec, 900.0);
+    }
+
+    #[tokio::test]
+    async fn a_series_id_resolves_to_where_the_series_is_listed_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let catalog = |title: &str| {
+            vec![
+                Ok(episode_entry(title, 0, 0, "xtream://series/42")),
+                Ok(entry("Heat")),
+            ]
+        };
+        import(pool.clone(), id, catalog("FR Show"), ImportMode::Append).await;
+        let series = series_entity(&pool, id, "FR Show").await;
+        assert_eq!(
+            series_key(&pool, &series).await.unwrap(),
+            (id, "FR Show".to_string())
+        );
+        // A frontend reference made before the provider renamed it still works.
+        import(pool.clone(), id, catalog("Show"), ImportMode::Replace).await;
+        assert_eq!(
+            series_key(&pool, &series).await.unwrap(),
+            (id, "Show".to_string())
+        );
+        let movie: String =
+            sqlx::query_scalar("SELECT id FROM canonical_entities WHERE kind = 'movie'")
+                .fetch_one(&*pool)
+                .await
+                .unwrap();
+        for not_a_listed_series in [movie.as_str(), "ser-unknown"] {
+            assert!(matches!(
+                series_key(&pool, not_a_listed_series).await,
+                Err(ApiError::NotFound(_))
+            ));
+        }
     }
 
     #[tokio::test]

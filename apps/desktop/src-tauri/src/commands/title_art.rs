@@ -21,17 +21,46 @@ use super::require_profile_pool;
 use crate::ipc::ApiError;
 use crate::state::AppState;
 
-/// Which title the art is for.
+/// Which title the art (or facts, or related titles) is for, as the
+/// frontend names it: canonical entity IDs only.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TitleArtSubject {
     #[serde(rename_all = "camelCase")]
     Movie { entity_id: String },
     #[serde(rename_all = "camelCase")]
+    Series { series_id: String },
+}
+
+/// A subject resolved to where its title is listed now.
+#[derive(Debug, Clone)]
+pub(crate) enum ResolvedSubject {
+    Movie {
+        entity_id: String,
+    },
     Series {
         source_id: i64,
         series_title: String,
     },
+}
+
+/// Resolve a series subject to its current `(source_id, series_title)`.
+pub(crate) async fn resolve_subject(
+    pool: &sqlx::SqlitePool,
+    subject: &TitleArtSubject,
+) -> Result<ResolvedSubject, ApiError> {
+    Ok(match subject {
+        TitleArtSubject::Movie { entity_id } => ResolvedSubject::Movie {
+            entity_id: entity_id.clone(),
+        },
+        TitleArtSubject::Series { series_id } => {
+            let (source_id, series_title) = super::series_key(pool, series_id).await?;
+            ResolvedSubject::Series {
+                source_id,
+                series_title,
+            }
+        }
+    })
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -66,6 +95,7 @@ pub async fn get_title_art(
 ) -> Result<TitleArtView, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     let repo = TitleArtRepository::new(&pool);
+    let subject = resolve_subject(&pool, &subject).await?;
     let Some((media, tmdb_id)) = tmdb_work(&pool, &subject).await? else {
         return Ok(TitleArtView::default());
     };
@@ -81,15 +111,15 @@ pub async fn get_title_art(
 /// The TMDB work a title is confidently matched to, if any.
 pub(crate) async fn tmdb_work(
     pool: &sqlx::SqlitePool,
-    subject: &TitleArtSubject,
+    subject: &ResolvedSubject,
 ) -> Result<Option<(TitleArtMedia, i64)>, ApiError> {
     let repo = TitleArtRepository::new(pool);
     Ok(match subject {
-        TitleArtSubject::Movie { entity_id } => repo
+        ResolvedSubject::Movie { entity_id } => repo
             .movie_tmdb_id(entity_id)
             .await?
             .map(|id| (TitleArtMedia::Movie, id)),
-        TitleArtSubject::Series {
+        ResolvedSubject::Series {
             source_id,
             series_title,
         } => repo

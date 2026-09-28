@@ -143,9 +143,15 @@ export function movieToItem(m: CanonicalMediaSummary): BrowseItem {
   };
 }
 
+/// A series' stable React/cache key: its canonical entity, else (before the
+/// catalog compiler has bound it) its source and title.
+export function seriesKey(s: SeriesSummary): string {
+  return s.entityId ? `series-${s.entityId}` : `series-${s.sourceId}-${s.seriesTitle}`;
+}
+
 export function seriesToItem(s: SeriesSummary): BrowseItem {
   return {
-    key: `series-${s.sourceId}-${s.seriesTitle}`,
+    key: seriesKey(s),
     kind: "series",
     id: s.sourceId,
     title: s.displayTitle,

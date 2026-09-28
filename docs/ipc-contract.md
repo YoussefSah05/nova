@@ -34,7 +34,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `list_series` | `{ profileId, sourceId, filters? }` | `SeriesSummary[]` | 3 |
 | `count_series` | `{ profileId, sourceId, filters? }` | `number` | 3 |
 | `list_series_categories` | `{ profileId, sourceId }` | `string[]` | 3 |
-| `list_series_episodes` | `{ profileId, sourceId, seriesTitle }` | `SeriesEpisode[]` | 3 |
+| `list_series_episodes` | `{ profileId, seriesId }` | `SeriesEpisode[]` | 3 |
 | `resolve_stream` | `{ profileId, mediaKind: 'live'\|'vod'\|'episode', mediaId, routeOverride?: 'remux_hls'\|'transcode_hls' }` | `ResolvedStream` | 5 |
 | `stop_playback` | `{ token: string }` | `void` | 5 |
 | `mpv_open_stream` | `{ profileId, mediaKind, mediaId, title }` | `{ token, engine: 'mpv', embedded }` | 5 |
@@ -87,10 +87,10 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `get_artwork_cache_stats` | `{}` | `{ files, bytes }` | artwork v1 — the shared on-disk artwork cache behind the `nova-art://` protocol |
 | `clear_artwork_cache` | `{}` | `void` | artwork v1 |
 | `list_continue_watching` | `{ profileId, sourceId, section: "movies" \| "series" \| "live", limit? }` | `ContinueWatchingItem[]` | per-section rails: unfinished canonical movies (`entityId`, backdrop art); one card per series (resume the latest episode or `upNext` the following one, `season`/`episode`/`numbering`/`episodeTitle`); recently watched channels (live). Always within one source |
-| `get_title_art` | `{ profileId, subject: { kind: "movie", entityId } \| { kind: "series", sourceId, seriesTitle } }` | `{ logoUrl, logoLanguage, logoWidth, logoHeight, backdropUrl }` | artwork v1 — TMDB title logo (metadata language → English → neutral) + text-free backdrop; stored per TMDB work, fetched on demand only when TMDB is enabled, never fails (empty when unknown) |
-| `get_title_facts` | `{ profileId, subject: { kind: "movie", entityId } \| { kind: "series", sourceId, seriesTitle } }` | `{ tagline, runtimeMin, rating, ratingSource: "tmdb"\|"provider", certification, trailerUrl, cast: [{ name, character, profileUrl }], directors, studios, status, firstYear, lastYear, seasons: [{ number, name, episodeCount, airDate, posterUrl }], numberOfEpisodes, nextEpisode, collection, plot, genre }` | M4.6 — confident TMDB facts (fetched on demand, stored per work, TTL 7 days airing / 30 otherwise) with provider facts filling gaps; Xtream movies ask `get_vod_info` once (6 s cap). Never fails for TMDB problems |
-| `get_season_episodes` | `{ profileId, sourceId, seriesTitle, season }` | `[{ id, season, episode, numbering, title, overview, stillUrl, airDate, runtimeMin, positionSec, durationSec, completed }]` | M4.6 — provider episodes (what plays) merged with TMDB `/tv/{id}/season/{n}` by episode number only when numbering is real, plus provider episode facts and watch progress |
-| `get_series_resume` | `{ profileId, sourceId, seriesTitle }` | `ContinueWatchingItem \| null` | where a series continues: the latest unfinished episode, or `upNext` the one after the latest finished episode; `null` when never watched or finished (the page then offers the first episode) |
+| `get_title_art` | `{ profileId, subject: { kind: "movie", entityId } \| { kind: "series", seriesId } }` | `{ logoUrl, logoLanguage, logoWidth, logoHeight, backdropUrl }` | artwork v1 — TMDB title logo (metadata language → English → neutral) + text-free backdrop; stored per TMDB work, fetched on demand only when TMDB is enabled, never fails (empty when unknown) |
+| `get_title_facts` | `{ profileId, subject: { kind: "movie", entityId } \| { kind: "series", seriesId } }` | `{ tagline, runtimeMin, rating, ratingSource: "tmdb"\|"provider", certification, trailerUrl, cast: [{ name, character, profileUrl }], directors, studios, status, firstYear, lastYear, seasons: [{ number, name, episodeCount, airDate, posterUrl }], numberOfEpisodes, nextEpisode, collection, plot, genre }` | M4.6 — confident TMDB facts (fetched on demand, stored per work, TTL 7 days airing / 30 otherwise) with provider facts filling gaps; Xtream movies ask `get_vod_info` once (6 s cap). Never fails for TMDB problems |
+| `get_season_episodes` | `{ profileId, seriesId, season }` | `[{ id, season, episode, numbering, title, overview, stillUrl, airDate, runtimeMin, positionSec, durationSec, completed }]` | M4.6 — provider episodes (what plays) merged with TMDB `/tv/{id}/season/{n}` by episode number only when numbering is real, plus provider episode facts and watch progress |
+| `get_series_resume` | `{ profileId, seriesId }` | `ContinueWatchingItem \| null` | where a series continues: the latest unfinished episode, or `upNext` the one after the latest finished episode; `null` when never watched or finished (the page then offers the first episode) |
 | `open_trailer` | `{ url }` | `void` | opens a YouTube trailer in the default browser; any other URL is refused (`InvalidInput`) — the webview has no shell permission |
 | `get_related_titles` | `{ profileId, sourceId, subject }` | `{ collectionName, collection: CanonicalMediaSummary[], movies: CanonicalMediaSummary[], series: SeriesSummary[] }` | M4.6 T2 — TMDB recommendations (similar as fallback) and the movie's collection, **only titles the library has in `sourceId`**, in TMDB order; cached 30 days; empty with TMDB off |
 | `get_trending_in_library` | `{ profileId, sourceId, section: "movies" \| "series" }` | `{ movies, series }` | M4.6 T3 — this week's TMDB trending (2 pages) intersected with the library; cached a day |
@@ -213,6 +213,12 @@ type ContentFilters = {
 Use `limit` and `offset` for Live and VOD pagination. The Home UI currently requests 200 rows
 per page and uses the corresponding `count_*` command to decide whether to show **Load more**.
 `list_series` returns grouped series summaries; use `list_series_episodes` for episode detail.
+Series are addressed by `seriesId` — the canonical series entity (`SeriesSummary.entityId`) —
+never by provider title: `list_series_episodes`, `get_season_episodes`, `get_series_resume`,
+`set_series_favorite { profileId, seriesId, isFavorite }`,
+`set_series_in_watchlist { profileId, seriesId, inWatchlist }` and the `series` art/facts/related
+subject. Rust resolves where the series is listed now, so a reference made before a provider
+rename stays valid; an entity that isn't a listed series is `NotFound`.
 
 ## Events (backend -> frontend)
 

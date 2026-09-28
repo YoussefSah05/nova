@@ -26,7 +26,7 @@ use tauri::State;
 
 use super::enrich::{CachedTmdb, TmdbFetch, TmdbRequest};
 use super::require_profile_pool;
-use super::title_art::{tmdb_access, tmdb_work, TitleArtSubject};
+use super::title_art::{resolve_subject, tmdb_access, tmdb_work, ResolvedSubject, TitleArtSubject};
 use crate::ipc::ApiError;
 use crate::state::AppState;
 
@@ -275,9 +275,10 @@ pub async fn get_title_facts(
     state: State<'_, AppState>,
 ) -> Result<TitleFactsView, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    let subject = resolve_subject(&pool, &subject).await?;
     let provider = match &subject {
-        TitleArtSubject::Movie { entity_id } => movie_provider_facts(&pool, entity_id).await,
-        TitleArtSubject::Series {
+        ResolvedSubject::Movie { entity_id } => movie_provider_facts(&pool, entity_id).await,
+        ResolvedSubject::Series {
             source_id,
             series_title,
         } => {
@@ -382,12 +383,12 @@ pub(crate) fn merge_season(
 #[tauri::command]
 pub async fn get_season_episodes(
     profile_id: String,
-    source_id: i64,
-    series_title: String,
+    series_id: String,
     season: i64,
     state: State<'_, AppState>,
 ) -> Result<Vec<EpisodeView>, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    let (source_id, series_title) = super::series_key(&pool, &series_id).await?;
     let all = super::fetch_series_episodes(&pool, source_id, &series_title).await?;
     let provider: Vec<SeriesEpisode> = all.into_iter().filter(|e| e.season == season).collect();
     if provider.is_empty() {
@@ -400,7 +401,7 @@ pub async fn get_season_episodes(
     let progress = WatchHistoryRepository::new(&pool)
         .episode_progress(source_id, &series_title)
         .await?;
-    let subject = TitleArtSubject::Series {
+    let subject = ResolvedSubject::Series {
         source_id,
         series_title: series_title.clone(),
     };
@@ -435,11 +436,11 @@ pub async fn get_season_episodes(
 #[tauri::command]
 pub async fn get_series_resume(
     profile_id: String,
-    source_id: i64,
-    series_title: String,
+    series_id: String,
     state: State<'_, AppState>,
 ) -> Result<Option<ContinueWatchingItem>, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    let (source_id, series_title) = super::series_key(&pool, &series_id).await?;
     WatchHistoryRepository::new(&pool)
         .series_resume(source_id, &series_title)
         .await
