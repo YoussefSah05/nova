@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE series_bindings SET binding_key = ? WHERE source_id = ? AND binding_key = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "95580fe6a01eee49b28b7aadb50e07b1c15e71f2abf86938beab1916fbf95824"
+}

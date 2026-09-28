@@ -52,6 +52,31 @@ pub fn episode_binding_key(stream_url: &str) -> String {
     locator_binding_key(stream_url)
 }
 
+/// The provider series ID carried by an Xtream catalog sentinel
+/// (`xtream://series/<id>`), the only row a series has until it is opened.
+pub fn xtream_series_id(stream_url: &str) -> Option<&str> {
+    stream_url
+        .strip_prefix("xtream://series/")
+        .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Durable, secret-free key binding a source's series to its canonical
+/// entity: the provider's series ID when known (so a provider rename keeps
+/// identity), else the exact parsed title (M3U has no series ID; a renamed
+/// M3U series becomes a new entity, as a changed M3U movie URL does).
+pub fn series_binding_key(provider_series_id: Option<&str>, series_title: &str) -> String {
+    match provider_series_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        Some(id) => upstream_binding_key(&format!("xtream:series:{id}")),
+        None => format!(
+            "t1-{}",
+            binding_fingerprint("series-title", series_title.as_bytes()).to_hex()
+        ),
+    }
+}
+
 /// A canonical media card. Artwork URLs are public display assets.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,6 +143,38 @@ pub struct MoviePlaybackTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn series_keys_prefer_the_provider_id_and_never_collide_across_namespaces() {
+        assert_eq!(xtream_series_id("xtream://series/42"), Some("42"));
+        for not_a_sentinel in [
+            "xtream://series/",
+            "xtream://series/4a",
+            "http://h/series/u/p/42.mkv",
+        ] {
+            assert_eq!(xtream_series_id(not_a_sentinel), None, "{not_a_sentinel}");
+        }
+        // A rename keeps the ID key; the title key follows the exact title.
+        assert_eq!(
+            series_binding_key(Some("42"), "FR Show"),
+            series_binding_key(Some("42"), "Show")
+        );
+        assert_ne!(
+            series_binding_key(None, "FR Show"),
+            series_binding_key(None, "Show")
+        );
+        // Distinct namespaces: a title can't impersonate an ID, nor a movie.
+        assert_ne!(
+            series_binding_key(Some("42"), "x"),
+            series_binding_key(None, "42")
+        );
+        assert_ne!(
+            series_binding_key(Some("42"), "x"),
+            upstream_binding_key("xtream:vod:42")
+        );
+        assert!(series_binding_key(Some("42"), "x").starts_with("u1-"));
+        assert!(series_binding_key(None, "Show").starts_with("t1-"));
+    }
 
     #[test]
     fn binding_keys_are_stable_namespaced_and_secret_free() {

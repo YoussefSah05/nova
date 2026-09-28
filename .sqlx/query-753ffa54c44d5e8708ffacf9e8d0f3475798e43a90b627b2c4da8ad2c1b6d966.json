@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE canonical_entities SET is_favorite = ?\n               WHERE kind = 'series' AND id IN (\n                   SELECT entity_id FROM series_bindings\n                   WHERE source_id = ? AND series_title = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "753ffa54c44d5e8708ffacf9e8d0f3475798e43a90b627b2c4da8ad2c1b6d966"
+}

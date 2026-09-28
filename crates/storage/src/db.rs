@@ -28,6 +28,9 @@ pub async fn init_profile_db(path: &str) -> Result<SqlitePool, StorageError> {
     // pre-existing movie rows to canonical entities, seeding user state.
     let canonical = crate::repositories::CanonicalRepository::new(&pool);
     canonical.backfill_movies().await?;
+    // Canonical series (0036): bind pre-existing series to entities, seeding
+    // their favorite/watchlist from the per-row flags.
+    canonical.backfill_series().await?;
     // Entity resolution (0023): resolve once for profiles that predate it or
     // were last resolved by an older rule set; a no-op otherwise.
     canonical.ensure_movies_resolved().await?;

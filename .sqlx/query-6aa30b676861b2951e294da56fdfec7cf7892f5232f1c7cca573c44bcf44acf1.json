@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE canonical_entities\n               SET title = (SELECT b.series_title FROM series_bindings b\n                            WHERE b.entity_id = canonical_entities.id\n                              AND b.series_title IS NOT NULL\n                            ORDER BY b.source_id, b.binding_key LIMIT 1)\n               WHERE kind = 'series'\n                 AND id IN (SELECT entity_id FROM series_bindings\n                            WHERE source_id = ? AND series_title IS NOT NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "6aa30b676861b2951e294da56fdfec7cf7892f5232f1c7cca573c44bcf44acf1"
+}

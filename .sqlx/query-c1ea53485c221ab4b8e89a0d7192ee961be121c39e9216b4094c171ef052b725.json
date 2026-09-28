@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT entity_id as \"entity_id!: String\" FROM series_bindings\n               WHERE source_id = ? AND series_title = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "entity_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c1ea53485c221ab4b8e89a0d7192ee961be121c39e9216b4094c171ef052b725"
+}

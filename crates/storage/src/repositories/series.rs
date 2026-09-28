@@ -619,7 +619,9 @@ impl<'a> SeriesRepository<'a> {
         Ok(row.n)
     }
 
-    /// Toggle favourite for an entire series (all episodes of `series_title`).
+    /// Toggle favourite for a series. The canonical series entity owns the
+    /// flag (it survives refreshes and provider renames); every row of the
+    /// series is updated as the compatibility mirror.
     pub async fn set_favorite(
         &self,
         source_id: i64,
@@ -627,18 +629,32 @@ impl<'a> SeriesRepository<'a> {
         is_favorite: bool,
     ) -> Result<(), StorageError> {
         let flag: i64 = if is_favorite { 1 } else { 0 };
+        let mut tx = self.pool.begin().await?;
+        sqlx::query!(
+            r#"UPDATE canonical_entities SET is_favorite = ?
+               WHERE kind = 'series' AND id IN (
+                   SELECT entity_id FROM series_bindings
+                   WHERE source_id = ? AND series_title = ?)"#,
+            flag,
+            source_id,
+            series_title,
+        )
+        .execute(&mut *tx)
+        .await?;
         sqlx::query!(
             "UPDATE series_episodes SET is_favorite = ? WHERE source_id = ? AND series_title = ?",
             flag,
             source_id,
             series_title,
         )
-        .execute(self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
-    /// Toggle watchlist for an entire series (all episodes of `series_title`).
+    /// Toggle watchlist for a series; entity-owned, mirrored like
+    /// [`Self::set_favorite`].
     pub async fn set_in_watchlist(
         &self,
         source_id: i64,
@@ -646,14 +662,27 @@ impl<'a> SeriesRepository<'a> {
         in_watchlist: bool,
     ) -> Result<(), StorageError> {
         let flag: i64 = if in_watchlist { 1 } else { 0 };
+        let mut tx = self.pool.begin().await?;
+        sqlx::query!(
+            r#"UPDATE canonical_entities SET is_in_watchlist = ?
+               WHERE kind = 'series' AND id IN (
+                   SELECT entity_id FROM series_bindings
+                   WHERE source_id = ? AND series_title = ?)"#,
+            flag,
+            source_id,
+            series_title,
+        )
+        .execute(&mut *tx)
+        .await?;
         sqlx::query!(
             "UPDATE series_episodes SET is_in_watchlist = ? WHERE source_id = ? AND series_title = ?",
             flag,
             source_id,
             series_title,
         )
-        .execute(self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 

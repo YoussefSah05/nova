@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO series_bindings\n                               (source_id, binding_key, entity_id, series_title, created_at)\n                           VALUES (?, ?, ?, NULL, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "2a8008496f45f714975f48bedda9a00de09ada5780f5e52a63550b3e631a8dfb"
+}

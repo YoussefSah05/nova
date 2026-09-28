@@ -1239,6 +1239,11 @@ async fn build_candidate(
     CanonicalRepository::resolve_movies_tx(tx)
         .await
         .map_err(ImportFailure::storage)?;
+    // Series: bind this generation's series to their entities (by provider
+    // series ID, else title) so series state survives renames.
+    CanonicalRepository::compile_series_tx(tx, source_id)
+        .await
+        .map_err(ImportFailure::storage)?;
     // Entity-owned TMDB matches survive the refresh: re-mirror them onto the
     // new rows instead of re-matching.
     ExternalMatchRepository::mirror_movies_for_source_tx(tx, source_id)
@@ -2245,6 +2250,261 @@ mod stabilization_tests {
         assert!(
             list[0].is_favorite && list[0].is_in_watchlist,
             "flags followed the stream URL"
+        );
+    }
+
+    /// A series' canonical entity, by its current title in the source.
+    async fn series_entity(pool: &sqlx::SqlitePool, source: i64, title: &str) -> String {
+        CanonicalRepository::new(pool)
+            .series_entity(source, title)
+            .await
+            .unwrap()
+            .unwrap_or_else(|| panic!("{title} is bound"))
+            .as_str()
+            .to_string()
+    }
+
+    async fn series_flags(pool: &sqlx::SqlitePool, source: i64, title: &str) -> (bool, bool) {
+        let list = SeriesRepository::new(pool)
+            .list_series(
+                source,
+                None,
+                None,
+                false,
+                false,
+                ContentSort::Default,
+                50,
+                0,
+            )
+            .await
+            .unwrap();
+        let s = list
+            .iter()
+            .find(|s| s.series_title == title)
+            .unwrap_or_else(|| panic!("{title} listed"));
+        (s.is_favorite, s.is_in_watchlist)
+    }
+
+    fn opened_episodes(source: i64, title: &str) -> Vec<SeriesEpisode> {
+        (1..=2)
+            .map(|n| SeriesEpisode {
+                id: 0,
+                source_id: source,
+                series_title: title.into(),
+                category: None,
+                season: 1,
+                episode: n,
+                episode_title: None,
+                logo_url: None,
+                stream_url: format!("http://h:80/series/u/p/{}.mkv", 900 + n),
+                added_at: None,
+                numbering: nova_core::EpisodeNumberingKind::SeasonEpisode,
+                evidence: SourceEvidence::default(),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_opened_series_keeps_its_entity_and_state_through_a_provider_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let catalog = |title: &str| {
+            vec![
+                Ok(episode_entry(title, 0, 0, "xtream://series/42")),
+                Ok(episode_entry("Other", 0, 0, "xtream://series/43")),
+                Ok(entry("Heat")),
+            ]
+        };
+        import(pool.clone(), id, catalog("FR Show"), ImportMode::Append).await;
+        let repo = SeriesRepository::new(&pool);
+        repo.set_favorite(id, "FR Show", true).await.unwrap();
+        repo.set_in_watchlist(id, "FR Show", true).await.unwrap();
+        let entity = series_entity(&pool, id, "FR Show").await;
+        // Opened: the sentinel (and its series ID) gives way to episodes.
+        repo.replace_series_episodes(id, "FR Show", &opened_episodes(id, "FR Show"), None, None)
+            .await
+            .unwrap();
+
+        // The provider renames the series; only its sentinel comes back.
+        let ok = import(pool.clone(), id, catalog("Show"), ImportMode::Replace).await;
+        assert!(matches!(ok.stage, ImportStage::Complete));
+        assert_eq!(
+            series_entity(&pool, id, "Show").await,
+            entity,
+            "same identity"
+        );
+        assert_eq!(series_flags(&pool, id, "Show").await, (true, true));
+        assert_eq!(series_flags(&pool, id, "Other").await, (false, false));
+        let kinds: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT kind, COUNT(*) FROM canonical_entities GROUP BY kind ORDER BY kind",
+        )
+        .fetch_all(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(kinds, [("movie".into(), 1), ("series".into(), 2)]);
+        let movie_docs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM movie_search")
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(movie_docs, 1, "series entities stay out of movie search");
+    }
+
+    #[tokio::test]
+    async fn a_title_bound_series_upgrades_to_its_provider_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        // Bound while opened (no sentinel), as an upgraded profile would be.
+        let opened: Vec<_> = opened_episodes(id, "Dark")
+            .into_iter()
+            .map(|e| Ok(episode_entry("Dark", 1, e.episode as u32, &e.stream_url)))
+            .collect();
+        import(pool.clone(), id, opened, ImportMode::Append).await;
+        SeriesRepository::new(&pool)
+            .set_favorite(id, "Dark", true)
+            .await
+            .unwrap();
+        let entity = series_entity(&pool, id, "Dark").await;
+        // The sentinel appears: same title, the binding upgrades in place.
+        let sentinel = |title: &str| vec![Ok(episode_entry(title, 0, 0, "xtream://series/7"))];
+        import(pool.clone(), id, sentinel("Dark"), ImportMode::Replace).await;
+        assert_eq!(series_entity(&pool, id, "Dark").await, entity);
+        let key: String = sqlx::query_scalar("SELECT binding_key FROM series_bindings")
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            key,
+            nova_core::catalog::media::series_binding_key(Some("7"), "Dark")
+        );
+        // From then on a rename keeps identity.
+        import(pool.clone(), id, sentinel("Dark (DE)"), ImportMode::Replace).await;
+        assert_eq!(series_entity(&pool, id, "Dark (DE)").await, entity);
+        assert_eq!(series_flags(&pool, id, "Dark (DE)").await, (true, false));
+    }
+
+    #[tokio::test]
+    async fn series_toggles_are_entity_owned_across_refreshes() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let catalog = || vec![Ok(episode_entry("Show", 0, 0, "xtream://series/42"))];
+        import(pool.clone(), id, catalog(), ImportMode::Append).await;
+        let repo = SeriesRepository::new(&pool);
+        let entity_flags = || async {
+            sqlx::query_as::<_, (i64, i64)>(
+                "SELECT is_favorite, is_in_watchlist FROM canonical_entities WHERE kind = 'series'",
+            )
+            .fetch_one(&*pool)
+            .await
+            .unwrap()
+        };
+        repo.set_favorite(id, "Show", true).await.unwrap();
+        assert_eq!(entity_flags().await, (1, 0), "written to the entity");
+        import(pool.clone(), id, catalog(), ImportMode::Replace).await;
+        assert_eq!(series_flags(&pool, id, "Show").await, (true, false));
+        // Clearing sticks too: the entity, not a stale snapshot, decides.
+        repo.set_favorite(id, "Show", false).await.unwrap();
+        repo.set_in_watchlist(id, "Show", true).await.unwrap();
+        import(pool.clone(), id, catalog(), ImportMode::Replace).await;
+        assert_eq!(series_flags(&pool, id, "Show").await, (false, true));
+        assert_eq!(entity_flags().await, (0, 1));
+    }
+
+    #[tokio::test]
+    async fn m3u_series_bind_by_title_and_a_rename_starts_a_seeded_entity() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("m3u", "test", "https://example.invalid/list.m3u")
+            .await
+            .unwrap()
+            .id;
+        let catalog = |title: &str| {
+            vec![
+                Ok(episode_entry(
+                    title,
+                    1,
+                    1,
+                    "https://example.invalid/s/1.mkv",
+                )),
+                Ok(episode_entry(
+                    title,
+                    1,
+                    2,
+                    "https://example.invalid/s/2.mkv",
+                )),
+            ]
+        };
+        import(pool.clone(), id, catalog("Show"), ImportMode::Append).await;
+        SeriesRepository::new(&pool)
+            .set_favorite(id, "Show", true)
+            .await
+            .unwrap();
+        let first = series_entity(&pool, id, "Show").await;
+        import(pool.clone(), id, catalog("Show"), ImportMode::Replace).await;
+        assert_eq!(
+            series_entity(&pool, id, "Show").await,
+            first,
+            "same title, same entity"
+        );
+        // M3U has no series ID: a rename is a new entity, seeded from the
+        // legacy restore (episode URLs), and the old one is kept, unbound.
+        import(pool.clone(), id, catalog("The Show"), ImportMode::Replace).await;
+        let renamed = series_entity(&pool, id, "The Show").await;
+        assert_ne!(renamed, first);
+        assert_eq!(series_flags(&pool, id, "The Show").await, (true, false));
+        let old: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM canonical_entities WHERE id = ? AND is_favorite = 1",
+        )
+        .bind(&first)
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(old, 1, "the previous entity and its state are retained");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_source_keeps_series_entities() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let sources = SourceRepository::new(&pool);
+        let id = sources
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let catalog = vec![Ok(episode_entry("Show", 0, 0, "xtream://series/42"))];
+        import(pool.clone(), id, catalog, ImportMode::Append).await;
+        SeriesRepository::new(&pool)
+            .set_favorite(id, "Show", true)
+            .await
+            .unwrap();
+        sources.delete(id).await.unwrap();
+        let counts: (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM canonical_entities WHERE kind = 'series' AND is_favorite = 1),
+                    (SELECT COUNT(*) FROM series_bindings)",
+        )
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            counts,
+            (1, 0),
+            "entity and state outlive the source's bindings"
         );
     }
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE canonical_entities SET is_in_watchlist = ?\n               WHERE kind = 'series' AND id IN (\n                   SELECT entity_id FROM series_bindings\n                   WHERE source_id = ? AND series_title = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "2367dc2d1cc1e9977506962d5b3eaae1b69959b7f54e5cd14c4fa365f8fcc223"
+}

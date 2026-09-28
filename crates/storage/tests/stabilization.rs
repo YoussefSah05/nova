@@ -318,3 +318,125 @@ async fn concurrent_backfills_of_a_legacy_profile_compile_exactly_once() {
     assert_eq!(counts, (500, 500, 72));
     upgraded.close().await;
 }
+
+/// 0036 rebuilds `canonical_entities` (to admit series) by parking and
+/// reloading every child table; existing movie identity state must come
+/// through untouched, and existing series gain entities seeded with their
+/// flags, keyed by provider series ID where the catalog sentinel carries one.
+#[tokio::test]
+async fn upgrade_to_canonical_series_keeps_movie_identity_and_seeds_series() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("profile.db");
+    let pool = SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true),
+    )
+    .await
+    .unwrap();
+    let mut old: Migrator = sqlx::migrate!("./migrations/profile");
+    old.migrations =
+        std::borrow::Cow::Owned(old.iter().filter(|m| m.version <= 35).cloned().collect());
+    old.run(&pool).await.unwrap();
+    let source = SourceRepository::new(&pool)
+        .create("xtream", "legacy", "http://example.invalid/get.php")
+        .await
+        .unwrap()
+        .id;
+    // Movie identity state in every child table of `canonical_entities`.
+    for sql in [
+        "INSERT INTO vod_items (id, source_id, name, stream_url, binding_key, locator_key) VALUES (10, 1, 'Heat', 'http://example.invalid/m/1', 'k1', 'k1')",
+        "INSERT INTO canonical_entities (id, kind, title, is_favorite, is_in_watchlist, created_at, state) VALUES ('mov-a', 'movie', 'Heat', 1, 1, 1, 'active'), ('mov-b', 'movie', 'Heat', 0, 0, 2, 'merged')",
+        "INSERT INTO stream_variants VALUES ('var-1', 'mov-a', 1, 'k1', 10, 1)",
+        "INSERT INTO entity_watch_state VALUES ('mov-a', 120.0, 6000.0, 5, 0, 'source')",
+        "INSERT INTO entity_lineage (operation, entity_a, entity_b, actor, evidence_json, prior_state_json, created_at) VALUES ('merge', 'mov-a', 'mov-b', 'resolver', '{}', '{}', 3)",
+        "INSERT INTO entity_redirects VALUES ('mov-b', 'mov-a', 1, 3)",
+        "INSERT INTO entity_aliases VALUES ('mov-a', 'external', 'tmdb:movie:949', 1)",
+        "INSERT INTO entity_external_matches (entity_id, namespace, status, external_id, method, matcher_version, evidence_json, canonical_title, checked_at) VALUES ('mov-a', 'tmdb:movie', 'matched', '949', 'trusted_id', 2, '{}', 'Heat', 4)",
+        // Series: an unopened Xtream sentinel (favourite), an opened series
+        // whose sentinel was replaced by episodes (watchlisted), and one
+        // untouched series.
+        "INSERT INTO series_episodes (source_id, series_title, season, episode, stream_url, is_favorite, is_in_watchlist) VALUES (1, 'Dark', 0, 0, 'xtream://series/42', 1, 0)",
+        "INSERT INTO series_episodes (source_id, series_title, season, episode, stream_url, is_favorite, is_in_watchlist) VALUES (1, 'Lost', 1, 1, 'http://example.invalid/series/u/p/7.mkv', 0, 1), (1, 'Lost', 1, 2, 'http://example.invalid/series/u/p/8.mkv', 0, 1)",
+        "INSERT INTO series_episodes (source_id, series_title, season, episode, stream_url) VALUES (1, 'Ozark', 0, 0, 'xtream://series/9')",
+    ] {
+        sqlx::query(sql).execute(&pool).await.unwrap();
+    }
+    assert_eq!(source, 1);
+    pool.close().await;
+
+    for _ in 0..2 {
+        // Upgrade, then reopen: the data step must be idempotent.
+        let upgraded = init_profile_db(path.to_str().unwrap()).await.unwrap();
+        let movie: (String, i64, i64, String) = sqlx::query_as(
+            "SELECT kind, is_favorite, is_in_watchlist, state FROM canonical_entities WHERE id = 'mov-a'",
+        )
+        .fetch_one(&upgraded)
+        .await
+        .unwrap();
+        assert_eq!(movie, ("movie".into(), 1, 1, "active".into()));
+        let children: (i64, i64, i64, i64, i64, i64, f64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM stream_variants), (SELECT COUNT(*) FROM entity_lineage),
+                    (SELECT COUNT(*) FROM entity_redirects), (SELECT COUNT(*) FROM entity_aliases),
+                    (SELECT COUNT(*) FROM entity_external_matches), (SELECT COUNT(*) FROM entity_watch_state),
+                    (SELECT position_sec FROM entity_watch_state WHERE entity_id = 'mov-a')",
+        )
+        .fetch_one(&upgraded)
+        .await
+        .unwrap();
+        assert_eq!(
+            children,
+            (1, 1, 1, 1, 1, 1, 120.0),
+            "movie identity state kept"
+        );
+        let lineage_guard = sqlx::query("DELETE FROM entity_lineage")
+            .execute(&upgraded)
+            .await;
+        assert!(lineage_guard.is_err(), "lineage is still append-only");
+
+        let series: Vec<(String, i64, i64)> = sqlx::query_as(
+            "SELECT title, is_favorite, is_in_watchlist FROM canonical_entities
+             WHERE kind = 'series' ORDER BY title",
+        )
+        .fetch_all(&upgraded)
+        .await
+        .unwrap();
+        assert_eq!(
+            series,
+            [
+                ("Dark".into(), 1, 0),
+                ("Lost".into(), 0, 1),
+                ("Ozark".into(), 0, 0)
+            ],
+            "one entity per series, seeded from the row flags"
+        );
+        let keys: Vec<(String, String)> = sqlx::query_as(
+            "SELECT series_title, binding_key FROM series_bindings ORDER BY series_title",
+        )
+        .fetch_all(&upgraded)
+        .await
+        .unwrap();
+        let key = |title: &str| keys.iter().find(|(t, _)| t == title).unwrap().1.clone();
+        assert_eq!(
+            key("Dark"),
+            nova_core::catalog::media::series_binding_key(Some("42"), "Dark")
+        );
+        assert_eq!(
+            key("Lost"),
+            nova_core::catalog::media::series_binding_key(None, "Lost"),
+            "an opened series has no sentinel yet: bound by title"
+        );
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&upgraded)
+            .await
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        let fk: Vec<(String,)> = sqlx::query_as("PRAGMA foreign_key_check")
+            .fetch_all(&upgraded)
+            .await
+            .unwrap();
+        assert!(fk.is_empty());
+        upgraded.close().await;
+    }
+}

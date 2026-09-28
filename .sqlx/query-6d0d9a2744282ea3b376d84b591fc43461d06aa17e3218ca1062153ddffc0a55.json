@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO canonical_entities\n                               (id, kind, title, is_favorite, is_in_watchlist, created_at)\n                           VALUES (?, 'series', ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "6d0d9a2744282ea3b376d84b591fc43461d06aa17e3218ca1062153ddffc0a55"
+}

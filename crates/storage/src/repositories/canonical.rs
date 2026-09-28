@@ -26,6 +26,7 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 use crate::error::StorageError;
 
 mod identity;
+mod series_identity;
 
 pub use identity::{LineageEntry, ResolutionReport, MAX_REDIRECT_HOPS};
 
