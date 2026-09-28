@@ -224,12 +224,15 @@ impl<'a> SeriesRepository<'a> {
 
     /// Re-apply snapshotted flags to the refreshed rows: to every series that
     /// now owns one of the snapshot's stream URLs (even if its parsed title
-    /// changed), or else still carries the old title.
+    /// changed), or else still carries the old title. Returns the
+    /// `(old_title, new_title)` renames detected by URL, so the catalog
+    /// compiler can move the series' identity instead of copying its state.
     pub async fn apply_series_flags_tx(
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
         flags: &[SeriesFlagSnapshot],
-    ) -> Result<(), StorageError> {
+    ) -> Result<Vec<(String, String)>, StorageError> {
+        let mut renames = Vec::new();
         for snap in flags {
             let f = i64::from(snap.is_favorite);
             let w = i64::from(snap.is_in_watchlist);
@@ -245,6 +248,7 @@ impl<'a> SeriesRepository<'a> {
                 .await?
                 {
                     if !titles.contains(&title) {
+                        renames.push((snap.series_title.clone(), title.clone()));
                         titles.push(title);
                     }
                 }
@@ -261,7 +265,7 @@ impl<'a> SeriesRepository<'a> {
                 .await?;
             }
         }
-        Ok(())
+        Ok(renames)
     }
 
     pub async fn delete_by_source_tx(

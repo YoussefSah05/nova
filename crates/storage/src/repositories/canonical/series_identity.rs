@@ -39,7 +39,20 @@ impl CanonicalRepository<'_> {
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
     ) -> Result<CompileStats, StorageError> {
-        // 1. Unbind: this generation's titles are bound again below.
+        // 1. Unbind: this generation's titles are bound again below. Remember
+        //    which binding held each title, so a series listed without its
+        //    sentinel (opened, or compiled outside an import) keeps the
+        //    binding it already had, whatever its key.
+        let previous: HashMap<String, String> = sqlx::query!(
+            r#"SELECT series_title as "series_title!: String", binding_key as "binding_key!: String"
+               FROM series_bindings WHERE source_id = ? AND series_title IS NOT NULL"#,
+            source_id,
+        )
+        .fetch_all(&mut **tx)
+        .await?
+        .into_iter()
+        .map(|r| (r.series_title, r.binding_key))
+        .collect();
         sqlx::query!(
             "UPDATE series_bindings SET series_title = NULL WHERE source_id = ?",
             source_id,
@@ -105,12 +118,20 @@ impl CanonicalRepository<'_> {
                     stats.upgraded += 1;
                     key
                 }
-                // 3c. Title-keyed series seen before (M3U).
+                // 3c. No sentinel this time: the binding this title already had.
+                None if previous
+                    .get(&g.series_title)
+                    .is_some_and(|key| bound.contains_key(key) && !claimed.contains(key)) =>
+                {
+                    stats.rebound += 1;
+                    previous[&g.series_title].clone()
+                }
+                // 3d. Title-keyed series seen before (M3U).
                 None if bound.contains_key(&by_title) && !claimed.contains(&by_title) => {
                     stats.rebound += 1;
                     by_title
                 }
-                // 3d. New series: its entity is seeded from the legacy flags
+                // 3e. New series: its entity is seeded from the legacy flags
                 //     (upgrade backfill and the refresh restore).
                 new_key => {
                     let key = new_key.unwrap_or(by_title);
@@ -200,6 +221,44 @@ impl CanonicalRepository<'_> {
         )
         .execute(&mut **tx)
         .await?;
+        Ok(())
+    }
+
+    /// Move title-keyed bindings of series the provider renamed (detected by
+    /// the refresh restore through unchanged episode URLs) to their new
+    /// title, so the series keeps its entity instead of a copy of its state
+    /// being seeded into a new one — which would leave the old entity with
+    /// stale state that a later revert of the title would bring back. Runs in
+    /// the import transaction, before [`Self::compile_series_tx`]. Bindings
+    /// keyed by a provider series ID need nothing: the ID survives a rename.
+    pub async fn carry_series_renames_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+        renames: &[(String, String)],
+    ) -> Result<(), StorageError> {
+        for (old_title, new_title) in renames {
+            let old_key = series_binding_key(None, old_title);
+            let new_key = series_binding_key(None, new_title);
+            // Only when the old title is gone and the new one is unclaimed:
+            // a split (both titles listed) keeps both identities apart.
+            sqlx::query!(
+                r#"UPDATE series_bindings SET binding_key = ?
+                   WHERE source_id = ? AND binding_key = ?
+                     AND NOT EXISTS (SELECT 1 FROM series_bindings k
+                                     WHERE k.source_id = ? AND k.binding_key = ?)
+                     AND NOT EXISTS (SELECT 1 FROM series_episodes se
+                                     WHERE se.source_id = ? AND se.series_title = ?)"#,
+                new_key,
+                source_id,
+                old_key,
+                source_id,
+                new_key,
+                source_id,
+                old_title,
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
         Ok(())
     }
 

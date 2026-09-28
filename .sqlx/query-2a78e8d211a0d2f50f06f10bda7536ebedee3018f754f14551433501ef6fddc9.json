@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE series_bindings SET binding_key = ?\n                   WHERE source_id = ? AND binding_key = ?\n                     AND NOT EXISTS (SELECT 1 FROM series_bindings k\n                                     WHERE k.source_id = ? AND k.binding_key = ?)\n                     AND NOT EXISTS (SELECT 1 FROM series_episodes se\n                                     WHERE se.source_id = ? AND se.series_title = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "2a78e8d211a0d2f50f06f10bda7536ebedee3018f754f14551433501ef6fddc9"
+}

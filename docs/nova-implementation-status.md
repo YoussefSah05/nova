@@ -30,10 +30,10 @@
 | M03 External model storage | COMPLETE (unqualified) | Bookmarks in `mac_model_library.rs`; offline → `unavailable`, reconnect restores. | No physical-drive or sandbox qualification; downloads always go to the internal library. |
 | M04 Runtime manager / leases | COMPLETE (backend) | `model_runtime.rs`: shared load, leases, LRU eviction, residency budget. | `model_runtime_status` / `unload_model` have no React consumer. |
 | M05 Resource governor | PARTIAL | `resource_policy.rs` lanes; playback guards suspend background classes. | Channel-logo matching, series refetch, `url-tvg` registration and on-demand TMDB/Xtream fetches bypass admission. Playback guards are released only by frontend calls, so a webview reload leaves background work suspended. |
-| M06 Canonical domain / provider boundary | PARTIAL | Movies: `canonical_entities` / `stream_variants` (0021). Secret-free legacy DTOs (see *Secret-free IPC boundary* below). | Series, seasons, episodes and live are provider rows (`kind CHECK ('movie')`). |
+| M06 Canonical domain / provider boundary | PARTIAL | Movies: `canonical_entities` / `stream_variants` (0021). Series identity + favorite/watchlist: `kind = 'series'` entities via `series_bindings` (0036). Secret-free legacy DTOs. | Seasons, episodes and live are provider rows; series DTOs don't expose entity IDs yet. |
 | M07 Naming / normalization / classification | PARTIAL | Naming v1 parser; raw title/group kept (0026); `naming::display_title`. | Media type is endpoint/URL-heuristic only, M3U defaults to Live, no `Unknown` in `MediaKind`. Movie cards use a hand-written SQL COALESCE instead of `display_title`; series `raw` fallback is set to the parsed title. |
 | M08 Fingerprints / candidate blocking | PARTIAL | `catalog::{fingerprint, reconcile}`; blocking used by movie resolution. | Refresh still deletes and reinserts. Unchanged/changed/new/deleted classification is unwired; movie/live embeddings and enrichment status are discarded on every refresh. |
-| M09 Entity resolution / identity history | PARTIAL | P09: deterministic resolver, redirects, lineage, cannot-link (movies). | No split or user correction; series/episodes/live have no entities. |
+| M09 Entity resolution / identity history | PARTIAL | P09: deterministic resolver, redirects, lineage, cannot-link (movies). Series identity survives provider renames (by series ID, or by episode URLs for M3U). | No split or user correction; no cross-source series resolution; episodes/live have no entities. |
 | M10 Atomic catalog snapshots | PARTIAL | P10: validate + per-source `catalog_publications`. | No profile-wide generation/head; protected snapshot store (`catalog-ingest`) unwired. |
 | M11 TMDB identification / progressive enrichment | PARTIAL | Movies: entity-owned matches with provenance and trusted IDs (P11); tiered on-demand facts (0035). | Series matches live on `series_meta` keyed by `(source_id, series_title)`. |
 | M12 Canonical naming / localization | PARTIAL | Localized + original titles stored (0028); one policy function. | Policy not applied uniformly (see M07); no correction tier. |
@@ -107,8 +107,8 @@
    playback locator (`/proxy?url=…`), which still carries the upstream URL.
 2. ~~Deterministic search must survive AI failure~~ — fixed by the lexical fallback below.
 3. Playback truth belongs to Rust (§24): progress, completion, resume and next episode are React-owned.
-4. User state belongs to canonical identity (§3): series, episode and live state is keyed to provider
-   rows and restored by URL/title matching.
+4. User state belongs to canonical identity (§3): series favorite/watchlist are now entity-owned;
+   episode resume and live state are still keyed to provider rows and restored by URL/title matching.
 5. Jobs are bounded (§29): the EPG download has no size cap.
 
 ### Answers to the §60 questions
@@ -177,14 +177,58 @@ Branch `fix/search-lexical-fallback`.
   `cargo fmt --check`, `git diff --check` pass; after the review fix, `just lint` and the desktop
   library tests (105 passed) were re-run. Not verified in the running app (`just dev`).
 
+### Canonical series, slice 1: identity and series-level user state (M06/M09) — 2026-09-28
+
+Branch `feat/canonical-series`.
+
+- **Migration 0036.** `canonical_entities.kind` now admits `'series'`. SQLite can't alter a CHECK, so
+  the table is rebuilt the 0010 way: all seven children (`stream_variants`, `entity_watch_state`,
+  `entity_lineage` with its AUTOINCREMENT and append-only triggers, `entity_redirects`,
+  `entity_aliases`, `entity_cannot_link`, `entity_external_matches`) are parked in FK-less copies,
+  dropped, recreated with byte-identical DDL and reloaded. New `series_bindings(source_id,
+  binding_key, entity_id, series_title)`; `series_title` is NULL while unlisted. Additive otherwise.
+- **Binding key** (`nova_core::catalog::media::series_binding_key`): the Xtream series ID from the
+  catalog sentinel `xtream://series/<id>`, else the exact parsed title (M3U has no series ID).
+- **Compiler** (`CanonicalRepository::compile_series_tx`, in the import transaction after movie
+  resolution): re-bind by series ID (even under a new title); upgrade a title-keyed binding to the ID
+  once the sentinel appears; keep a title's previous binding when compiled without its sentinel;
+  re-bind by title; else create an entity seeded from the legacy flags. Every listed series ends up
+  bound. The entity follows the current title; per-row flags are re-derived from it (mirror).
+- **Renames:** Xtream renames keep identity through the series ID — including a series that was
+  opened, which the legacy URL/title restore lost. M3U renames are recognised by the refresh restore
+  through unchanged episode URLs and the title-keyed binding is moved
+  (`carry_series_renames_tx`), so state is carried, not copied.
+- **Write-through:** `SeriesRepository::set_favorite` / `set_in_watchlist` update the entity, then
+  the rows. `init_profile_db` backfills existing profiles (`backfill_series`, `BEGIN IMMEDIATE` per
+  source); the steady-state check costs ~20–30 ms at 100k episodes (covering indexes both sides).
+- **Tests (9):** core key namespaces/stability; upgrade from schema 35 preserving every movie
+  identity table, the lineage trigger, integrity and FK checks, and seeding series by ID/title
+  (idempotent reopen); through the real `run_import`: opened-then-renamed Xtream series keeps entity
+  and flags (fails without the compile step), title→ID upgrade then rename, entity-owned toggles
+  incl. clearing, M3U rename carries identity and a revert brings back no stale state (fails without
+  the carry-over), a sentinel-less compile keeps an opened series' identity, source deletion keeps
+  entities.
+- **Independent review:** no Critical/High; migration verified by schema diff. **Medium, confirmed
+  and fixed:** (1) an M3U rename seeded a copy and left stale state on the old entity, which a title
+  revert brought back — fixed by moving the binding; (2) a compile without the sentinel forked an
+  opened series' identity — fixed by reusing the title's previous binding.
+- **Known gaps (Low, recorded):** an M3U rename of a series with *no* favorite/watchlist isn't
+  detected (the restore snapshots flagged series only), so it gets a fresh, empty entity; the movie
+  entity APIs (`set_favorite`, `record_progress`, …) don't reject series IDs (not reachable until
+  series IDs cross IPC); the mirror rewrites every episode row per import; `MAX(stream_url)` picks
+  the sentinel textually when two series share a title; episode resume and series TMDB matches are
+  not entity-owned yet; series DTOs don't carry the entity ID.
+- **Validation:** `just lint`, `just test` (540 Rust, 0 failed, 5 opt-in ignored; 56 frontend),
+  `cargo fmt --check`, `git diff --check` pass after the review fixes. The first full run failed only
+  because the disk was full; the 93 GB debug cache was cleaned with the user's approval and the
+  suite rerun from scratch. Not verified in the running app (`just dev`) or on a real profile copy.
+
 ### Next dependency
 
-**Canonical series identity (M06/M09/M11 for series, the prerequisite for M22/M23).** Series,
-seasons and episodes are provider rows keyed by `(source_id, series_title)`; favorites, watchlist,
-resume and TMDB matches survive refresh only by URL/title matching and are lost when a parsed title
-changes. Extend the existing movie canonical model (`canonical_entities`, `stream_variants`, resolver,
-`entity_external_matches`) to series and episodes — no parallel catalog. This is a multi-slice
-milestone; its first slice should be the additive schema plus series entities with user state.
+**Canonical series, slice 2 (M11/M22 for series):** move series TMDB matches from `series_meta`
+(keyed by `(source_id, series_title)`) onto the entity (`entity_external_matches`, namespace
+`tmdb:tv`, mirrored like movies), expose `entityId` on series DTOs, and guard the movie entity APIs by
+kind. Then episode identity/resume (slice 3), then the playback coordinator (M14).
 
 ---
 

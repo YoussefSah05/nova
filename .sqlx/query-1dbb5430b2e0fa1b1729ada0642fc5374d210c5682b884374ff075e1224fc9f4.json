@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT series_title as \"series_title!: String\", binding_key as \"binding_key!: String\"\n               FROM series_bindings WHERE source_id = ? AND series_title IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "series_title!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "binding_key!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "1dbb5430b2e0fa1b1729ada0642fc5374d210c5682b884374ff075e1224fc9f4"
+}

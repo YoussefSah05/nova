@@ -1466,7 +1466,11 @@ async fn restore_user_state(
 ) -> Result<(), nova_storage::StorageError> {
     ChannelRepository::restore_flags_tx(tx, source_id, &snap.channel_flags).await?;
     VodRepository::restore_flags_tx(tx, source_id, &snap.vod_flags).await?;
-    SeriesRepository::apply_series_flags_tx(tx, source_id, &snap.series_flags).await?;
+    let renames =
+        SeriesRepository::apply_series_flags_tx(tx, source_id, &snap.series_flags).await?;
+    // A title-keyed (M3U) series renamed by the provider keeps its entity:
+    // move its binding rather than seeding a copy of its state.
+    CanonicalRepository::carry_series_renames_tx(tx, source_id, &renames).await?;
     WatchHistoryRepository::restore_tx(tx, source_id, &snap.watch).await?;
     // Episodes that came back under a different URL (M3U credential change)
     // pick up their parked history by durable key.
@@ -2425,7 +2429,7 @@ mod stabilization_tests {
     }
 
     #[tokio::test]
-    async fn m3u_series_bind_by_title_and_a_rename_starts_a_seeded_entity() {
+    async fn m3u_series_bind_by_title_and_carry_their_entity_through_a_rename() {
         let dir = tempfile::tempdir().unwrap();
         let pool = open_db(&dir.path().join("p.db")).await;
         let id = SourceRepository::new(&pool)
@@ -2450,31 +2454,73 @@ mod stabilization_tests {
             ]
         };
         import(pool.clone(), id, catalog("Show"), ImportMode::Append).await;
-        SeriesRepository::new(&pool)
-            .set_favorite(id, "Show", true)
-            .await
-            .unwrap();
-        let first = series_entity(&pool, id, "Show").await;
+        let repo = SeriesRepository::new(&pool);
+        repo.set_favorite(id, "Show", true).await.unwrap();
+        let entity = series_entity(&pool, id, "Show").await;
         import(pool.clone(), id, catalog("Show"), ImportMode::Replace).await;
         assert_eq!(
             series_entity(&pool, id, "Show").await,
-            first,
+            entity,
             "same title, same entity"
         );
-        // M3U has no series ID: a rename is a new entity, seeded from the
-        // legacy restore (episode URLs), and the old one is kept, unbound.
+        // M3U has no series ID; the refresh recognises the rename through the
+        // unchanged episode URLs and moves the identity, not a copy of it.
         import(pool.clone(), id, catalog("The Show"), ImportMode::Replace).await;
-        let renamed = series_entity(&pool, id, "The Show").await;
-        assert_ne!(renamed, first);
+        assert_eq!(series_entity(&pool, id, "The Show").await, entity);
         assert_eq!(series_flags(&pool, id, "The Show").await, (true, false));
-        let old: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM canonical_entities WHERE id = ? AND is_favorite = 1",
+        // Cleared, then the provider reverts the title: nothing stale returns.
+        repo.set_favorite(id, "The Show", false).await.unwrap();
+        import(pool.clone(), id, catalog("Show"), ImportMode::Replace).await;
+        assert_eq!(series_flags(&pool, id, "Show").await, (false, false));
+        // An unflagged rename isn't detected (the restore snapshots flagged
+        // series only), so "Show" is a fresh entity again; no entity may
+        // still hold the cleared favourite.
+        let stale: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM canonical_entities WHERE kind = 'series' AND is_favorite = 1",
         )
-        .bind(&first)
         .fetch_one(&*pool)
         .await
         .unwrap();
-        assert_eq!(old, 1, "the previous entity and its state are retained");
+        assert_eq!(stale, 0, "no stale copies of cleared state");
+    }
+
+    #[tokio::test]
+    async fn a_compile_without_the_sentinel_keeps_an_opened_series_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let sentinel = || vec![Ok(episode_entry("Dark", 0, 0, "xtream://series/7"))];
+        import(pool.clone(), id, sentinel(), ImportMode::Append).await;
+        let repo = SeriesRepository::new(&pool);
+        repo.set_favorite(id, "Dark", true).await.unwrap();
+        let entity = series_entity(&pool, id, "Dark").await;
+        // Opened: only episodes remain, bound by the provider ID.
+        repo.replace_series_episodes(id, "Dark", &opened_episodes(id, "Dark"), None, None)
+            .await
+            .unwrap();
+        // A compile outside an import (e.g. the open-time backfill) sees no
+        // sentinel; it must keep the ID binding, not fork a title-keyed copy.
+        let mut tx = pool.begin().await.unwrap();
+        CanonicalRepository::compile_series_tx(&mut tx, id)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(series_entity(&pool, id, "Dark").await, entity);
+        repo.set_in_watchlist(id, "Dark", true).await.unwrap();
+        // The next refresh brings the sentinel back: same entity, both flags.
+        import(pool.clone(), id, sentinel(), ImportMode::Replace).await;
+        assert_eq!(series_entity(&pool, id, "Dark").await, entity);
+        assert_eq!(series_flags(&pool, id, "Dark").await, (true, true));
+        let series: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM canonical_entities WHERE kind = 'series'")
+                .fetch_one(&*pool)
+                .await
+                .unwrap();
+        assert_eq!(series, 1);
     }
 
     #[tokio::test]
