@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE series_episodes\n               SET genre = CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL\n                                    THEN m.primary_genre\n                                WHEN m.status <> 'matched' AND series_episodes.genre_source = 'tmdb'\n                                    THEN NULL\n                                ELSE series_episodes.genre END,\n                   genre_source = CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL\n                                           THEN 'tmdb'\n                                       WHEN m.status <> 'matched'\n                                            AND series_episodes.genre_source = 'tmdb'\n                                           THEN NULL\n                                       ELSE series_episodes.genre_source END,\n                   category = COALESCE(\n                       CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL\n                                THEN m.primary_genre\n                            WHEN m.status <> 'matched' AND series_episodes.genre_source = 'tmdb'\n                                THEN NULL\n                            ELSE series_episodes.genre END,\n                       series_episodes.collection, series_episodes.category)\n               FROM series_bindings b\n               JOIN entity_external_matches m\n                 ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'\n               WHERE series_episodes.source_id = b.source_id\n                 AND series_episodes.series_title = b.series_title\n                 AND b.entity_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "d0bd1bf4253381242a8adcc025999ad2e5b2049c8b26931e5c4ba6dd16c12e9d"
+}

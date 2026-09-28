@@ -23,6 +23,13 @@ pub const TMDB_MOVIE: &str = "tmdb:movie";
 /// Namespace of TMDB TV IDs, for canonical series entities.
 pub const TMDB_TV: &str = "tmdb:tv";
 
+/// Which bound series [`ExternalMatchRepository::mirror_series_tx`] re-derives.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SeriesMirrorScope<'a> {
+    Source(i64),
+    Entity(&'a str),
+}
+
 /// Order in which titles are matched: what the user is most likely to look at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MatchPriority {
@@ -360,16 +367,19 @@ impl<'a> ExternalMatchRepository<'a> {
 
     /// Re-derive the series mirror (`series_meta` display row and the
     /// episodes' TMDB genre) from entity-owned `tmdb:tv` matches, for every
-    /// bound series of `source_id`, or only `entity_id`'s titles when given.
+    /// bound series of a source, or only one entity's titles.
     /// A series renamed by the provider keeps its match this way, with no
     /// new TMDB request.
     pub(crate) async fn mirror_series_tx(
         tx: &mut Transaction<'_, Sqlite>,
-        source_id: Option<i64>,
-        entity_id: Option<&str>,
+        scope: SeriesMirrorScope<'_>,
     ) -> Result<(), StorageError> {
-        sqlx::query!(
-            r#"INSERT INTO series_meta
+        // Separate statements per scope so each uses its index
+        // (`idx_series_bindings_title` / `idx_series_bindings_entity`).
+        match scope {
+            SeriesMirrorScope::Source(source_id) => {
+                sqlx::query!(
+                    r#"INSERT INTO series_meta
                    (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,
                     tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,
                     evidence_json, checked_at, original_title, title_language, tmdb_id)
@@ -383,8 +393,7 @@ impl<'a> ExternalMatchRepository<'a> {
                JOIN entity_external_matches m
                  ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'
                WHERE b.series_title IS NOT NULL
-                 AND (?1 IS NULL OR b.source_id = ?1)
-                 AND (?2 IS NULL OR b.entity_id = ?2)
+                 AND b.source_id = ?
                ON CONFLICT(source_id, series_title) DO UPDATE SET
                    tmdb_id = excluded.tmdb_id,
                    canonical_title = excluded.canonical_title,
@@ -400,16 +409,12 @@ impl<'a> ExternalMatchRepository<'a> {
                    checked_at = excluded.checked_at,
                    original_title = excluded.original_title,
                    title_language = excluded.title_language"#,
-            source_id,
-            entity_id,
-        )
-        .execute(&mut **tx)
-        .await?;
-        // Same genre precedence as movies: a confident TMDB genre wins, an
-        // unresolved decision removes only a TMDB genre, and the browse facet
-        // `category` is recomputed as COALESCE(genre, collection).
-        sqlx::query!(
-            r#"UPDATE series_episodes
+                    source_id,
+                )
+                .execute(&mut **tx)
+                .await?;
+                sqlx::query!(
+                    r#"UPDATE series_episodes
                SET genre = CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL
                                     THEN m.primary_genre
                                 WHEN m.status <> 'matched' AND series_episodes.genre_source = 'tmdb'
@@ -433,13 +438,80 @@ impl<'a> ExternalMatchRepository<'a> {
                  ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'
                WHERE series_episodes.source_id = b.source_id
                  AND series_episodes.series_title = b.series_title
-                 AND (?1 IS NULL OR b.source_id = ?1)
-                 AND (?2 IS NULL OR b.entity_id = ?2)"#,
-            source_id,
-            entity_id,
-        )
-        .execute(&mut **tx)
-        .await?;
+                 AND b.source_id = ?"#,
+                    source_id,
+                )
+                .execute(&mut **tx)
+                .await?;
+            }
+            SeriesMirrorScope::Entity(entity_id) => {
+                sqlx::query!(
+                    r#"INSERT INTO series_meta
+                   (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,
+                    tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,
+                    evidence_json, checked_at, original_title, title_language, tmdb_id)
+               SELECT b.source_id, b.series_title, m.canonical_title, m.poster_url,
+                      m.backdrop_url, m.overview, m.genres,
+                      CASE m.status WHEN 'matched' THEN 'matched' ELSE 'unmatched' END,
+                      m.method, m.confidence_bp, m.matcher_version, m.evidence_json,
+                      m.checked_at, m.original_title, m.title_language,
+                      CASE WHEN m.status = 'matched' THEN CAST(m.external_id AS INTEGER) END
+               FROM series_bindings b
+               JOIN entity_external_matches m
+                 ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'
+               WHERE b.series_title IS NOT NULL
+                 AND b.entity_id = ?
+               ON CONFLICT(source_id, series_title) DO UPDATE SET
+                   tmdb_id = excluded.tmdb_id,
+                   canonical_title = excluded.canonical_title,
+                   poster_url = excluded.poster_url,
+                   backdrop_url = excluded.backdrop_url,
+                   overview = excluded.overview,
+                   tmdb_genres = excluded.tmdb_genres,
+                   tmdb_status = excluded.tmdb_status,
+                   match_method = excluded.match_method,
+                   confidence_bp = excluded.confidence_bp,
+                   matcher_version = excluded.matcher_version,
+                   evidence_json = excluded.evidence_json,
+                   checked_at = excluded.checked_at,
+                   original_title = excluded.original_title,
+                   title_language = excluded.title_language"#,
+                    entity_id,
+                )
+                .execute(&mut **tx)
+                .await?;
+                sqlx::query!(
+                    r#"UPDATE series_episodes
+               SET genre = CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL
+                                    THEN m.primary_genre
+                                WHEN m.status <> 'matched' AND series_episodes.genre_source = 'tmdb'
+                                    THEN NULL
+                                ELSE series_episodes.genre END,
+                   genre_source = CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL
+                                           THEN 'tmdb'
+                                       WHEN m.status <> 'matched'
+                                            AND series_episodes.genre_source = 'tmdb'
+                                           THEN NULL
+                                       ELSE series_episodes.genre_source END,
+                   category = COALESCE(
+                       CASE WHEN m.status = 'matched' AND m.primary_genre IS NOT NULL
+                                THEN m.primary_genre
+                            WHEN m.status <> 'matched' AND series_episodes.genre_source = 'tmdb'
+                                THEN NULL
+                            ELSE series_episodes.genre END,
+                       series_episodes.collection, series_episodes.category)
+               FROM series_bindings b
+               JOIN entity_external_matches m
+                 ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'
+               WHERE series_episodes.source_id = b.source_id
+                 AND series_episodes.series_title = b.series_title
+                 AND b.entity_id = ?"#,
+                    entity_id,
+                )
+                .execute(&mut **tx)
+                .await?;
+            }
+        }
         Ok(())
     }
 
@@ -453,7 +525,7 @@ impl<'a> ExternalMatchRepository<'a> {
         tx: &mut Transaction<'_, Sqlite>,
         source_id: i64,
     ) -> Result<(), StorageError> {
-        Self::mirror_series_tx(tx, Some(source_id), None).await?;
+        Self::mirror_series_tx(tx, SeriesMirrorScope::Source(source_id)).await?;
         sqlx::query!(
             r#"DELETE FROM series_meta
                WHERE source_id = ?

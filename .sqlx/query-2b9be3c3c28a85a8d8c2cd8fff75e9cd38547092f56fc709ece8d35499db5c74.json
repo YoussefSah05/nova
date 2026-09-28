@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: String\" FROM canonical_entities\n                       WHERE id = ? AND kind = 'series' AND state = 'active'",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "2b9be3c3c28a85a8d8c2cd8fff75e9cd38547092f56fc709ece8d35499db5c74"
+}

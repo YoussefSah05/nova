@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT series_title as \"t!: String\" FROM series_episodes\n                   WHERE source_id = ? AND stream_url = ? LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "t!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c6e6b7f11ff4a99acb597a8cb47d4aee687f744d027402f539e0af1387b571db"
+}

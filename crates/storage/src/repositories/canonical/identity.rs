@@ -628,9 +628,10 @@ impl CanonicalRepository<'_> {
         b: &EntityId,
     ) -> Result<bool, StorageError> {
         let mut tx = self.pool.begin().await?;
+        // Movies only: series identity has no resolver to constrain yet.
         let (Some(a), Some(b)) = (
-            Self::canonical_entity_conn(&mut tx, a).await?,
-            Self::canonical_entity_conn(&mut tx, b).await?,
+            Self::movie_entity_conn(&mut tx, a).await?,
+            Self::movie_entity_conn(&mut tx, b).await?,
         ) else {
             return Ok(false);
         };

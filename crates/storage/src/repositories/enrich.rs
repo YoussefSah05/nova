@@ -27,6 +27,9 @@ pub struct EnrichUpdate {
 #[derive(Debug, Clone)]
 pub struct SeriesTmdbQuery {
     pub series_title: String,
+    /// The series' canonical entity: the decision is recorded on it even if
+    /// an import renames the title while TMDB is being queried.
+    pub entity_id: Option<String>,
     /// TMDB TV id the provider claims for the series (trusted-id evidence).
     pub trusted_tmdb_id: Option<i64>,
 }
@@ -35,6 +38,9 @@ pub struct SeriesTmdbQuery {
 #[derive(Debug, Clone, Default)]
 pub struct SeriesTmdbWrite {
     pub series_title: String,
+    /// The series' canonical entity, from the queue item; `None` falls back
+    /// to the entity currently bound to `series_title`.
+    pub entity_id: Option<String>,
     /// The matched TMDB TV id (a foreign key, never a Nova ID); `None` when
     /// unmatched.
     pub tmdb_id: Option<i64>,

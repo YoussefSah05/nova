@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT media_kind as \"media_kind!: String\",\n                   media_id as \"media_id!: i64\",\n                   position_sec as \"position_sec!: f64\",\n                   duration_sec as \"duration_sec?: f64\",\n                   watched_at as \"watched_at!: i64\",\n                   source_id as \"source_id!: i64\",\n                   title as \"title!: String\",\n                   subtitle as \"subtitle?: String\",\n                   poster_url as \"poster_url?: String\"\n            FROM (\n                SELECT 'vod' AS media_kind, v.id AS media_id,\n                       ews.position_sec, ews.duration_sec, ews.watched_at,\n                       v.source_id, COALESCE(v.canonical_title, ce.title, v.name) AS title,\n                       NULL AS subtitle,\n                       v.logo_url AS poster_url\n                FROM entity_watch_state ews\n                JOIN canonical_entities ce ON ce.id = ews.entity_id\n                JOIN vod_items v ON v.id = (\n                    SELECT MIN(s.vod_item_id) FROM stream_variants s\n                    WHERE s.entity_id = ews.entity_id AND s.vod_item_id IS NOT NULL)\n                WHERE ews.completed = 0\n                UNION ALL\n                SELECT 'episode', e.id, s.position_sec, s.duration_sec, s.watched_at,\n                       e.source_id, COALESCE(sm.canonical_title, e.series_title),\n                       'S' || printf('%02d', e.season) || 'E' || printf('%02d', e.episode),\n                       e.logo_url\n                FROM episode_watch_state s\n                JOIN series_bindings b ON b.entity_id = s.series_entity_id\n                JOIN series_episodes e\n                  ON e.source_id = b.source_id AND e.series_title = b.series_title\n                 AND e.episode_key = s.episode_key\n                LEFT JOIN series_meta sm\n                  ON sm.source_id = e.source_id AND sm.series_title = e.series_title\n                WHERE s.completed = 0\n            )\n            ORDER BY watched_at DESC\n            LIMIT ?\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "media_kind!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "media_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "position_sec!: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 3,
+        "type_info": "Float"
+      },
+      {
+        "name": "watched_at!: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_id!: i64",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "subtitle?: String",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster_url?: String",
+        "ordinal": 8,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "9eb3ee04c59a0f3f36a22eccc13782aa00e336729c3017df0476cbc100ebf9e0"
+}

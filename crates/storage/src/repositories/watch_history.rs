@@ -198,9 +198,53 @@ impl<'a> WatchHistoryRepository<'a> {
         Ok(())
     }
 
+    /// Seed entity-owned progress for an episode row from older history
+    /// (re-attached parked history), keeping any newer entity state.
+    async fn seed_episode_state_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        episode_row: i64,
+        position_sec: f64,
+        duration_sec: Option<f64>,
+        completed: bool,
+        caption_mode: Option<&str>,
+        watched_at: i64,
+    ) -> Result<(), StorageError> {
+        let Some(id) = Self::episode_identity_conn(tx, episode_row).await? else {
+            return Ok(());
+        };
+        let completed: i64 = completed.into();
+        sqlx::query!(
+            r#"INSERT INTO episode_watch_state
+                   (series_entity_id, episode_key, season, episode, position_sec, duration_sec,
+                    watched_at, completed, caption_mode)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(series_entity_id, episode_key) DO UPDATE SET
+                   season       = excluded.season,
+                   episode      = excluded.episode,
+                   position_sec = excluded.position_sec,
+                   duration_sec = excluded.duration_sec,
+                   watched_at   = excluded.watched_at,
+                   completed    = excluded.completed,
+                   caption_mode = excluded.caption_mode
+               WHERE excluded.watched_at > episode_watch_state.watched_at"#,
+            id.series_entity,
+            id.episode_key,
+            id.season,
+            id.episode,
+            position_sec,
+            duration_sec,
+            watched_at,
+            completed,
+            caption_mode,
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
     /// Upgrade step run after the series backfill: key episode rows written
     /// before 0037, then seed entity-owned episode progress from the legacy
-    /// row-keyed history and from history parked by a refresh. Each source
+    /// row-keyed history (parked history follows when re-attached). Each source
     /// is keyed in one `BEGIN IMMEDIATE` transaction; seeding keeps the most
     /// recent record and never overwrites newer entity state, so it is
     /// idempotent and cheap once done.
@@ -259,28 +303,9 @@ impl<'a> WatchHistoryRepository<'a> {
         )
         .execute(&mut *tx)
         .await?;
-        // Parked history: its episode rows aren't back, so its coordinates are
-        // unknown until the series is re-fetched.
-        sqlx::query!(
-            r#"INSERT INTO episode_watch_state
-                   (series_entity_id, episode_key, position_sec, duration_sec, watched_at,
-                    completed, caption_mode)
-               SELECT b.entity_id, p.episode_key, p.position_sec, p.duration_sec, p.watched_at,
-                      p.completed, p.caption_mode
-               FROM pending_episode_history p
-               JOIN series_bindings b
-                 ON b.source_id = p.source_id AND b.series_title = p.series_title
-               ORDER BY p.watched_at DESC
-               ON CONFLICT(series_entity_id, episode_key) DO UPDATE SET
-                   position_sec = excluded.position_sec,
-                   duration_sec = excluded.duration_sec,
-                   watched_at   = excluded.watched_at,
-                   completed    = excluded.completed,
-                   caption_mode = excluded.caption_mode
-               WHERE excluded.watched_at > episode_watch_state.watched_at"#,
-        )
-        .execute(&mut *tx)
-        .await?;
+        // Parked history (rows not re-fetched yet) is not seeded by its
+        // series title, which another series may have taken since: it reaches
+        // the entity through its episode row when re-attached.
         tx.commit().await?;
         Ok(())
     }
@@ -326,6 +351,37 @@ impl<'a> WatchHistoryRepository<'a> {
                 caption_mode: r.caption_mode,
             })
             .collect())
+    }
+
+    /// Series renamed by a refresh, detected through watched episodes whose
+    /// stream URL came back under another series title: `(old, new)` pairs,
+    /// each once. Run after the refreshed rows are inserted.
+    pub async fn episode_series_renames_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        source_id: i64,
+        rows: &[WatchSnapshot],
+    ) -> Result<Vec<(String, String)>, StorageError> {
+        let mut renames: Vec<(String, String)> = Vec::new();
+        for r in rows.iter().filter(|r| r.media_kind == "episode") {
+            let Some(old) = r.series_title.as_deref() else {
+                continue;
+            };
+            let Some(new) = sqlx::query_scalar!(
+                r#"SELECT series_title as "t!: String" FROM series_episodes
+                   WHERE source_id = ? AND stream_url = ? LIMIT 1"#,
+                source_id,
+                r.stream_url,
+            )
+            .fetch_optional(&mut **tx)
+            .await?
+            else {
+                continue;
+            };
+            if new != old && !renames.iter().any(|(o, n)| o == old && *n == new) {
+                renames.push((old.to_string(), new));
+            }
+        }
+        Ok(renames)
     }
 
     /// Delete a source's `watch_history` rows (vod/live/episode) ahead of a
@@ -498,6 +554,16 @@ impl<'a> WatchHistoryRepository<'a> {
             )
             .execute(&mut **tx)
             .await?;
+            Self::seed_episode_state_tx(
+                tx,
+                *media_id,
+                p.position_sec,
+                p.duration_sec,
+                p.completed != 0,
+                p.caption_mode.as_deref(),
+                p.watched_at,
+            )
+            .await?;
             sqlx::query!(
                 "DELETE FROM pending_episode_history WHERE source_id = ? AND episode_key = ?",
                 source_id,
@@ -549,23 +615,30 @@ impl<'a> WatchHistoryRepository<'a> {
         limit: i64,
     ) -> Result<Vec<String>, StorageError> {
         let rows = sqlx::query_scalar!(
-            r#"SELECT b.series_title as "t!: String"
-               FROM episode_watch_state s
-               JOIN series_bindings b ON b.entity_id = s.series_entity_id
-               WHERE b.source_id = ? AND b.series_title IS NOT NULL
-                 AND NOT EXISTS (
+            r#"SELECT title as "t!: String" FROM (
+                   SELECT b.series_title AS title, s.watched_at AS at
+                   FROM episode_watch_state s
+                   JOIN series_bindings b ON b.entity_id = s.series_entity_id
+                   WHERE b.source_id = ?1 AND b.series_title IS NOT NULL
+                     AND NOT EXISTS (
+                       SELECT 1 FROM series_episodes e
+                       WHERE e.source_id = b.source_id AND e.series_title = b.series_title
+                         AND e.episode_key = s.episode_key)
+                   UNION ALL
+                   -- Legacy parked history, re-attached when its rows return.
+                   SELECT p.series_title, p.watched_at
+                   FROM pending_episode_history p
+                   WHERE p.source_id = ?1
+               ) pending
+               -- Only series still listed by their catalog sentinel alone: a
+               -- series already fetched (or M3U) can't bring an orphan back.
+               WHERE EXISTS (
                    SELECT 1 FROM series_episodes e
-                   WHERE e.source_id = b.source_id AND e.series_title = b.series_title
-                     AND e.episode_key = s.episode_key)
-                 -- Only series still listed by their catalog sentinel alone: a
-                 -- series already fetched (or M3U) can't bring an orphan back.
-                 AND EXISTS (
-                   SELECT 1 FROM series_episodes e
-                   WHERE e.source_id = b.source_id AND e.series_title = b.series_title
+                   WHERE e.source_id = ?1 AND e.series_title = pending.title
                      AND e.stream_url LIKE 'xtream://series/%')
-               GROUP BY b.series_title
-               ORDER BY MAX(s.watched_at) DESC
-               LIMIT ?"#,
+               GROUP BY title
+               ORDER BY MAX(at) DESC
+               LIMIT ?2"#,
             source_id,
             limit,
         )
@@ -608,11 +681,15 @@ impl<'a> WatchHistoryRepository<'a> {
                 )
                 .fetch_optional(&mut *conn)
                 .await?;
-                return Ok(row.map(|r| ResumePosition {
-                    position_sec: r.position_sec,
-                    duration_sec: r.duration_sec,
-                    completed: r.completed != 0,
-                }));
+                if let Some(r) = row {
+                    return Ok(Some(ResumePosition {
+                        position_sec: r.position_sec,
+                        duration_sec: r.duration_sec,
+                        completed: r.completed != 0,
+                    }));
+                }
+                // No entity state yet (written before the series was bound):
+                // the legacy row below still knows.
             }
         }
         let row = sqlx::query!(
@@ -635,10 +712,11 @@ impl<'a> WatchHistoryRepository<'a> {
         }))
     }
 
-    /// Continue Watching shelf, excluding completed entries. Movies come from
-    /// entity-owned resume state (surviving refresh/credential rotation),
-    /// shown through the entity's first available variant; episodes still use
-    /// `watch_history`.
+    /// Continue Watching shelf across sources (the profile overview),
+    /// excluding completed entries. Movies and episodes come from
+    /// entity-owned progress, named by the display-title policy (TMDB title,
+    /// else the parsed title); movies show through the entity's first
+    /// available variant, episodes through their current row.
     pub async fn list_continue_watching(
         &self,
         limit: i64,
@@ -657,21 +735,28 @@ impl<'a> WatchHistoryRepository<'a> {
             FROM (
                 SELECT 'vod' AS media_kind, v.id AS media_id,
                        ews.position_sec, ews.duration_sec, ews.watched_at,
-                       v.source_id, v.name AS title, NULL AS subtitle,
+                       v.source_id, COALESCE(v.canonical_title, ce.title, v.name) AS title,
+                       NULL AS subtitle,
                        v.logo_url AS poster_url
                 FROM entity_watch_state ews
+                JOIN canonical_entities ce ON ce.id = ews.entity_id
                 JOIN vod_items v ON v.id = (
                     SELECT MIN(s.vod_item_id) FROM stream_variants s
                     WHERE s.entity_id = ews.entity_id AND s.vod_item_id IS NOT NULL)
                 WHERE ews.completed = 0
                 UNION ALL
-                SELECT 'episode', e.id, wh.position_sec, wh.duration_sec, wh.watched_at,
-                       e.source_id, e.series_title,
+                SELECT 'episode', e.id, s.position_sec, s.duration_sec, s.watched_at,
+                       e.source_id, COALESCE(sm.canonical_title, e.series_title),
                        'S' || printf('%02d', e.season) || 'E' || printf('%02d', e.episode),
                        e.logo_url
-                FROM watch_history wh
-                JOIN series_episodes e ON e.id = wh.media_id
-                WHERE wh.media_kind = 'episode' AND wh.completed = 0
+                FROM episode_watch_state s
+                JOIN series_bindings b ON b.entity_id = s.series_entity_id
+                JOIN series_episodes e
+                  ON e.source_id = b.source_id AND e.series_title = b.series_title
+                 AND e.episode_key = s.episode_key
+                LEFT JOIN series_meta sm
+                  ON sm.source_id = e.source_id AND sm.series_title = e.series_title
+                WHERE s.completed = 0
             )
             ORDER BY watched_at DESC
             LIMIT ?

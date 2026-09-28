@@ -1471,10 +1471,20 @@ async fn restore_user_state(
 ) -> Result<(), nova_storage::StorageError> {
     ChannelRepository::restore_flags_tx(tx, source_id, &snap.channel_flags).await?;
     VodRepository::restore_flags_tx(tx, source_id, &snap.vod_flags).await?;
-    let renames =
+    let mut renames =
         SeriesRepository::apply_series_flags_tx(tx, source_id, &snap.series_flags).await?;
-    // A title-keyed (M3U) series renamed by the provider keeps its entity:
-    // move its binding rather than seeding a copy of its state.
+    // Renames are also visible through watched episodes, so a series with
+    // progress but no favourite/watchlist is recognised too.
+    for rename in
+        WatchHistoryRepository::episode_series_renames_tx(tx, source_id, &snap.watch).await?
+    {
+        if !renames.contains(&rename) {
+            renames.push(rename);
+        }
+    }
+    // A title-keyed (M3U) series renamed by the provider keeps its entity
+    // (state, match, episode progress): move its binding rather than seeding
+    // a copy.
     CanonicalRepository::carry_series_renames_tx(tx, source_id, &renames).await?;
     WatchHistoryRepository::restore_tx(tx, source_id, &snap.watch).await?;
     // Episodes that came back under a different URL (M3U credential change)
@@ -3046,6 +3056,256 @@ mod stabilization_tests {
             .unwrap()
             .unwrap();
         assert_eq!(resume.position_sec, 120.0);
+    }
+
+    #[tokio::test]
+    async fn a_watched_m3u_series_keeps_its_progress_through_a_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("m3u", "test", "https://example.invalid/list.m3u")
+            .await
+            .unwrap()
+            .id;
+        let catalog = |title: &str| {
+            vec![
+                Ok(episode_entry(
+                    title,
+                    1,
+                    1,
+                    "https://example.invalid/s/1.mkv",
+                )),
+                Ok(episode_entry(
+                    title,
+                    1,
+                    2,
+                    "https://example.invalid/s/2.mkv",
+                )),
+            ]
+        };
+        import(pool.clone(), id, catalog("Show"), ImportMode::Append).await;
+        let entity = series_entity(&pool, id, "Show").await;
+        let history = WatchHistoryRepository::new(&pool);
+        let e1 = episode_id(&pool, "https://example.invalid/s/1.mkv").await;
+        history
+            .record_progress("episode", e1, 700.0, Some(2400.0), false, None)
+            .await
+            .unwrap();
+        // No favourite or watchlist: the rename is seen through the episode.
+        import(pool.clone(), id, catalog("The Show"), ImportMode::Replace).await;
+        assert_eq!(series_entity(&pool, id, "The Show").await, entity);
+        let card = history
+            .series_resume(id, "The Show")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(card.position_sec, 700.0);
+    }
+
+    #[tokio::test]
+    async fn re_attached_parked_history_reaches_the_series_entity() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        import(
+            pool.clone(),
+            id,
+            vec![Ok(episode_entry("Show", 0, 0, "xtream://series/42"))],
+            ImportMode::Append,
+        )
+        .await;
+        // History parked before entity-owned progress existed.
+        let key = nova_core::catalog::media::episode_binding_key("http://h:80/series/u/p/902.mkv");
+        sqlx::query(
+            "INSERT INTO pending_episode_history (source_id, episode_key, series_title, position_sec, duration_sec, watched_at, completed) VALUES (?, ?, 'Show', 777, 2400, 5, 0)",
+        )
+        .bind(id)
+        .bind(&key)
+        .execute(&*pool)
+        .await
+        .unwrap();
+        let history = WatchHistoryRepository::new(&pool);
+        assert_eq!(
+            history.series_with_pending_episodes(id, 10).await.unwrap(),
+            vec!["Show".to_string()],
+            "legacy parked series are still re-fetched"
+        );
+        SeriesRepository::new(&pool)
+            .replace_series_episodes(id, "Show", &opened_episodes(id, "Show"), None, None)
+            .await
+            .unwrap();
+        let e2 = episode_id(&pool, "http://h:80/series/u/p/902.mkv").await;
+        let owned: f64 = sqlx::query_scalar(
+            "SELECT position_sec FROM episode_watch_state WHERE episode_key = ?",
+        )
+        .bind(&key)
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(owned, 777.0, "entity-owned through the episode row");
+        let rail = history
+            .continue_watching_section(nova_core::ContinueSection::Series, id, 10)
+            .await
+            .unwrap();
+        assert_eq!(rail[0].media_id, e2);
+    }
+
+    #[tokio::test]
+    async fn a_series_decision_follows_its_entity_through_a_mid_match_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        let catalog = |title: &str| vec![Ok(episode_entry(title, 0, 0, "xtream://series/42"))];
+        import(pool.clone(), id, catalog("FR Dark"), ImportMode::Append).await;
+        let repo = SeriesRepository::new(&pool);
+        let queued = repo.list_for_tmdb(id, 3, 0, "en-US").await.unwrap();
+        // An import renames the series while TMDB is being queried.
+        import(pool.clone(), id, catalog("Dark"), ImportMode::Replace).await;
+        let decision = nova_storage::SeriesTmdbWrite {
+            entity_id: queued[0].entity_id.clone(),
+            ..tv_match("FR Dark", 70523, "Dark")
+        };
+        repo.apply_tmdb(id, &[decision]).await.unwrap();
+        let list = repo
+            .list_series(id, None, None, false, false, ContentSort::Default, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(list[0].series_title, "Dark");
+        assert_eq!(
+            list[0].canonical_title.as_deref(),
+            Some("Dark"),
+            "landed on its series"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_overview_rail_reads_entity_progress_under_display_titles() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        import(
+            pool.clone(),
+            id,
+            vec![Ok(episode_entry("FR Dark", 0, 0, "xtream://series/42"))],
+            ImportMode::Append,
+        )
+        .await;
+        let repo = SeriesRepository::new(&pool);
+        repo.replace_series_episodes(id, "FR Dark", &opened_episodes(id, "FR Dark"), None, None)
+            .await
+            .unwrap();
+        repo.apply_tmdb(id, &[tv_match("FR Dark", 70523, "Dark")])
+            .await
+            .unwrap();
+        let e1 = episode_id(&pool, "http://h:80/series/u/p/901.mkv").await;
+        let history = WatchHistoryRepository::new(&pool);
+        history
+            .record_progress("episode", e1, 42.0, Some(2400.0), false, None)
+            .await
+            .unwrap();
+        // The legacy mirror row alone would say something else.
+        sqlx::query("DELETE FROM watch_history")
+            .execute(&*pool)
+            .await
+            .unwrap();
+        let overview = history.list_continue_watching(10).await.unwrap();
+        assert_eq!(overview.len(), 1);
+        assert_eq!(
+            (overview[0].media_id, overview[0].title.as_str()),
+            (e1, "Dark")
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_falls_back_to_legacy_history_without_entity_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("m3u", "test", "https://example.invalid/list.m3u")
+            .await
+            .unwrap()
+            .id;
+        import(
+            pool.clone(),
+            id,
+            vec![Ok(episode_entry(
+                "Show",
+                1,
+                1,
+                "https://example.invalid/s/1.mkv",
+            ))],
+            ImportMode::Append,
+        )
+        .await;
+        let e1 = episode_id(&pool, "https://example.invalid/s/1.mkv").await;
+        sqlx::query(
+            "INSERT INTO watch_history (media_kind, media_id, position_sec, watched_at) VALUES ('episode', ?, 88, 1)",
+        )
+        .bind(e1)
+        .execute(&*pool)
+        .await
+        .unwrap();
+        let resume = WatchHistoryRepository::new(&pool)
+            .resume_position("episode", e1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resume.position_sec, 88.0);
+    }
+
+    #[tokio::test]
+    async fn cannot_link_refuses_a_series_and_sentinel_ids_bind_numerically() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("xtream", "test", "http://host/get.php")
+            .await
+            .unwrap()
+            .id;
+        // Two sentinels share a title: the smaller ID (9, not "9" > "10") wins.
+        import(
+            pool.clone(),
+            id,
+            vec![
+                Ok(episode_entry("Show", 0, 0, "xtream://series/10")),
+                Ok(episode_entry("Show", 0, 0, "xtream://series/9")),
+                Ok(entry("Heat")),
+            ],
+            ImportMode::Append,
+        )
+        .await;
+        let key: String = sqlx::query_scalar("SELECT binding_key FROM series_bindings")
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            key,
+            nova_core::catalog::media::series_binding_key(Some("9"), "Show")
+        );
+        let series =
+            nova_core::catalog::EntityId::new(series_entity(&pool, id, "Show").await).unwrap();
+        let movie: String =
+            sqlx::query_scalar("SELECT id FROM canonical_entities WHERE kind = 'movie'")
+                .fetch_one(&*pool)
+                .await
+                .unwrap();
+        let movie = nova_core::catalog::EntityId::new(movie).unwrap();
+        assert!(!CanonicalRepository::new(&pool)
+            .record_cannot_link(&movie, &series)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

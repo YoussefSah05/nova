@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use nova_core::catalog::media::{series_binding_key, xtream_series_id};
+use nova_core::catalog::media::series_binding_key;
 use nova_core::catalog::EntityId;
 use nova_core::now_ts;
 use sqlx::{Sqlite, Transaction};
@@ -63,8 +63,12 @@ impl CanonicalRepository<'_> {
         // 2. One group per listed series (title), with its sentinel if any.
         let groups = sqlx::query!(
             r#"SELECT series_title as "series_title!: String",
-                      MAX(CASE WHEN stream_url LIKE 'xtream://series/%' THEN stream_url END)
-                          as "sentinel?: String",
+                      -- The smallest provider series ID when several sentinels
+                      -- share a title: numeric, so the choice is stable.
+                      MIN(CASE WHEN stream_url GLOB 'xtream://series/[0-9]*'
+                                    AND substr(stream_url, 17) NOT GLOB '*[^0-9]*'
+                               THEN CAST(substr(stream_url, 17) AS INTEGER) END)
+                          as "sentinel_id?: i64",
                       MAX(is_favorite) as "fav!: i64",
                       MAX(is_in_watchlist) as "wl!: i64"
                FROM series_episodes WHERE source_id = ?
@@ -89,10 +93,8 @@ impl CanonicalRepository<'_> {
         let now = now_ts();
         for g in groups {
             let stable = g
-                .sentinel
-                .as_deref()
-                .and_then(xtream_series_id)
-                .map(|id| series_binding_key(Some(id), &g.series_title))
+                .sentinel_id
+                .map(|id| series_binding_key(Some(&id.to_string()), &g.series_title))
                 .filter(|key| !claimed.contains(key));
             let by_title = series_binding_key(None, &g.series_title);
 
@@ -215,8 +217,12 @@ impl CanonicalRepository<'_> {
                WHERE source_id = ?
                  AND EXISTS (
                    SELECT 1 FROM series_bindings b
+                   JOIN canonical_entities e ON e.id = b.entity_id
                    WHERE b.source_id = series_episodes.source_id
-                     AND b.series_title = series_episodes.series_title)"#,
+                     AND b.series_title = series_episodes.series_title
+                     -- only rows whose mirror is out of date
+                     AND (e.is_favorite <> series_episodes.is_favorite
+                          OR e.is_in_watchlist <> series_episodes.is_in_watchlist))"#,
             source_id,
         )
         .execute(&mut **tx)

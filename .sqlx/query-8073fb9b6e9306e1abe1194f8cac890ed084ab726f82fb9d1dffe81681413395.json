@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT entity_id as \"entity_id!: String\" FROM series_bindings\n                   WHERE source_id = ? AND series_title = ?",
+  "query": "SELECT entity_id as \"entity_id!: String\" FROM series_bindings\n                           WHERE source_id = ? AND series_title = ?",
   "describe": {
     "columns": [
       {
@@ -16,5 +16,5 @@
       false
     ]
   },
-  "hash": "40cb9dbafb2024e5346d2f4baa683aaf6ec70c5ceb3f2e8d8a3429e97478ddb5"
+  "hash": "8073fb9b6e9306e1abe1194f8cac890ed084ab726f82fb9d1dffe81681413395"
 }

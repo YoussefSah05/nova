@@ -464,12 +464,14 @@ async fn upgrade_to_canonical_series_keeps_movie_identity_and_seeds_series() {
         .fetch_all(&upgraded)
         .await
         .unwrap();
+        assert_eq!(episodes, [("Lost".into(), Some(1), Some(1), 321.0)]);
+        // Parked history isn't guessed onto an entity by title (another
+        // series may hold it now): its sentinel-only series is queued for the
+        // background re-fetch, which re-attaches it through its episode row.
+        let history = nova_storage::WatchHistoryRepository::new(&upgraded);
         assert_eq!(
-            episodes,
-            [
-                ("Dark".into(), None, None, 55.0),
-                ("Lost".into(), Some(1), Some(1), 321.0)
-            ]
+            history.series_with_pending_episodes(1, 10).await.unwrap(),
+            vec!["Dark".to_string()]
         );
         let unkeyed: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM series_episodes WHERE episode_key IS NULL")

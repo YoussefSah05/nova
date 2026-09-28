@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT title as \"t!: String\" FROM (\n                   SELECT b.series_title AS title, s.watched_at AS at\n                   FROM episode_watch_state s\n                   JOIN series_bindings b ON b.entity_id = s.series_entity_id\n                   WHERE b.source_id = ?1 AND b.series_title IS NOT NULL\n                     AND NOT EXISTS (\n                       SELECT 1 FROM series_episodes e\n                       WHERE e.source_id = b.source_id AND e.series_title = b.series_title\n                         AND e.episode_key = s.episode_key)\n                   UNION ALL\n                   -- Legacy parked history, re-attached when its rows return.\n                   SELECT p.series_title, p.watched_at\n                   FROM pending_episode_history p\n                   WHERE p.source_id = ?1\n               ) pending\n               -- Only series still listed by their catalog sentinel alone: a\n               -- series already fetched (or M3U) can't bring an orphan back.\n               WHERE EXISTS (\n                   SELECT 1 FROM series_episodes e\n                   WHERE e.source_id = ?1 AND e.series_title = pending.title\n                     AND e.stream_url LIKE 'xtream://series/%')\n               GROUP BY title\n               ORDER BY MAX(at) DESC\n               LIMIT ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "t!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "006f523db0724c34c02ade7ae65f4affcc06dae60f95fdfcb23a20b83f31d41f"
+}

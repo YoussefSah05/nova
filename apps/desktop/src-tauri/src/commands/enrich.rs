@@ -859,6 +859,7 @@ async fn match_series(
             evidence.outcome = outcome_name(reason).into();
             SeriesTmdbWrite {
                 series_title: q.series_title.clone(),
+                entity_id: q.entity_id.clone(),
                 tmdb_id: None,
                 canonical_title: None,
                 original_title: None,
@@ -890,6 +891,7 @@ fn series_match_write(
     let genres = canonicalize_genres(&m.genres);
     SeriesTmdbWrite {
         series_title: q.series_title.clone(),
+        entity_id: q.entity_id.clone(),
         tmdb_id: Some(m.tmdb_id),
         canonical_title: Some(m.canonical_title),
         original_title: m.original_title,
@@ -1237,6 +1239,7 @@ mod tmdb_matching_tests {
         let tmdb = Fixture::default().with("tv::breaking bad", tv);
         let q = SeriesTmdbQuery {
             series_title: "Breaking Bad".into(),
+            entity_id: None,
             trusted_tmdb_id: None,
         };
         let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();
@@ -1247,6 +1250,7 @@ mod tmdb_matching_tests {
         let tmdb = Fixture::default();
         let q = SeriesTmdbQuery {
             series_title: "Unknown Show".into(),
+            entity_id: None,
             trusted_tmdb_id: None,
         };
         let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();
@@ -1260,6 +1264,7 @@ mod tmdb_matching_tests {
         let tmdb = Fixture::default().with("tv-facts-v1::1396", details);
         let q = SeriesTmdbQuery {
             series_title: "Breaking Bad".into(),
+            entity_id: None,
             trusted_tmdb_id: Some(1396),
         };
         let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();
@@ -1278,6 +1283,7 @@ mod tmdb_matching_tests {
             .with("tv::breaking bad", tv);
         let q = SeriesTmdbQuery {
             series_title: "Breaking Bad".into(),
+            entity_id: None,
             trusted_tmdb_id: Some(1668),
         };
         let w = match_series(&tmdb, &q, &HashMap::new()).await.unwrap();

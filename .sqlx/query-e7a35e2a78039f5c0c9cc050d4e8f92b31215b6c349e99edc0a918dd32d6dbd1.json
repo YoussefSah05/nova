@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.series_title as \"series_title!: String\",\n                      b.entity_id as \"entity_id!: String\",\n                      spf.provider_tmdb_id as \"trusted?: i64\"\n               FROM series_bindings b\n               LEFT JOIN entity_external_matches m\n                 ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'\n               LEFT JOIN series_provider_facts spf\n                 ON spf.source_id = b.source_id AND spf.series_title = b.series_title\n               WHERE b.source_id = ? AND b.series_title IS NOT NULL\n                 AND (m.entity_id IS NULL\n                      -- a provider id is new evidence: retry an unresolved series now\n                      OR (m.status = 'unresolved' AND spf.provider_tmdb_id IS NOT NULL\n                          AND m.method = 'search')\n                      OR m.matcher_version < ?\n                      OR (m.status = 'unresolved' AND m.checked_at < ?)\n                      OR (m.status = 'matched' AND COALESCE(m.title_language, 'en-US') <> ?))\n               ORDER BY b.series_title",
+  "describe": {
+    "columns": [
+      {
+        "name": "series_title!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "entity_id!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "trusted?: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "e7a35e2a78039f5c0c9cc050d4e8f92b31215b6c349e99edc0a918dd32d6dbd1"
+}

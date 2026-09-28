@@ -729,6 +729,7 @@ impl<'a> SeriesRepository<'a> {
         let version = i64::from(matcher_version);
         let rows = sqlx::query!(
             r#"SELECT b.series_title as "series_title!: String",
+                      b.entity_id as "entity_id!: String",
                       spf.provider_tmdb_id as "trusted?: i64"
                FROM series_bindings b
                LEFT JOIN entity_external_matches m
@@ -755,6 +756,7 @@ impl<'a> SeriesRepository<'a> {
             .into_iter()
             .map(|r| SeriesTmdbQuery {
                 series_title: r.series_title,
+                entity_id: Some(r.entity_id),
                 trusted_tmdb_id: r.trusted.filter(|id| *id > 0),
             })
             .collect())
@@ -764,9 +766,10 @@ impl<'a> SeriesRepository<'a> {
     /// the decision (`entity_external_matches`, namespace `tmdb:tv`, with its
     /// provenance), so it survives refreshes and provider renames; the
     /// per-source `series_meta` row and the episodes' genre are its mirror.
-    /// A title no entity holds any more (renamed or delisted by an import
-    /// that ran while this decision was being made) is skipped; its series
-    /// is queued again under its current title.
+    /// Decisions carry their series entity from the queue, so an import that
+    /// renames the title while TMDB is queried can't redirect them; a write
+    /// without one resolves the title's current binding, and is skipped when
+    /// no entity holds that title.
     pub async fn apply_tmdb(
         &self,
         source_id: i64,
@@ -778,14 +781,28 @@ impl<'a> SeriesRepository<'a> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let now = nova_core::now_ts();
         for u in updates {
-            let entity = sqlx::query_scalar!(
-                r#"SELECT entity_id as "entity_id!: String" FROM series_bindings
-                   WHERE source_id = ? AND series_title = ?"#,
-                source_id,
-                u.series_title,
-            )
-            .fetch_optional(&mut *tx)
-            .await?;
+            let entity = match &u.entity_id {
+                // The series the decision was made for, whatever its title now.
+                Some(id) => {
+                    sqlx::query_scalar!(
+                        r#"SELECT id as "id!: String" FROM canonical_entities
+                       WHERE id = ? AND kind = 'series' AND state = 'active'"#,
+                        id,
+                    )
+                    .fetch_optional(&mut *tx)
+                    .await?
+                }
+                None => {
+                    sqlx::query_scalar!(
+                        r#"SELECT entity_id as "entity_id!: String" FROM series_bindings
+                           WHERE source_id = ? AND series_title = ?"#,
+                        source_id,
+                        u.series_title,
+                    )
+                    .fetch_optional(&mut *tx)
+                    .await?
+                }
+            };
             let Some(entity) = entity else {
                 continue;
             };
@@ -844,7 +861,11 @@ impl<'a> SeriesRepository<'a> {
             )
             .execute(&mut *tx)
             .await?;
-            crate::ExternalMatchRepository::mirror_series_tx(&mut tx, None, Some(&entity)).await?;
+            crate::ExternalMatchRepository::mirror_series_tx(
+                &mut tx,
+                crate::repositories::external_matches::SeriesMirrorScope::Entity(&entity),
+            )
+            .await?;
         }
         tx.commit().await?;
         Ok(())

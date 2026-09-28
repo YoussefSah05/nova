@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO series_meta\n                   (source_id, series_title, canonical_title, poster_url, backdrop_url, overview,\n                    tmdb_genres, tmdb_status, match_method, confidence_bp, matcher_version,\n                    evidence_json, checked_at, original_title, title_language, tmdb_id)\n               SELECT b.source_id, b.series_title, m.canonical_title, m.poster_url,\n                      m.backdrop_url, m.overview, m.genres,\n                      CASE m.status WHEN 'matched' THEN 'matched' ELSE 'unmatched' END,\n                      m.method, m.confidence_bp, m.matcher_version, m.evidence_json,\n                      m.checked_at, m.original_title, m.title_language,\n                      CASE WHEN m.status = 'matched' THEN CAST(m.external_id AS INTEGER) END\n               FROM series_bindings b\n               JOIN entity_external_matches m\n                 ON m.entity_id = b.entity_id AND m.namespace = 'tmdb:tv'\n               WHERE b.series_title IS NOT NULL\n                 AND b.entity_id = ?\n               ON CONFLICT(source_id, series_title) DO UPDATE SET\n                   tmdb_id = excluded.tmdb_id,\n                   canonical_title = excluded.canonical_title,\n                   poster_url = excluded.poster_url,\n                   backdrop_url = excluded.backdrop_url,\n                   overview = excluded.overview,\n                   tmdb_genres = excluded.tmdb_genres,\n                   tmdb_status = excluded.tmdb_status,\n                   match_method = excluded.match_method,\n                   confidence_bp = excluded.confidence_bp,\n                   matcher_version = excluded.matcher_version,\n                   evidence_json = excluded.evidence_json,\n                   checked_at = excluded.checked_at,\n                   original_title = excluded.original_title,\n                   title_language = excluded.title_language",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "02c8d565e0e120cb420c3e7650db38ef0b26114b56f9e86ced93628e02594c54"
+}
