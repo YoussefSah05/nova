@@ -23,7 +23,8 @@ export interface Source {
   id: number;
   kind: string;
   name: string;
-  url: string;
+  /** Scheme + host only; the credential-bearing URL never leaves Rust. */
+  displayUrl: string;
   lastRefreshedAt: number | null;
   autoRefreshHours: number;
 }
@@ -39,7 +40,6 @@ export interface Channel {
   category: string | null;
   rawGroup: string | null;
   logoUrl: string | null;
-  streamUrl: string;
   isFavorite: boolean;
   isInWatchlist: boolean;
   lastPlayedAt: number | null;
@@ -70,7 +70,6 @@ export interface VodItem {
   cleanTitle: string | null;
   year: number | null;
   logoUrl: string | null;
-  streamUrl: string;
   category: string | null;
   isFavorite: boolean;
   isInWatchlist: boolean;
@@ -111,7 +110,6 @@ export interface SeriesEpisode {
   episode: number;
   episodeTitle: string | null;
   logoUrl: string | null;
-  streamUrl: string;
   addedAt: number | null;
   /// Whether `season`/`episode` are real. `absolute`: only the episode number
   /// is (e.g. "Folge 1234"); `unknown`: both are placeholders, never shown.

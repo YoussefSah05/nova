@@ -199,6 +199,32 @@ impl EpisodeNumberingKind {
     }
 }
 
+/// A secret-free label for a source URL: `scheme://host[:port]` for remote
+/// URLs (user info, path and query dropped, since Xtream puts credentials in
+/// both), or the file name for a local playlist path.
+pub fn display_source_url(url: &str) -> String {
+    let url = url.trim();
+    match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+            let host = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            if host.is_empty() {
+                // `file:///…/list.m3u` — local, so the file name is safe to show.
+                rest.rsplit(['/', '\\']).next().unwrap_or("").to_string()
+            } else {
+                format!("{}://{host}", scheme.to_ascii_lowercase())
+            }
+        }
+        None => url.rsplit(['/', '\\']).next().unwrap_or("").to_string(),
+    }
+}
+
+fn serialize_display_url<S: serde::Serializer>(url: &str, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&display_source_url(url))
+}
+
 // ── Storage-mapped types (returned by repositories) ──────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,6 +233,13 @@ pub struct Source {
     pub id: i64,
     pub kind: String,
     pub name: String,
+    /// The provider URL, which for Xtream carries the account's username and
+    /// password. Stays Rust-side: IPC receives only `displayUrl`
+    /// (scheme + host, see [`display_source_url`]).
+    #[serde(
+        rename(serialize = "displayUrl"),
+        serialize_with = "serialize_display_url"
+    )]
     pub url: String,
     pub last_refreshed_at: Option<i64>,
     pub auto_refresh_hours: i64,
@@ -223,6 +256,8 @@ pub struct Channel {
     pub category: Option<String>,
     pub raw_group: Option<String>,
     pub logo_url: Option<String>,
+    /// Authenticated provider locator. Rust-side only: never serialized over IPC.
+    #[serde(skip_serializing)]
     pub stream_url: String,
     pub is_favorite: bool,
     pub is_in_watchlist: bool,
@@ -249,6 +284,8 @@ pub struct VodItem {
     pub clean_title: Option<String>,
     pub year: Option<i64>,
     pub logo_url: Option<String>,
+    /// Authenticated provider locator. Rust-side only: never serialized over IPC.
+    #[serde(skip_serializing)]
     pub stream_url: String,
     pub category: Option<String>,
     pub is_favorite: bool,
@@ -284,6 +321,8 @@ pub struct SeriesEpisode {
     pub episode: i64,
     pub episode_title: Option<String>,
     pub logo_url: Option<String>,
+    /// Authenticated provider locator. Rust-side only: never serialized over IPC.
+    #[serde(skip_serializing)]
     pub stream_url: String,
     pub added_at: Option<i64>,
     /// Whether `season`/`episode` are real or placeholders.

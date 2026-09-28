@@ -78,7 +78,7 @@ export function SourcesEpgSection({
     <div className="flex flex-col gap-6">
       {sources.map((s) => (
         <SettingsCard key={s.id} title={`${s.name} · ${s.kind.toUpperCase()}`}>
-          <SettingRow title="Refresh now" description={s.url}>
+          <SettingRow title="Refresh now" description={s.displayUrl}>
             <SettingsButton onClick={() => refresh(s.id)} disabled={busy === s.id}>
               {busy === s.id ? "Working…" : "Refresh"}
             </SettingsButton>

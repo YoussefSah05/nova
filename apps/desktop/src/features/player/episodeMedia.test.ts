@@ -12,7 +12,6 @@ const ep = (patch: Partial<SeriesEpisode>): SeriesEpisode => ({
   episode: 7,
   episodeTitle: null,
   logoUrl: null,
-  streamUrl: "x",
   addedAt: null,
   numbering: "seasonEpisode",
   ...patch,
