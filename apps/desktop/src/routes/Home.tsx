@@ -47,6 +47,7 @@ import { useProfileSettings } from "@/features/settings/useProfileSettings";
 import { useAccentTheme } from "@/lib/useAccentTheme";
 import { cn } from "@/lib/utils";
 import { invalidateDetailProgress } from "@/features/browse/detail/data";
+import { invokeFavorite, invokeWatchlist } from "@/features/browse/toggles";
 
 type Tab = BrowseTab;
 
@@ -762,38 +763,6 @@ export function Home({ profile, onSwitchProfile }: HomeProps) {
 }
 
 // ── Toggle plumbing ─────────────────────────────────────────────────────────
-
-function invokeFavorite(item: BrowseItem, profileId: string, next: boolean): Promise<void> {
-  if (item.kind === "live")
-    return invoke("set_channel_favorite", { profileId, channelId: item.id, isFavorite: next });
-  if (item.kind === "movie")
-    return invoke("set_movie_favorite", { profileId, entityId: item.entityId, isFavorite: next });
-  if (item.kind === "vod")
-    return invoke("set_vod_favorite", { profileId, vodId: item.id, isFavorite: next });
-  return invoke("set_series_favorite", {
-    profileId,
-    seriesId: item.series!.entityId,
-    isFavorite: next,
-  });
-}
-
-function invokeWatchlist(item: BrowseItem, profileId: string, next: boolean): Promise<void> {
-  if (item.kind === "live")
-    return invoke("set_channel_in_watchlist", { profileId, channelId: item.id, inWatchlist: next });
-  if (item.kind === "movie")
-    return invoke("set_movie_in_watchlist", {
-      profileId,
-      entityId: item.entityId,
-      inWatchlist: next,
-    });
-  if (item.kind === "vod")
-    return invoke("set_vod_in_watchlist", { profileId, vodId: item.id, inWatchlist: next });
-  return invoke("set_series_in_watchlist", {
-    profileId,
-    seriesId: item.series!.entityId,
-    inWatchlist: next,
-  });
-}
 
 function tabForKind(kind: BrowseItem["kind"]): BrowseTab {
   return kind === "live" ? "live" : kind === "vod" || kind === "movie" ? "movies" : "series";

@@ -144,7 +144,12 @@ pub async fn get_related_titles(
     state: State<'_, AppState>,
 ) -> Result<RelatedTitles, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
-    let subject = resolve_subject(&pool, &subject).await?;
+    // A series no longer listed has nothing related, rather than an error.
+    let subject = match resolve_subject(&pool, &subject).await {
+        Ok(subject) => subject,
+        Err(ApiError::NotFound(_)) => return Ok(RelatedTitles::default()),
+        Err(e) => return Err(e),
+    };
     let Some((media, tmdb_id)) = tmdb_work(&pool, &subject).await? else {
         return Ok(RelatedTitles::default());
     };

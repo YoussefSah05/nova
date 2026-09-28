@@ -46,7 +46,7 @@
 | M19 Embeddings / dialogue search | PARTIAL | Per-title dialogue search seeks playback (`TranscriptPanel` → `seekTo`). | Entity vectors belong to provider rows, not entities; no cross-library dialogue search. |
 | M20 Command-K typed intents | MISSING | `CommandPalette` is search + navigation. | No intent model or validator. |
 | M21 Smart discovery / personalization | PARTIAL | TMDB related/collections/trending intersected with the library. | No embedding similarity or history-based personalization. |
-| M22 Frontend canonicalization | PARTIAL | Movie browse/detail/favorites/search/Continue Watching on canonical DTOs. | Series, live, player, transcripts and episode/live Continue Watching are row-centric; client `seriesGroupKey`/`prettyBrand` grouping remains. |
+| M22 Frontend canonicalization | PARTIAL | Movies and series address canonical entities (series by `seriesId`: detail, episodes, resume, favourites, art/facts/related). | Live, player, transcripts and episode/live Continue Watching play by row ID; client `seriesGroupKey`/`prettyBrand` grouping remains. |
 | M23 Series / autoplay | PARTIAL | Episode progress owned by the series entity per durable episode key (0037); resume, Up next and series Continue Watching read it; autoplay uses the normal play path. | In-player next episode chosen in React; episodes aren't canonical entities; no cross-source episodes. |
 | M24 Live / EPG boundary | MISSING, RISKY | XMLTV parser streams. | Programs keyed by `channel_tvg_id` profile-wide; feed downloaded whole with no size cap (`commands/epg.rs:203`). |
 | M25 Security / privacy | PARTIAL | TMDB credential write-only; proxy/EPG errors drop URLs; source and stream URLs no longer cross IPC. | `csp: null`; `/proxy` has no session token and its locator carries the upstream URL; provider logo/poster URLs are passed through. |
@@ -333,14 +333,42 @@ Branch `fix/series-canonical-gaps`. Closes the Low findings recorded by the thre
 - **Validation:** `just lint`, `just test` (557 Rust, 0 failed, 5 opt-in ignored; 56 frontend),
   `cargo fmt --check`, `git diff --check` pass. Not verified in the running app.
 
+### Series frontend on canonical IDs (M22) — 2026-09-28
+
+Branch `feat/series-frontend-canonical`.
+
+- Series commands take `seriesId` (the series entity): `list_series_episodes`, `get_season_episodes`,
+  `get_series_resume`, `set_series_favorite`, `set_series_in_watchlist`, and the series
+  art/facts/related subject (`{ kind: "series", seriesId }`). Rust resolves where the series is
+  listed now (`series_key` → `CanonicalRepository::series_source`), so references made before a
+  provider rename or refresh stay valid; an entity that isn't a listed series is `NotFound`
+  (art and related titles stay never-failing and return empty).
+- Frontend: detail page, rails, favourites/watchlist (moved to `features/browse/toggles.ts`) and
+  title art send `seriesId`; React and React Query keys follow the entity (`seriesKey`); a finished
+  import/enrichment also invalidates the series detail queries (keyed by the entity, which survives
+  while its episode rows are replaced); an unbound series isn't queried and its toggles give a clear
+  message instead of sending `null`. `docs/ipc-contract.md` documents the rule.
+- Tests (6 new): the detail hooks send only `seriesId`; unbound series aren't queried; toggles
+  address the entity and refuse an unbound series; a refresh invalidates series detail data; the
+  subject deserialises only in its canonical form; a series ID resolves to its current listing
+  after a rename and movie/unknown IDs are `NotFound`. A pre-existing flaky storage assertion
+  (random entity IDs containing "593") was made deterministic in its own commit.
+- Independent review: no Critical/High; all callers migrated. **Medium, confirmed and fixed:** series
+  episode caches, now keyed by the surviving entity, weren't invalidated by a refresh, so play could
+  hit a replaced row for up to five minutes. Low, fixed: unbound-series toggles sent `null`; art and
+  related titles broke their never-fails contract. Low, recorded: `get_related_titles` doesn't check
+  that its `source_id` matches the series' source (the only caller passes it); `series_source` relies
+  on one binding per series entity.
+- Validation: `just lint`, `just typecheck`, `just test` (559 Rust, 0 failed, 5 opt-in ignored; 61
+  frontend), `cargo fmt --check`, `git diff --check` pass. Not verified in the running app.
+
 ### Next dependency
 
-**Series frontend on canonical IDs (M22), then the playback coordinator (M14).** The series backend
-now has entity identity, state, matches and episode progress; the series screens, player and
-Continue Watching still address series by `(sourceId, seriesTitle)` and episodes by row ID. Move the
-series detail/rail/favorites to `entityId` (the DTO already carries it), with Rust resolving
-episodes. Then move resume sampling, completion and next-episode choice from React into a Rust
-playback coordinator.
+**Playback coordinator (M14).** React still owns resume sampling (a 5 s timer), the completion
+threshold, end-of-media handling and next-episode choice (`PlayerModal.tsx`), and the player
+addresses media by row ID. Move that policy into a Rust playback session that owns the canonical
+entity, the chosen variant, progress, completion and next episode, while keeping the working
+libmpv engine and render path. Then live/EPG boundary (M24) and macOS lifecycle (M29).
 
 ---
 

@@ -576,6 +576,11 @@ export function prefetchPersonalRails(
 /// Invalidate everything for a source (used after refresh / re-import).
 export function invalidateSource(qc: QueryClient, profileId: string, sourceId: number) {
   void qc.invalidateQueries({ queryKey: browseKeys.source(profileId, sourceId) });
+  // Series detail data is keyed by the series entity, which survives a
+  // refresh (and a provider rename) while its episode rows are replaced.
+  for (const key of ["series-episodes", "season-episodes", "series-resume"]) {
+    void qc.invalidateQueries({ queryKey: [key, profileId] });
+  }
 }
 
 type ItemPatch = Partial<Pick<BrowseItem, "isFavorite" | "isInWatchlist">>;

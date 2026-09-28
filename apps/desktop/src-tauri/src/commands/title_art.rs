@@ -95,7 +95,12 @@ pub async fn get_title_art(
 ) -> Result<TitleArtView, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     let repo = TitleArtRepository::new(&pool);
-    let subject = resolve_subject(&pool, &subject).await?;
+    // Never fails for an unknown title: a series no longer listed has no art.
+    let subject = match resolve_subject(&pool, &subject).await {
+        Ok(subject) => subject,
+        Err(ApiError::NotFound(_)) => return Ok(TitleArtView::default()),
+        Err(e) => return Err(e),
+    };
     let Some((media, tmdb_id)) = tmdb_work(&pool, &subject).await? else {
         return Ok(TitleArtView::default());
     };
@@ -197,6 +202,21 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::HashMap;
+
+    #[test]
+    fn subjects_are_named_by_canonical_ids_only() {
+        let series: TitleArtSubject =
+            serde_json::from_str(r#"{"kind":"series","seriesId":"ser-1"}"#).unwrap();
+        assert!(matches!(series, TitleArtSubject::Series { series_id } if series_id == "ser-1"));
+        let movie: TitleArtSubject =
+            serde_json::from_str(r#"{"kind":"movie","entityId":"mov-1"}"#).unwrap();
+        assert!(matches!(movie, TitleArtSubject::Movie { entity_id } if entity_id == "mov-1"));
+        // The provider-title form is gone.
+        assert!(serde_json::from_str::<TitleArtSubject>(
+            r#"{"kind":"series","sourceId":1,"seriesTitle":"Dark"}"#
+        )
+        .is_err());
+    }
 
     struct Fixture {
         language: String,

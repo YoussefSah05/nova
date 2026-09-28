@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import type { SeriesSummary } from "@/types";
-import { seriesKey, seriesToItem } from "../queries";
+import { invalidateSource, seriesKey, seriesToItem } from "../queries";
 import { titleArtSubject } from "../titleArt";
 import { useSeasonEpisodes, useSeriesEpisodes, useSeriesResume } from "./data";
 
@@ -71,4 +71,16 @@ it("does not query a series the catalog compiler hasn't bound yet", async () => 
   await waitFor(() => expect(result.current.fetchStatus).toBe("idle"));
   expect(mocks.invoke).not.toHaveBeenCalled();
   expect(titleArtSubject(seriesToItem(s))).toBeNull();
+});
+
+it("a finished refresh re-fetches series detail data keyed by entity", () => {
+  // The entity survives the refresh while its episode rows are replaced.
+  const client = new QueryClient();
+  for (const key of ["series-episodes", "season-episodes", "series-resume"]) {
+    client.setQueryData([key, "p", "ser-1"], []);
+  }
+  invalidateSource(client, "p", 3);
+  for (const key of ["series-episodes", "season-episodes", "series-resume"]) {
+    expect(client.getQueryState([key, "p", "ser-1"])?.isInvalidated).toBe(true);
+  }
 });
