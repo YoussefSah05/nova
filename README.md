@@ -10,9 +10,8 @@ overlay makes watching content in any language effortless.
 **Status**: 0.2.0-alpha.0 development, starting the production architecture migration.
 Provider import, browsing, favorites/history, native playback, local captions,
 translation and search exist. New catalog contracts are not yet connected to imports.
-See [implementation progress](docs/implementation/progress.md) for verified checkpoints
-and outstanding E2E/device/release gates; the historical architecture brief contains
-older plans and is not a current feature-status ledger.
+See [implementation status](docs/nova-implementation-status.md) for verified checkpoints,
+the milestone reconciliation matrix and outstanding E2E/device/release gates.
 
 ---
 
@@ -167,9 +166,11 @@ nova/
 
 ## Architecture
 
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design: data model, streaming pipelines,
-transcription and translation detail, player UX spec, phase-by-phase implementation order,
-and the definition of done for each phase.
+Nova's long-term architecture is
+[`docs/architecture/long-term-architecture.md`](docs/architecture/long-term-architecture.md):
+canonical media model, naming/classification/TMDB pipeline, playback, AI and model management,
+frontend/UX, persistence, testing, and the milestone execution process. Accepted decisions are in
+[`docs/adr/`](docs/adr/); superseded plans are kept for reference in [`docs/archive/`](docs/archive/README.md).
 
 ---
 
