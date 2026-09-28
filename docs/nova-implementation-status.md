@@ -37,7 +37,7 @@
 | M10 Atomic catalog snapshots | PARTIAL | P10: validate + per-source `catalog_publications`. | No profile-wide generation/head; protected snapshot store (`catalog-ingest`) unwired. |
 | M11 TMDB identification / progressive enrichment | PARTIAL | Movies: entity-owned matches with provenance and trusted IDs (P11); tiered on-demand facts (0035). | Series matches live on `series_meta` keyed by `(source_id, series_title)`. |
 | M12 Canonical naming / localization | PARTIAL | Localized + original titles stored (0028); one policy function. | Policy not applied uniformly (see M07); no correction tier. |
-| M13 Canonical search | PARTIAL, **RISKY** | `search_movies` over `movie_search` FTS with aliases, exact-first. | Series/live search is LIKE over legacy DTOs; no cross-kind search. A query-embedding failure returns an error and discards lexical hits (`commands/search.rs:247,402,545,640`). |
+| M13 Canonical search | PARTIAL | `search_movies` over `movie_search` FTS with aliases, exact-first; every semantic leg falls back to lexical on failure. | Series/live search is LIKE over legacy DTOs; no cross-kind search; a slow semantic leg still delays lexical results. |
 | M14 PlaybackCoordinator / resolver / selector | MISSING | `resolve_movie_playback` picks the lowest row. | React owns resume, progress timer, completion threshold, end handling and next-episode choice (`PlayerModal.tsx`). |
 | M15 Recovery / QoE | MISSING | Manual "Retry" only. | No bounded retry, variant failover, decoder fallback or QoE store. |
 | M16 Jobs / bounded queues | PARTIAL | Persisted `JobQueue` for import, EPG, enrichment: dedup, cancel, startup recovery. | No retry/backoff; `auto_refresh_hours` never scheduled; several bare spawns (M05). |
@@ -69,7 +69,7 @@
 | AI08 / AI09 Translation | MISSING | = M18 |
 | AI10 Entity embeddings | PARTIAL | Provider-row owners; lost on refresh. |
 | AI11 Transcript embeddings | COMPLETE (per title) | Lazy segment embedding, model-keyed. |
-| AI12 Semantic search | PARTIAL, RISKY | = M13 inference-failure case. |
+| AI12 Semantic search | PARTIAL | Optional leg with lexical fallback; vectors on provider rows (AI10). |
 | AI13 Dialogue search | PARTIAL | Within the playing title only. |
 | AI14 Reranker | MISSING | Optional by design. |
 | AI15 Catalog ambiguity reasoning | LIBRARY-ONLY | `catalog-reasoner` and `assess_ai_verdict` unused by the app. |
@@ -105,8 +105,7 @@
 
 1. ~~Credentials reach React~~ — fixed by the secret-free IPC boundary below, except the loopback
    playback locator (`/proxy?url=…`), which still carries the upstream URL.
-2. Deterministic search must survive AI failure (§22, §45): query-inference errors discard lexical
-   results.
+2. ~~Deterministic search must survive AI failure~~ — fixed by the lexical fallback below.
 3. Playback truth belongs to Rust (§24): progress, completion, resume and next episode are React-owned.
 4. User state belongs to canonical identity (§3): series, episode and live state is keyed to provider
    rows and restored by URL/title matching.
@@ -153,13 +152,39 @@ secret-free contracts.
   `just test` passes (531 Rust, 0 failed, 5 opt-in ignored; 56 frontend) before the review fix;
   `nova-core` (142 tests) and lint re-run after it. Not verified in the running app (`just dev`).
 
+### Lexical fallback for semantic search (M13 / AI12) — 2026-09-28
+
+Branch `fix/search-lexical-fallback`.
+
+- All five search commands (`search_transcript`, `search_movies`, `semantic_search_catalog`,
+  `semantic_search_channels`, `semantic_search_series`) computed lexical results first, then used `?`
+  on query/segment embedding and vector loads, so an inference error or a busy/offline model threw
+  the lexical hits away and the palette (which maps errors to `[]`) showed nothing.
+- Each semantic leg is now a helper that returns plain hits: its fallible body (`try_semantic_*`) runs
+  through `semantic_leg`, which logs the error (`warn`, no query text or URLs) and returns no semantic
+  hits. Because the helpers return `Vec`, not `Result`, a command can no longer `?` a semantic failure
+  — the invariant is enforced by the type, not only by tests. Lexical, DB and hydration errors still
+  surface. Ranking, fusion, `k` values, lease lifetimes, admission class and cancellation are unchanged.
+- Tests: `semantic_leg_passes_hits_through_and_swallows_failures` (runtime-busy, not-found and
+  inference errors); the existing ranking tests cover the unchanged lexical/fused ordering.
+- Independent review: no Critical/High. **Medium, confirmed and fixed:** the first tests exercised
+  only the helper, so reverting a command to `?` would not fail them; fixed by making the helpers
+  infallible by type (reviewer's suggestion). Medium, pre-existing, recorded as a gap: a slow semantic
+  leg (e.g. first-time segment embedding of a long transcript) still delays lexical results — no
+  timeout. Low, recorded: repeated `warn` logs per keystroke while the model is broken; the
+  transcript panel's search effect lacks a stale-response guard.
+- Validation: `just lint`, `just test` (533 Rust, 0 failed, 5 opt-in ignored; 56 frontend),
+  `cargo fmt --check`, `git diff --check` pass; after the review fix, `just lint` and the desktop
+  library tests (105 passed) were re-run. Not verified in the running app (`just dev`).
+
 ### Next dependency
 
-**Deterministic search must survive semantic failure (M13 / AI12 / AI21).** `search_movies`,
-`semantic_search_series`, `semantic_search_channels` and `search_transcript` return an error when query
-or segment embedding fails, discarding lexical hits (`commands/search.rs:239-247,402,545,640`); the
-palette then shows nothing. Fix: treat any semantic-leg error as "no semantic hits" and log it. After
-it: canonical series identity (M06/M09/M11 for series), then the playback coordinator (M14).
+**Canonical series identity (M06/M09/M11 for series, the prerequisite for M22/M23).** Series,
+seasons and episodes are provider rows keyed by `(source_id, series_title)`; favorites, watchlist,
+resume and TMDB matches survive refresh only by URL/title matching and are lost when a parsed title
+changes. Extend the existing movie canonical model (`canonical_entities`, `stream_variants`, resolver,
+`entity_external_matches`) to series and episodes — no parallel catalog. This is a multi-slice
+milestone; its first slice should be the additive schema plus series entities with user state.
 
 ---
 

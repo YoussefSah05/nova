@@ -256,11 +256,7 @@ pub async fn search_transcript(
 
     // Semantic leg (optional). Lexical-only when the model isn't installed
     // or fails.
-    let sem_ids = semantic_leg(
-        "transcript",
-        semantic_segment_ids(&app, &state, &pool, transcript_id, &query),
-    )
-    .await;
+    let sem_ids = semantic_segment_ids(&app, &state, &pool, transcript_id, &query).await;
 
     if sem_ids.is_empty() {
         return Ok(fts_hits.into_iter().map(hit_to_dto).collect());
@@ -306,6 +302,20 @@ pub async fn search_transcript(
 /// Transcript segments nearest to `query`, best first; embeds any segments
 /// not yet embedded. Empty when the model isn't installed.
 async fn semantic_segment_ids(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    pool: &SqlitePool,
+    transcript_id: i64,
+    query: &str,
+) -> Vec<i64> {
+    semantic_leg(
+        "transcript",
+        try_semantic_segment_ids(app, state, pool, transcript_id, query),
+    )
+    .await
+}
+
+async fn try_semantic_segment_ids(
     app: &AppHandle,
     state: &State<'_, AppState>,
     pool: &SqlitePool,
@@ -370,11 +380,8 @@ pub async fn semantic_search_catalog(
     let lexical_ids = dedup_preserve_order(lexical.iter().map(|v| v.id));
 
     // Semantic leg (optional).
-    let sem_ids = semantic_leg(
-        "catalog",
-        semantic_movie_rows(&app, &state, &pool, source_id, &q, (limit as usize).max(60)),
-    )
-    .await;
+    let sem_ids =
+        semantic_movie_rows(&app, &state, &pool, source_id, &q, (limit as usize).max(60)).await;
 
     let ordered: Vec<i64> = if sem_ids.is_empty() {
         lexical_ids
@@ -410,6 +417,21 @@ pub async fn semantic_search_catalog(
 /// best first. Empty when the model or the source's vectors are missing:
 /// semantic search is an optional leg, never required.
 async fn semantic_movie_rows(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    pool: &std::sync::Arc<SqlitePool>,
+    source_id: i64,
+    query: &str,
+    k: usize,
+) -> Vec<i64> {
+    semantic_leg(
+        "catalog",
+        try_semantic_movie_rows(app, state, pool, source_id, query, k),
+    )
+    .await
+}
+
+async fn try_semantic_movie_rows(
     app: &AppHandle,
     state: &State<'_, AppState>,
     pool: &std::sync::Arc<SqlitePool>,
@@ -509,11 +531,7 @@ pub async fn search_movies(
     }
     let limit = limit.unwrap_or(60).clamp(1, 200) as usize;
     let pool = require_profile_pool(&profile_id, &state).await?;
-    let semantic = semantic_leg(
-        "movies",
-        semantic_movie_entities(&app, &state, &pool, source_id, &q, limit.max(60)),
-    )
-    .await;
+    let semantic = semantic_movie_entities(&app, &state, &pool, source_id, &q, limit.max(60)).await;
     rank_movie_search(&pool, source_id, &q, limit, &semantic).await
 }
 
@@ -525,8 +543,23 @@ async fn semantic_movie_entities(
     source_id: i64,
     query: &str,
     k: usize,
+) -> Vec<EntityId> {
+    semantic_leg(
+        "movies",
+        try_semantic_movie_entities(app, state, pool, source_id, query, k),
+    )
+    .await
+}
+
+async fn try_semantic_movie_entities(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    pool: &std::sync::Arc<SqlitePool>,
+    source_id: i64,
+    query: &str,
+    k: usize,
 ) -> Result<Vec<EntityId>, ApiError> {
-    let rows = semantic_movie_rows(app, state, pool, source_id, query, k).await?;
+    let rows = try_semantic_movie_rows(app, state, pool, source_id, query, k).await?;
     let canonical = CanonicalRepository::new(pool);
     let mut semantic: Vec<EntityId> = Vec::with_capacity(rows.len());
     for row in rows {
@@ -578,11 +611,8 @@ pub async fn semantic_search_channels(
     let lexical_keys = dedup_preserve_order(lexical.iter().map(|g| g.group.clone()));
 
     // Semantic leg (optional) → map channel-id hits to their group keys.
-    let sem_keys = semantic_leg(
-        "channels",
-        semantic_channel_keys(&app, &state, &pool, source_id, &q, (limit as usize).max(60)),
-    )
-    .await;
+    let sem_keys =
+        semantic_channel_keys(&app, &state, &pool, source_id, &q, (limit as usize).max(60)).await;
 
     let ordered: Vec<String> = if sem_keys.is_empty() {
         lexical_keys
@@ -616,6 +646,21 @@ pub async fn semantic_search_channels(
 
 /// Brand-group keys of the live channels nearest to `query`, best first.
 async fn semantic_channel_keys(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    pool: &std::sync::Arc<SqlitePool>,
+    source_id: i64,
+    query: &str,
+    k: usize,
+) -> Vec<String> {
+    semantic_leg(
+        "channels",
+        try_semantic_channel_keys(app, state, pool, source_id, query, k),
+    )
+    .await
+}
+
+async fn try_semantic_channel_keys(
     app: &AppHandle,
     state: &State<'_, AppState>,
     pool: &std::sync::Arc<SqlitePool>,
@@ -698,11 +743,8 @@ pub async fn semantic_search_series(
     let lexical_keys = dedup_preserve_order(lexical.iter().map(|s| s.series_title.clone()));
 
     // Semantic leg (optional).
-    let sem_keys = semantic_leg(
-        "series",
-        semantic_series_titles(&app, &state, &pool, source_id, &q, (limit as usize).max(60)),
-    )
-    .await;
+    let sem_keys =
+        semantic_series_titles(&app, &state, &pool, source_id, &q, (limit as usize).max(60)).await;
 
     let ordered: Vec<String> = if sem_keys.is_empty() {
         lexical_keys
@@ -739,6 +781,21 @@ pub async fn semantic_search_series(
 
 /// Series titles nearest to `query`, best first.
 async fn semantic_series_titles(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    pool: &SqlitePool,
+    source_id: i64,
+    query: &str,
+    k: usize,
+) -> Vec<String> {
+    semantic_leg(
+        "series",
+        try_semantic_series_titles(app, state, pool, source_id, query, k),
+    )
+    .await
+}
+
+async fn try_semantic_series_titles(
     app: &AppHandle,
     state: &State<'_, AppState>,
     pool: &SqlitePool,
