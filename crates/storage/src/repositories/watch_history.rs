@@ -306,6 +306,17 @@ impl<'a> WatchHistoryRepository<'a> {
         // Parked history (rows not re-fetched yet) is not seeded by its
         // series title, which another series may have taken since: it reaches
         // the entity through its episode row when re-attached.
+        // Progress an earlier build seeded from parked history by title has no
+        // coordinates and its parked original still exists: drop it, so the
+        // re-attach seeds it onto the right entity.
+        sqlx::query!(
+            r#"DELETE FROM episode_watch_state
+               WHERE season IS NULL
+                 AND EXISTS (SELECT 1 FROM pending_episode_history p
+                             WHERE p.episode_key = episode_watch_state.episode_key)"#,
+        )
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(())
     }

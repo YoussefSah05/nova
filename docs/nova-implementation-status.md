@@ -301,6 +301,38 @@ Branch `feat/canonical-episodes`.
 - **Validation:** `just lint`, `just test` (550 Rust, 0 failed, 5 opt-in ignored; 56 frontend),
   `cargo fmt --check`, `git diff --check` pass. Not verified in the running app (`just dev`).
 
+### Gap fixes for the canonical series slices — 2026-09-28
+
+Branch `fix/series-canonical-gaps`. Closes the Low findings recorded by the three series reviews.
+
+- **Episode progress:** parked history is no longer seeded onto an entity by title at upgrade (another
+  series may hold the title); it reaches the entity through its episode row when re-attached — in the
+  import now *after* the series compiler, so a renamed + credential-rotated series is covered — and
+  legacy parked series stay in the background re-fetch list. Rows an earlier build seeded that way are
+  dropped for re-attachment. `resume_position` falls back to the legacy row when entity state is
+  missing. The overview (`list_continue_watching`) reads entity progress under display titles.
+- **Renames:** M3U renames are also detected through watched episodes (not only favourite/watchlist).
+- **TMDB:** queue items and writes carry the series entity, so a rename during matching can't redirect
+  a decision. The series mirror uses per-scope statements that hit their indexes.
+- **Compiler:** the flag mirror rewrites only stale rows; a title shared by several sentinels binds to
+  the smallest numeric series ID (text order picked "20" over "10"). `record_cannot_link` is
+  movies-only. Migration 0038 indexes `series_episodes(source_id, stream_url)` for the per-URL
+  refresh lookups.
+- **Tests (8 new):** watched M3U rename keeps progress; re-attached parked history reaches the entity;
+  a decision follows its entity through a mid-match rename; the overview reads entity progress under
+  display titles; resume legacy fallback; cannot-link refuses a series and sentinels bind numerically
+  (IDs 10/20, which text order gets wrong); parked progress of a renamed + rotated series reaches the
+  rail (fails without the post-compile re-attach); upgrade test updated.
+- **Independent review:** no Critical/High. **Medium, confirmed and fixed:** (1) the import re-attached
+  parked history before the compiler bound the new titles, dropping the entity copy; (2) the sentinel
+  test used IDs whose text and numeric order agree. Low, recorded: split series / reused URLs choose
+  the rename target by snapshot order; parked rows keep their old title, so a renamed sentinel series
+  isn't re-fetched automatically (resume still works when opened); duplicate M3U URLs yield one
+  overview card per row; leading-zero or 20+-digit series IDs key differently (not produced by the
+  importer); decisions for a merged series entity are dropped (no series merges exist).
+- **Validation:** `just lint`, `just test` (557 Rust, 0 failed, 5 opt-in ignored; 56 frontend),
+  `cargo fmt --check`, `git diff --check` pass. Not verified in the running app.
+
 ### Next dependency
 
 **Series frontend on canonical IDs (M22), then the playback coordinator (M14).** The series backend

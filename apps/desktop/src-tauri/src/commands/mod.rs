@@ -1244,6 +1244,12 @@ async fn build_candidate(
     CanonicalRepository::compile_series_tx(tx, source_id)
         .await
         .map_err(ImportFailure::storage)?;
+    // Episodes that came back under a different URL (M3U credential change)
+    // pick up their parked history by durable key, now that this
+    // generation's series are bound to their entities.
+    WatchHistoryRepository::reattach_pending_for_source_tx(tx, source_id)
+        .await
+        .map_err(ImportFailure::storage)?;
     // Entity-owned series matches survive the refresh (and provider renames):
     // re-mirror them onto the new rows instead of re-matching.
     ExternalMatchRepository::mirror_series_for_source_tx(tx, source_id)
@@ -1487,9 +1493,8 @@ async fn restore_user_state(
     // a copy.
     CanonicalRepository::carry_series_renames_tx(tx, source_id, &renames).await?;
     WatchHistoryRepository::restore_tx(tx, source_id, &snap.watch).await?;
-    // Episodes that came back under a different URL (M3U credential change)
-    // pick up their parked history by durable key.
-    WatchHistoryRepository::reattach_pending_for_source_tx(tx, source_id).await?;
+    // Parked history is re-attached after the series compiler (see
+    // `build_candidate`): it reaches the entity through the new bindings.
     Ok(())
 }
 
@@ -3274,13 +3279,14 @@ mod stabilization_tests {
             .await
             .unwrap()
             .id;
-        // Two sentinels share a title: the smaller ID (9, not "9" > "10") wins.
+        // Two sentinels share a title: the smaller ID wins (text order would
+        // pick "20").
         import(
             pool.clone(),
             id,
             vec![
+                Ok(episode_entry("Show", 0, 0, "xtream://series/20")),
                 Ok(episode_entry("Show", 0, 0, "xtream://series/10")),
-                Ok(episode_entry("Show", 0, 0, "xtream://series/9")),
                 Ok(entry("Heat")),
             ],
             ImportMode::Append,
@@ -3292,7 +3298,7 @@ mod stabilization_tests {
             .unwrap();
         assert_eq!(
             key,
-            nova_core::catalog::media::series_binding_key(Some("9"), "Show")
+            nova_core::catalog::media::series_binding_key(Some("10"), "Show")
         );
         let series =
             nova_core::catalog::EntityId::new(series_entity(&pool, id, "Show").await).unwrap();
@@ -3306,6 +3312,48 @@ mod stabilization_tests {
             .record_cannot_link(&movie, &series)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn parked_progress_reaches_the_entity_of_a_renamed_rotated_series() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("m3u", "test", "https://example.invalid/list.m3u")
+            .await
+            .unwrap()
+            .id;
+        let catalog = |title: &str, pass: &str| {
+            vec![Ok(episode_entry(
+                title,
+                1,
+                1,
+                &format!("http://h:80/series/u/{pass}/555.mkv"),
+            ))]
+        };
+        import(pool.clone(), id, catalog("Show", "old"), ImportMode::Append).await;
+        let history = WatchHistoryRepository::new(&pool);
+        let ep = episode_id(&pool, "http://h:80/series/u/old/555.mkv").await;
+        history
+            .record_progress("episode", ep, 900.0, Some(2400.0), false, None)
+            .await
+            .unwrap();
+        // Renamed and credentials rotated at once: no URL links the titles, so
+        // the history is parked and re-attached by the episode's durable key.
+        import(
+            pool.clone(),
+            id,
+            catalog("The Show", "new"),
+            ImportMode::Replace,
+        )
+        .await;
+        let card = history
+            .continue_watching_section(nova_core::ContinueSection::Series, id, 10)
+            .await
+            .unwrap();
+        assert_eq!(card.len(), 1, "on the rail through the new title's entity");
+        assert_eq!(card[0].series_title.as_deref(), Some("The Show"));
+        assert_eq!(card[0].position_sec, 900.0);
     }
 
     #[tokio::test]

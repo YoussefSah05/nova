@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM episode_watch_state\n               WHERE season IS NULL\n                 AND EXISTS (SELECT 1 FROM pending_episode_history p\n                             WHERE p.episode_key = episode_watch_state.episode_key)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "be5c71e67ebfa61e4efcf24ee0070afb9850dfc29d6a33829783a8fc4336ed70"
+}
