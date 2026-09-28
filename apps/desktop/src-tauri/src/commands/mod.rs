@@ -2930,6 +2930,125 @@ mod stabilization_tests {
     }
 
     #[tokio::test]
+    async fn an_unlisted_latest_episode_gives_way_to_the_previous_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("m3u", "test", "https://example.invalid/list.m3u")
+            .await
+            .unwrap()
+            .id;
+        let catalog = |second: &str| {
+            vec![
+                Ok(episode_entry(
+                    "Show",
+                    1,
+                    1,
+                    "https://example.invalid/s/1.mkv",
+                )),
+                Ok(episode_entry("Show", 1, 2, second)),
+            ]
+        };
+        import(
+            pool.clone(),
+            id,
+            catalog("https://example.invalid/s/2.mkv"),
+            ImportMode::Append,
+        )
+        .await;
+        let history = WatchHistoryRepository::new(&pool);
+        let e1 = episode_id(&pool, "https://example.invalid/s/1.mkv").await;
+        let e2 = episode_id(&pool, "https://example.invalid/s/2.mkv").await;
+        history
+            .record_progress("episode", e1, 300.0, Some(2400.0), false, None)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        history
+            .record_progress("episode", e2, 900.0, Some(2400.0), false, None)
+            .await
+            .unwrap();
+        // The latest episode's URL changes: its progress is orphaned.
+        import(
+            pool.clone(),
+            id,
+            catalog("https://example.invalid/s/2-new.mkv"),
+            ImportMode::Replace,
+        )
+        .await;
+        let e1_now = episode_id(&pool, "https://example.invalid/s/1.mkv").await;
+        let card = history.series_resume(id, "Show").await.unwrap().unwrap();
+        assert_eq!(
+            (card.media_id, card.position_sec, card.up_next),
+            (e1_now, 300.0, false),
+            "the series stays on the rail through its previous episode"
+        );
+        assert!(
+            history
+                .series_with_pending_episodes(id, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "an orphan of a listed series isn't worth a re-fetch"
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_writes_wait_for_a_concurrent_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let id = SourceRepository::new(&pool)
+            .create("m3u", "test", "https://example.invalid/list.m3u")
+            .await
+            .unwrap()
+            .id;
+        import(
+            pool.clone(),
+            id,
+            vec![Ok(episode_entry(
+                "Show",
+                1,
+                1,
+                "https://example.invalid/s/1.mkv",
+            ))],
+            ImportMode::Append,
+        )
+        .await;
+        let ep = episode_id(&pool, "https://example.invalid/s/1.mkv").await;
+        // Another connection (an import, a re-fetch) holds the write lock and
+        // commits while the progress write is in flight.
+        let mut writer = pool.acquire().await.unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *writer)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sources SET name = 'renamed' WHERE id = ?")
+            .bind(id)
+            .execute(&mut *writer)
+            .await
+            .unwrap();
+        let background = pool.clone();
+        let progress = tokio::spawn(async move {
+            WatchHistoryRepository::new(&background)
+                .record_progress("episode", ep, 120.0, Some(2400.0), false, None)
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        sqlx::query("COMMIT").execute(&mut *writer).await.unwrap();
+        drop(writer);
+        progress
+            .await
+            .unwrap()
+            .expect("the write waited instead of failing");
+        let resume = WatchHistoryRepository::new(&pool)
+            .resume_position("episode", ep)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resume.position_sec, 120.0);
+    }
+
+    #[tokio::test]
     async fn deleting_a_source_keeps_series_entities() {
         let dir = tempfile::tempdir().unwrap();
         let pool = open_db(&dir.path().join("p.db")).await;

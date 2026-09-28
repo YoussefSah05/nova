@@ -68,7 +68,11 @@ impl<'a> WatchHistoryRepository<'a> {
     ) -> Result<(), StorageError> {
         let watched_at = now_ts();
         let completed_flag: i64 = if completed { 1 } else { 0 };
-        let mut tx = self.pool.begin().await?;
+        // Take the write lock up front: the entity lookups below read first,
+        // and a deferred read→write upgrade overlapping another writer (an
+        // import, a series re-fetch) fails with SQLITE_BUSY instead of
+        // waiting out the busy timeout.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         // Movie resume/completion is owned by the canonical entity; the
         // row-keyed history is kept as its legacy mirror.
         if media_kind == "vod" {
@@ -94,6 +98,7 @@ impl<'a> WatchHistoryRepository<'a> {
                 duration_sec,
                 completed,
                 caption_mode,
+                watched_at,
             )
             .await?;
         }
@@ -159,11 +164,11 @@ impl<'a> WatchHistoryRepository<'a> {
         duration_sec: Option<f64>,
         completed: bool,
         caption_mode: Option<&str>,
+        watched_at: i64,
     ) -> Result<(), StorageError> {
         let Some(id) = Self::episode_identity_conn(tx, episode_row).await? else {
             return Ok(());
         };
-        let watched_at = now_ts();
         let completed: i64 = completed.into();
         sqlx::query!(
             r#"INSERT INTO episode_watch_state
@@ -228,7 +233,8 @@ impl<'a> WatchHistoryRepository<'a> {
             tx.commit().await?;
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        // Most recent first, so the first insert per episode is the one kept.
+        // `WHERE excluded.watched_at > …` keeps the most recent record per
+        // episode, whatever the insert order.
         sqlx::query!(
             r#"INSERT INTO episode_watch_state
                    (series_entity_id, episode_key, season, episode, position_sec, duration_sec,
@@ -551,6 +557,12 @@ impl<'a> WatchHistoryRepository<'a> {
                    SELECT 1 FROM series_episodes e
                    WHERE e.source_id = b.source_id AND e.series_title = b.series_title
                      AND e.episode_key = s.episode_key)
+                 -- Only series still listed by their catalog sentinel alone: a
+                 -- series already fetched (or M3U) can't bring an orphan back.
+                 AND EXISTS (
+                   SELECT 1 FROM series_episodes e
+                   WHERE e.source_id = b.source_id AND e.series_title = b.series_title
+                     AND e.stream_url LIKE 'xtream://series/%')
                GROUP BY b.series_title
                ORDER BY MAX(s.watched_at) DESC
                LIMIT ?"#,
@@ -836,8 +848,11 @@ impl<'a> WatchHistoryRepository<'a> {
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         for r in rows {
-            if !seen.insert(r.entity_id.clone()) {
-                continue; // only the latest episode of a series decides its card
+            // The latest episode that can be placed decides the series' card;
+            // an entry whose episode isn't listed (removed, or not re-fetched
+            // yet) gives way to the next most recent one.
+            if seen.contains(&r.entity_id) {
+                continue;
             }
             let title = nova_core::naming::display_title(nova_core::naming::DisplayNameSources {
                 user: None,
@@ -859,6 +874,7 @@ impl<'a> WatchHistoryRepository<'a> {
                 let Some(id) = r.id else {
                     continue;
                 };
+                seen.insert(r.entity_id.clone());
                 item.media_id = id;
                 item.position_sec = r.position_sec;
                 item.duration_sec = r.duration_sec;
@@ -871,6 +887,9 @@ impl<'a> WatchHistoryRepository<'a> {
                 let (Some(season), Some(episode)) = (r.season, r.episode) else {
                     continue; // position unknown until the series is re-fetched
                 };
+                // A finished episode with a known position decides the card,
+                // even when nothing follows it (the series is done).
+                seen.insert(r.entity_id.clone());
                 let Some(next) = sqlx::query!(
                     r#"SELECT id as "id!: i64", season as "season!: i64",
                               episode as "episode!: i64", numbering as "numbering!: String",

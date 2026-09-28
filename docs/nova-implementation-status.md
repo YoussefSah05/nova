@@ -47,7 +47,7 @@
 | M20 Command-K typed intents | MISSING | `CommandPalette` is search + navigation. | No intent model or validator. |
 | M21 Smart discovery / personalization | PARTIAL | TMDB related/collections/trending intersected with the library. | No embedding similarity or history-based personalization. |
 | M22 Frontend canonicalization | PARTIAL | Movie browse/detail/favorites/search/Continue Watching on canonical DTOs. | Series, live, player, transcripts and episode/live Continue Watching are row-centric; client `seriesGroupKey`/`prettyBrand` grouping remains. |
-| M23 Series / autoplay | PARTIAL | Resume/Up next in Rust (`series_resume`); autoplay uses the normal play path. | In-player next episode chosen in React; no canonical episode identity. |
+| M23 Series / autoplay | PARTIAL | Episode progress owned by the series entity per durable episode key (0037); resume, Up next and series Continue Watching read it; autoplay uses the normal play path. | In-player next episode chosen in React; episodes aren't canonical entities; no cross-source episodes. |
 | M24 Live / EPG boundary | MISSING, RISKY | XMLTV parser streams. | Programs keyed by `channel_tvg_id` profile-wide; feed downloaded whole with no size cap (`commands/epg.rs:203`). |
 | M25 Security / privacy | PARTIAL | TMDB credential write-only; proxy/EPG errors drop URLs; source and stream URLs no longer cross IPC. | `csp: null`; `/proxy` has no session token and its locator carries the upstream URL; provider logo/poster URLs are passed through. |
 | M26 Migration-chain qualification | PARTIAL | Upgrade-chain tests; `real_profile_upgrade` (opt-in). | Never run against a real profile copy. |
@@ -107,8 +107,8 @@
    playback locator (`/proxy?url=…`), which still carries the upstream URL.
 2. ~~Deterministic search must survive AI failure~~ — fixed by the lexical fallback below.
 3. Playback truth belongs to Rust (§24): progress, completion, resume and next episode are React-owned.
-4. User state belongs to canonical identity (§3): series favorite/watchlist are now entity-owned;
-   episode resume and live state are still keyed to provider rows and restored by URL/title matching.
+4. User state belongs to canonical identity (§3): series favorite/watchlist and episode progress are
+   now entity-owned; live state is still keyed to provider rows and restored by URL matching.
 5. Jobs are bounded (§29): the EPG download has no size cap.
 
 ### Answers to the §60 questions
@@ -262,13 +262,53 @@ Branch `feat/canonical-series-tmdb`. No migration.
   `cargo fmt --check`, `git diff --check` pass. Not verified against the live TMDB API or in the
   running app (`just dev`).
 
+### Canonical series, slice 3: entity-owned episode progress (M23/M06) — 2026-09-28
+
+Branch `feat/canonical-episodes`.
+
+- **Migration 0037:** `series_episodes.episode_key` (the durable `episode_binding_key`: Xtream episode
+  ID, else a locator digest), set at insert in both series write paths; `episode_watch_state` keyed
+  `(series_entity_id, episode_key)` with last known season/episode, position, duration, completion,
+  caption mode. Additive.
+- **Write:** `record_progress('episode', row)` upserts the entity state (then the legacy
+  `watch_history` mirror) in one `BEGIN IMMEDIATE` transaction.
+- **Read:** `resume_position`, `episode_progress` (detail page), `continue_series` (series rail,
+  `get_series_resume` Up next) read the entity state and find the episode's current row by key. The
+  latest episode that can be placed decides a series' card; a finished episode with a known position
+  gives Up next from the rows. `series_with_pending_episodes` (background re-fetch after a refresh)
+  lists series still listed by their sentinel alone that have progress, by current title.
+- **Upgrade:** `backfill_episode_state` (on open) keys pre-0037 rows per source and seeds progress
+  from `watch_history` and `pending_episode_history`, never overwriting newer entity state.
+- **Legacy mirror kept:** `watch_history` episode rows, snapshot/park/reattach, and the overview's
+  `list_continue_watching` still use them; removal is a later step (M3U rename detection depends on
+  the snapshot).
+- **Tests (6 new or extended):** progress survives a refresh + provider rename, the re-fetch runs
+  under the new title, resume/rail/per-episode progress come back by key (fails without the entity
+  write); a finished episode offers the next one; an unlisted latest episode gives way to the
+  previous one and orphans aren't re-fetch candidates (fails without the fix); a progress write
+  waits for a concurrent writer (fails with "database is locked" without the fix); upgrade seeds
+  from row-keyed and parked history and keys every row; the continue-watching fixture now reaches
+  the rail through the upgrade path.
+- **Independent review:** no Critical/High. **Medium, confirmed and fixed:** (1) the read-first
+  deferred transaction failed instantly under a concurrent writer (also latent for movies since P07)
+  — `BEGIN IMMEDIATE`; (2) one unplaceable latest entry hid a series' whole card — fall through to
+  the next entry; (3) the re-fetch list counted permanent orphans, crowding out series that needed
+  it — restricted to sentinel-only series. Low, recorded: parked history seeded by title can land on
+  another series that took the title (upgrade only); an unbound series' progress is only mirrored
+  until the next open; the overview counts still read the legacy table; keys aren't source-scoped
+  (safe while series entities are per source); duplicate M3U URLs share progress; deleted sources
+  leave unreachable state.
+- **Validation:** `just lint`, `just test` (550 Rust, 0 failed, 5 opt-in ignored; 56 frontend),
+  `cargo fmt --check`, `git diff --check` pass. Not verified in the running app (`just dev`).
+
 ### Next dependency
 
-**Canonical series, slice 3 — episode identity and resume (M23/M06):** episode resume is keyed to
-`series_episodes` row IDs and parked in `pending_episode_history` across refreshes. Give episodes
-durable identity under their series entity (the existing `episode_binding_key`), own resume/completion
-there, and serve series Continue Watching / Up next from it. Then the series frontend migration onto
-`entityId` (M22), then the playback coordinator (M14).
+**Series frontend on canonical IDs (M22), then the playback coordinator (M14).** The series backend
+now has entity identity, state, matches and episode progress; the series screens, player and
+Continue Watching still address series by `(sourceId, seriesTitle)` and episodes by row ID. Move the
+series detail/rail/favorites to `entityId` (the DTO already carries it), with Rust resolving
+episodes. Then move resume sampling, completion and next-episode choice from React into a Rust
+playback coordinator.
 
 ---
 
