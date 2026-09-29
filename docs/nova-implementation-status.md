@@ -49,7 +49,7 @@
 | M22 Frontend canonicalization | PARTIAL | Movies and series address canonical entities (series by `seriesId`: detail, episodes, resume, favourites, art/facts/related). | Live, player, transcripts and episode/live Continue Watching play by row ID; client `seriesGroupKey`/`prettyBrand` grouping remains. |
 | M23 Series / autoplay | PARTIAL | Episode progress owned by the series entity per durable episode key (0037); resume, Up next and series Continue Watching read it; autoplay uses the normal play path. | In-player next episode chosen in React; episodes aren't canonical entities; no cross-source episodes. |
 | M24 Live / EPG boundary | PARTIAL | Programmes owned per feed (0040); feed spooled with a 512 MiB cap, staged batches (0041), one short publish; empty feeds refused; one guide feed per channel. The guide is on screen: live cards, hover preview, bundle channels, the live player and its channel strip; refreshed after every import; Settings shows each source's guide status. | Channels still matched by `tvg_id` (no canonical channel/ChannelMatcher); no gzip feeds; no scheduled refresh; no grid guide view. |
-| M25 Security / privacy | PARTIAL | TMDB credential write-only; proxy/EPG errors drop URLs; source and stream URLs no longer cross IPC. | `csp: null`; `/proxy` has no session token and its locator carries the upstream URL; provider logo/poster URLs are passed through. |
+| M25 Security / privacy | PARTIAL | TMDB credential write-only; source and stream URLs never cross IPC; the stream proxy is session-scoped (opaque per-session resource ids, no open relay, no local upstreams incl. DNS); strict CSP; every log line and UI-bound error has URLs reduced to `scheme://host`. | Provider logo/poster URLs still reach the webview (opaque artwork ids not done); CORS `*` on token routes (tokens unguessable); `Debug`-formatted URLs and panics bypass the redactor; private/LAN upstreams allowed. |
 | M26 Migration-chain qualification | PARTIAL | Upgrade-chain tests; `real_profile_upgrade` (opt-in). | Never run against a real profile copy. |
 | M27 Scale qualification | PARTIAL | 30k release scale probes; `tools/catalog-scale`. | No 100k/250k app-level measurements. |
 | M28 AI failure matrix | PARTIAL | Missing/offline model and cancellation tests exist. | No matrix; see M13 inference-failure case. |
@@ -546,11 +546,53 @@ final progress write, and nothing handled sleep/wake.
   frontend), `cargo fmt --check`, `git diff --check` pass. **Not verified on device:** reload during
   playback (`just dev`, Cmd+R), quit during playback, sleep/wake with a live channel.
 
+### Security / privacy hardening (M25) — 2026-09-29
+
+Branch `feat/security-hardening`. Before: the local proxy's `/proxy?url=` relayed any non-loopback URL
+with `Access-Control-Allow-Origin: *` (any page in the user's browser could fetch through Nova), and
+every segment/file locator — seen by hls.js, the webview and AVPlayer — carried the upstream URL
+with the Xtream account's credentials; the webview ran with `csp: null`; ffprobe/ffmpeg stderr and
+reqwest errors could carry credential-bearing URLs into logs and into `fallbackReason` / errors sent
+to React.
+
+- **Session-scoped proxy** (`crates/hls-proxy`): `/proxy?url=` removed. A manifest's URIs become
+  `/stream/{token}/r/{id}` (opaque ids from a per-session keyed hash, least-recently-used table of
+  20 000), direct files play from `/stream/{token}/file`; the proxy only fetches what a session's
+  own manifests named. Playlists are recognised by URL, type or `#EXTM3U` start (BOM included),
+  resolved against the post-redirect URL; local upstreams are refused by literal host and at DNS.
+- **CSP** (`tauri.conf.json`): own scripts only (`'self'`, no inline in production, no eval), network
+  to IPC and the local proxy, images from the artwork cache or http(s), no objects or frames; a dev
+  policy adds Vite's server. A test pins the policy and an `index.html` free of inline script/style.
+- **Secret-safe text**: `nova_core::redact_urls` (linear; recognises schemes glued to ANSI codes or
+  values; user info up to the last `@`) reduces URLs to `scheme://host[:port]/…`. Applied to every
+  log line (redacting tracing writer), the proxy's fallback reasons, playback/AirPlay/native errors
+  sent over IPC, and stored EPG errors.
+- **Tests (11 new or reworked):** proxy end to end against a fake provider (opaque URIs only, keys and
+  segments resolve, no relay, unknown/foreign ids refused, file + Range, released sessions dead,
+  loopback upstream refused, extensionless `text/plain` playlist behind a redirect with `EXT-X-MAP`,
+  DNS-to-localhost refused); LRU keeps a live stream's playlist and key; redaction cases and a
+  linear-time bound; logs with ANSI on and off; CSP invariants.
+- **Independent review:** no Critical/High. **Medium, confirmed and fixed:** playlists without `.m3u8`
+  or an HLS type were streamed raw (credentials to the webview, playback broken); first-in eviction
+  would drop a long live channel's playlist and key; the log redactor missed URLs right after ANSI
+  colour codes; quadratic redaction on hostile text; hosts resolving to 127.0.0.1 reached local
+  services. **Low, fixed:** relative URIs resolved against the pre-redirect URL; `/` or `@` in a
+  password, brackets in paths; inline-style CSP hazard pinned. A BOM-prefixed playlist bug was found
+  by the new test and fixed. Mutation checks: the redirect base and playlist sniffing each fail a
+  test when reverted. Low, recorded: CORS `*` on token routes; `Debug`-formatted URLs and panic
+  messages bypass the redactor; scheme-less `host:port/path` text is not redacted.
+- **Validation:** `just lint`, `just typecheck`, `just test` (596 Rust, 0 failed, 5 opt-in ignored; 70
+  frontend), `cargo fmt --check`, `git diff --check`, production `vite build` (no inline script)
+  pass. **Not verified on device:** playback of live HLS, VOD files and AirPlay through the new
+  routes under the CSP (`just dev`, then a production build).
+
 ### Next dependency
 
-**Security / privacy (M25):** the webview runs with `csp: null`; the local `/proxy` route has no
-session token and its locator carries the upstream URL; provider logo/poster URLs are passed
-through. Confirm the playback, live guide and lifecycle slices on device first.
+**Migration-chain qualification (M26):** `real_profile_upgrade` has never run against a copy of a real
+profile. It needs a copy of the user's profile database (`NOVA_REAL_PROFILE_DB=<copy>`), never the
+original. Without one, **scale qualification (M27)** (100k/250k app-level measurements) is next.
+Confirm playback through the new proxy routes on device first. **Later:** an EPG/live-guide repass
+after the frontend pass (requested 2026-09-29).
 
 ---
 
