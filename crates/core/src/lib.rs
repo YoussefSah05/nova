@@ -232,35 +232,32 @@ pub fn redact_urls(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(sep) = rest.find("://") {
-        // The scheme: letters, digits, `+`, `-`, `.` before `://`, starting
-        // with a letter.
-        let scheme_start = rest[..sep]
+        // The scheme: the letters/digits/`+-.` run before `://`, from its
+        // first letter (`\x1b[0mhttp`, `x=1https` → `mhttp`, `https`).
+        let run_start = rest[..sep]
             .char_indices()
             .rev()
             .take_while(|(_, c)| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
             .last()
             .map_or(sep, |(i, _)| i);
-        let scheme = &rest[scheme_start..sep];
+        let scheme_start = rest[run_start..sep]
+            .find(|c: char| c.is_ascii_alphabetic())
+            .map_or(sep, |offset| run_start + offset);
         let tail = &rest[sep + 3..];
+        // Only whitespace and quotes end a URL: a bracket may sit inside a
+        // path (`/pa)ss/`), so it is swallowed rather than trusted.
         let end = tail
-            .find(|c: char| {
-                c.is_whitespace()
-                    || matches!(
-                        c,
-                        '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '`'
-                    )
-            })
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`'))
             .unwrap_or(tail.len());
-        if !scheme.starts_with(|c: char| c.is_ascii_alphabetic()) {
-            out.push_str(&rest[..sep + 3]);
-            rest = tail;
-            continue;
-        }
-        let span = &rest[scheme_start..sep + 3 + end];
+        let span = &tail[..end];
+        // User info ends at the last `@` (a password may hold `/` or `@`).
+        let after_user = span.rsplit_once('@').map_or(span, |(_, host)| host);
+        let host = after_user.split(['/', '?', '#']).next().unwrap_or("");
         out.push_str(&rest[..scheme_start]);
-        out.push_str(&display_source_url(span));
-        let authority_len = tail[..end].find(['/', '?', '#']).unwrap_or(end);
-        if authority_len < end {
+        out.push_str(&rest[scheme_start..sep].to_ascii_lowercase());
+        out.push_str("://");
+        out.push_str(host);
+        if host.len() < span.len() {
             out.push_str("/…");
         }
         rest = &tail[end..];

@@ -412,8 +412,10 @@ Fallback WebKit flow:
 
 Every media route is scoped to a session token (created by `resolve_stream` / `airplay_engage`,
 released by `stop_playback` / `airplay_disengage` / a page reload). No upstream URL appears in any
-locator, and the proxy fetches only URLs the session's own manifests named (never a loopback host):
-there is no open relay. `/proxy?url=` was removed.
+locator, and the proxy fetches only URLs the session's own manifests named, never on this machine
+(literal loopback hosts, and names resolving only to loopback, are refused): there is no open relay.
+`/proxy?url=` was removed. A playlist is recognised by URL, content type or its `#EXTM3U` start, and
+its relative URIs resolve against the post-redirect URL.
 
 | Route | Phase | Purpose |
 |---|---|---|

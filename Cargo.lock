@@ -3056,6 +3056,7 @@ name = "nova-hls-proxy"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "futures-util",
  "nova-core",
  "nova-media",
  "reqwest 0.12.28",

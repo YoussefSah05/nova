@@ -20,6 +20,8 @@ pub fn rewrite_manifest(
     base_url: &str,
     mut proxied: impl FnMut(&str) -> String,
 ) -> String {
+    // A byte-order mark would hide the first line's `#EXTM3U` tag.
+    let body = body.strip_prefix('\u{feff}').unwrap_or(body);
     let mut out = String::with_capacity(body.len() + 256);
     for line in body.split_inclusive('\n') {
         let trimmed = line.trim_end_matches(['\r', '\n']);

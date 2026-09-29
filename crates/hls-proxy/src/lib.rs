@@ -85,6 +85,27 @@ impl Drop for ProxyHandle {
     }
 }
 
+// -- DNS -----------------------------------------------------------------------
+
+/// Resolves upstream hosts, dropping addresses on this machine.
+struct NoLocalResolver;
+
+impl reqwest::dns::Resolve for NoLocalResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .filter(|addr| !routes::is_local_ip(addr.ip()))
+                .collect();
+            if addrs.is_empty() {
+                return Err("upstream host resolves only to this machine".into());
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 // -- Server boot ---------------------------------------------------------------
 
 /// Boot the proxy on `127.0.0.1:0` (OS picks a free port). Returns once
@@ -111,8 +132,16 @@ async fn start_with(allow_loopback_upstream: bool) -> Result<ProxyHandle, ProxyE
                 attempt.follow()
             }
         }))
-        .user_agent("Mozilla/5.0 (compatible; nova-iptv/1.0)")
-        .build()?;
+        .user_agent("Mozilla/5.0 (compatible; nova-iptv/1.0)");
+    // Names are checked where they resolve: a manifest naming a host that
+    // points at 127.0.0.1 (`*.nip.io`, `localtest.me`) can't reach local
+    // services either.
+    let client = if allow_loopback_upstream {
+        client
+    } else {
+        client.dns_resolver(std::sync::Arc::new(NoLocalResolver))
+    }
+    .build()?;
 
     let sessions = SessionRegistry::new();
     let state = routes::AppState {
@@ -249,6 +278,27 @@ mod tests {
                 }),
             )
             .route("/live/alice/s3cret/seg1.ts", get(|| async { "SEGMENT" }))
+            // What ffprobe calls HLS without saying so: no `.m3u8`, served
+            // as `text/plain`, reached through a redirect to another path.
+            .route(
+                "/go/abc",
+                get(|| async {
+                    (
+                        StatusCode::FOUND,
+                        [(header::LOCATION, "/play/alice/s3cret/stream")],
+                    )
+                        .into_response()
+                }),
+            )
+            .route(
+                "/play/alice/s3cret/stream",
+                get(|| async {
+                    "\u{feff}#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\npart1\n"
+                        .into_response()
+                }),
+            )
+            .route("/play/alice/s3cret/init.mp4", get(|| async { "INIT" }))
+            .route("/play/alice/s3cret/part1", get(|| async { "PART" }))
             .route("/live/alice/s3cret/key.bin", get(|| async { "KEY" }))
             .route(
                 "/movie/alice/s3cret/1.mp4",
@@ -373,6 +423,48 @@ mod tests {
         proxy.sessions().release(&live.token).await;
         assert_eq!(text(variant).await.0, 404);
         proxy.shutdown();
+    }
+
+    #[tokio::test]
+    async fn a_playlist_is_rewritten_whatever_it_is_called_and_wherever_it_moved() {
+        let provider = upstream().await;
+        let proxy = start_with(true).await.unwrap();
+        let session = proxy
+            .sessions()
+            .register(
+                format!("{provider}/go/abc"),
+                true,
+                Some(PlaybackRoute::HlsPassthrough),
+            )
+            .await
+            .unwrap();
+        let origin = proxy.origin();
+        let (status, master) =
+            text(&format!("{origin}/stream/{}/master.m3u8", session.token)).await;
+        assert_eq!(status, 200);
+        assert!(
+            !master.contains("alice") && !master.contains("s3cret"),
+            "{master}"
+        );
+        let links = uris(&master);
+        assert_eq!(links.len(), 2, "{master}");
+        let mut bodies = Vec::new();
+        for link in &links {
+            bodies.push(text(link).await);
+        }
+        assert_eq!(
+            bodies,
+            [(200, "INIT".to_string()), (200, "PART".to_string())],
+            "relative URIs resolve against the redirected playlist"
+        );
+        proxy.shutdown();
+    }
+
+    #[tokio::test]
+    async fn hosts_that_resolve_to_this_machine_are_refused() {
+        use reqwest::dns::Resolve;
+        let refused = NoLocalResolver.resolve("localhost".parse().unwrap()).await;
+        assert!(refused.is_err());
     }
 
     #[tokio::test]

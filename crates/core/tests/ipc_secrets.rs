@@ -106,13 +106,20 @@ fn free_text_never_keeps_a_urls_credentials() {
         ),
         (
             "error sending request for url (https://api.themoviedb.org/3/movie/1?api_key=abc123)",
-            "error sending request for url (https://api.themoviedb.org/…)",
+            "error sending request for url (https://api.themoviedb.org/…",
         ),
         ("fetch http://bob:pw@cdn.example/x failed", "fetch http://cdn.example/… failed"),
         ("rtmp://live.example/app/key and https://ok.example", "rtmp://live.example/… and https://ok.example"),
         ("\"HTTP://Host/get.php?username=u&password=p\"", "\"http://Host/…\""),
         ("HTTP 404 from upstream", "HTTP 404 from upstream"),
         ("weird ://nothing here", "weird ://nothing here"),
+        // Log formatting glued to the URL: ANSI colour codes, `key=1`, flags.
+        ("error=\x1b[0mhttp://h/live/alice/s3cret/1.ts", "error=\x1b[0mhttp://h/…"),
+        ("x=1https://h/live/alice/s3cret/1.ts", "x=1https://h/…"),
+        ("ffmpeg -ihttp://h/live/alice/s3cret/1.ts", "ffmpeg -ihttp://h/…"),
+        // A `/` or `@` in the password; a bracket inside the path.
+        ("http://alice:pa/ss@h/x", "http://h/…"),
+        ("http://h/live/alice/s3cret)x/1.ts", "http://h/…"),
     ];
     for (input, expected) in cases {
         let out = redact_urls(input);
@@ -129,4 +136,15 @@ fn free_text_never_keeps_a_urls_credentials() {
             assert!(!out.contains(secret), "{secret} survived in {out}");
         }
     }
+}
+
+#[test]
+fn redaction_stays_linear_on_hostile_text() {
+    // Upstream-controlled text (stderr, error bodies) full of `://`.
+    let hostile = "://".repeat(200_000);
+    let started = std::time::Instant::now();
+    let _ = nova_core::redact_urls(&hostile);
+    let long_url = format!("http://h/{}", "a".repeat(1_000_000));
+    assert_eq!(nova_core::redact_urls(&long_url), "http://h/…");
+    assert!(started.elapsed().as_secs() < 2, "{:?}", started.elapsed());
 }

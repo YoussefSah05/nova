@@ -82,21 +82,28 @@ mod tests {
 
     #[test]
     fn logged_urls_lose_their_credentials() {
-        let sink = Sink::default();
-        let writer = sink.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(Redacting(move || writer.clone()))
-            .with_ansi(false)
-            .finish();
-        tracing::subscriber::with_default(subscriber, || {
-            let error = "ffprobe failed: http://h.tv:80/live/alice/s3cret/1.ts: 403";
-            tracing::warn!(%error, url = "https://api.example/3?api_key=k3y", "probe failed");
-        });
-        let out = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
-        assert!(out.contains("probe failed"), "{out}");
-        assert!(out.contains("http://h.tv:80/…"), "{out}");
-        for secret in ["alice", "s3cret", "k3y"] {
-            assert!(!out.contains(secret), "{secret} logged: {out}");
+        // With terminal colours too: ANSI codes sit right before a value.
+        for ansi in [false, true] {
+            let sink = Sink::default();
+            let writer = sink.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(Redacting(move || writer.clone()))
+                .with_ansi(ansi)
+                .finish();
+            tracing::subscriber::with_default(subscriber, || {
+                let base_url = "http://h.tv:80/live/alice/s3cret/1.ts";
+                let error = "ffprobe failed: http://h.tv:80/live/alice/s3cret/1.ts: 403";
+                tracing::warn!(%base_url, %error, url = "https://api.example/3?api_key=k3y", "probe failed");
+            });
+            let out = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+            assert!(out.contains("probe failed"), "{out}");
+            assert!(out.contains("http://h.tv:80/…"), "{out}");
+            for secret in ["alice", "s3cret", "k3y"] {
+                assert!(
+                    !out.contains(secret),
+                    "{secret} logged (ansi {ansi}): {out}"
+                );
+            }
         }
     }
 }
@@ -112,6 +119,18 @@ mod csp_tests {
             .as_object()
             .unwrap_or_else(|| panic!("{key} must be set"))
             .clone()
+    }
+
+    #[test]
+    fn the_page_has_no_inline_script_or_style() {
+        // Tauri hashes inline `<script>`/`<style>` into the CSP; a hash in
+        // `style-src` disables its `'unsafe-inline'` for style attributes.
+        let html = include_str!("../../index.html");
+        assert!(!html.contains("<style"), "inline <style> in index.html");
+        for script in html.split("<script").skip(1) {
+            let tag = script.split('>').next().unwrap_or("");
+            assert!(tag.contains("src="), "inline <script> in index.html");
+        }
     }
 
     #[test]

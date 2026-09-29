@@ -20,6 +20,7 @@ use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
+use futures_util::StreamExt;
 use tokio::fs::File;
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
@@ -50,10 +51,10 @@ pub(crate) async fn stream_resource(
     let Some(session) = state.sessions.get(&token).await else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let Some(url) = session.lock().await.resources.get(&id).map(str::to_string) else {
+    let Some(url) = session.lock().await.resources.get(&id) else {
         return (StatusCode::NOT_FOUND, "unknown resource").into_response();
     };
-    forward(&state, &session, &token, &url, &headers).await
+    forward(&state, &session, &token, &url, &headers, false).await
 }
 
 /// A direct-file session's upstream bytes.
@@ -72,7 +73,7 @@ pub(crate) async fn stream_file(
         }
         s.upstream_url.clone()
     };
-    forward(&state, &session, &token, &url, &headers).await
+    forward(&state, &session, &token, &url, &headers, false).await
 }
 
 pub(crate) async fn stream_master(
@@ -98,7 +99,9 @@ pub(crate) async fn stream_master(
         PlaybackRoute::HlsPassthrough => {
             let upstream = session.upstream_url.clone();
             drop(session);
-            forward(&state, &session_arc, &token, &upstream, &headers).await
+            // The session's master is a playlist whatever the upstream calls
+            // it (ffprobe said so: no `.m3u8`, `text/plain`).
+            forward(&state, &session_arc, &token, &upstream, &headers, true).await
         }
         PlaybackRoute::FilePassthrough => {
             tracing::debug!(
@@ -164,7 +167,11 @@ pub(crate) async fn captions_stub() -> Response {
 
 // -- Helpers -----------------------------------------------------------------
 
-/// Fetch `url` for the session `token`. A manifest comes back with its URIs
+/// Manifests are small; anything bigger isn't one worth rewriting.
+const MAX_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
+
+/// Fetch `url` for the session `token`. A manifest (`manifest`, or one
+/// recognised by URL, type or its `#EXTM3U` start) comes back with its URIs
 /// registered in the session and rewritten to `/stream/{token}/r/{id}`;
 /// anything else streams through (Range forwarded, for seeking).
 async fn forward(
@@ -173,6 +180,7 @@ async fn forward(
     token: &str,
     url: &str,
     in_headers: &HeaderMap,
+    manifest: bool,
 ) -> Response {
     if !state.allow_loopback_upstream && !is_safe_upstream(url) {
         return (StatusCode::BAD_REQUEST, "invalid upstream URL").into_response();
@@ -181,7 +189,7 @@ async fn forward(
     if let Some(range) = in_headers.get(header::RANGE) {
         req = req.header(header::RANGE, range);
     }
-    let upstream = match req.send().await {
+    let mut upstream = match req.send().await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e.without_url(), "upstream fetch failed");
@@ -190,19 +198,42 @@ async fn forward(
     };
 
     let status = upstream.status();
+    // Relative URIs resolve against where the playlist actually came from
+    // (providers redirect `.m3u8` requests to tokenised hosts).
+    let base = upstream.url().to_string();
     let content_type = upstream.headers().get(header::CONTENT_TYPE).cloned();
-    if is_hls_manifest_response(url, content_type.as_ref()) {
-        let body = match upstream.text().await {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!(error = %e.without_url(), "manifest body read failed");
-                return (StatusCode::BAD_GATEWAY, "manifest body read failed").into_response();
+    let first = match upstream.chunk().await {
+        Ok(chunk) => chunk,
+        Err(e) => {
+            tracing::warn!(error = %e.without_url(), "upstream body read failed");
+            return (StatusCode::BAD_GATEWAY, "upstream body read failed").into_response();
+        }
+    };
+    let is_manifest = manifest
+        || is_hls_manifest_response(url, content_type.as_ref())
+        || first.as_deref().is_some_and(starts_like_playlist);
+    if is_manifest {
+        let mut bytes = first.map(|b| b.to_vec()).unwrap_or_default();
+        loop {
+            match upstream.chunk().await {
+                Ok(Some(chunk)) => {
+                    bytes.extend_from_slice(&chunk);
+                    if bytes.len() > MAX_MANIFEST_BYTES {
+                        return (StatusCode::BAD_GATEWAY, "manifest too large").into_response();
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!(error = %e.without_url(), "manifest body read failed");
+                    return (StatusCode::BAD_GATEWAY, "manifest body read failed").into_response();
+                }
             }
-        };
+        }
+        let body = String::from_utf8_lossy(&bytes);
         let rewritten = {
             let mut s = session.lock().await;
             let origin = &state.origin;
-            rewrite_manifest(&body, url, |absolute| {
+            rewrite_manifest(&body, &base, |absolute| {
                 format!(
                     "{origin}/stream/{token}/r/{}",
                     s.resources.register(absolute)
@@ -236,7 +267,9 @@ async fn forward(
     }
     add_cors(&mut forwarded);
 
-    let body = Body::from_stream(upstream.bytes_stream());
+    // The peeked chunk, then the rest.
+    let head = futures_util::stream::iter(first.map(Ok::<_, reqwest::Error>));
+    let body = Body::from_stream(head.chain(upstream.bytes_stream()));
     let mut response = Response::new(body);
     *response.status_mut() = status;
     *response.headers_mut() = forwarded;
@@ -281,6 +314,29 @@ fn add_cors(headers: &mut HeaderMap) {
     );
 }
 
+/// A playlist's body: `#EXTM3U` after an optional BOM and whitespace.
+fn starts_like_playlist(bytes: &[u8]) -> bool {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    let start = bytes
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    bytes[start..].starts_with(b"#EXTM3U")
+}
+
+/// An address the proxy must never fetch from: this machine.
+pub(crate) fn is_local_ip(ip: std::net::IpAddr) -> bool {
+    if ip.is_loopback() || ip.is_unspecified() {
+        return true;
+    }
+    match ip {
+        std::net::IpAddr::V6(ip) => ip
+            .to_ipv4_mapped()
+            .is_some_and(|v4| v4.is_loopback() || v4.is_unspecified()),
+        std::net::IpAddr::V4(_) => false,
+    }
+}
+
 pub(crate) fn is_safe_upstream(url: &str) -> bool {
     let parsed = match reqwest::Url::parse(url) {
         Ok(u) => u,
@@ -298,17 +354,7 @@ pub(crate) fn is_safe_upstream(url: &str) -> bool {
     }
     let literal = lower.trim_start_matches('[').trim_end_matches(']');
     if let Ok(ip) = literal.parse::<std::net::IpAddr>() {
-        if ip.is_loopback() || ip.is_unspecified() {
-            return false;
-        }
-        if let std::net::IpAddr::V6(ip) = ip {
-            if ip
-                .to_ipv4_mapped()
-                .is_some_and(|v4| v4.is_loopback() || v4.is_unspecified())
-            {
-                return false;
-            }
-        }
+        return !is_local_ip(ip);
     }
     true
 }
