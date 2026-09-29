@@ -3,7 +3,7 @@
 //! container width; items are chunked into rows and only on-screen rows mount,
 //! so the grid stays smooth across tens of thousands of results.
 
-import { useEffect, useMemo, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { RotateCwIcon, SearchXIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -59,14 +59,30 @@ function useElementWidth(ref: RefObject<HTMLElement | null>): number {
   return width;
 }
 
-export function BrowseGrid({
+/// The grid measures its own width (not the scroll container's, whose
+/// padding depends on the page), so its columns always fit the cards.
+export function BrowseGrid(props: BrowseGridProps) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const width = useElementWidth(wrapRef);
+  return (
+    <div ref={wrapRef} className="w-full">
+      <BrowseGridBody {...props} width={width} />
+    </div>
+  );
+}
+
+/// Room each card needs: its width plus the 12px gap.
+const GAP = 12;
+
+function BrowseGridBody({
+  width,
   tab,
   profileId,
   sourceId,
   filters,
   scrollRef,
   ...handlers
-}: BrowseGridProps) {
+}: BrowseGridProps & { width: number }) {
   const identity = JSON.stringify([tab, profileId, sourceId, filters]);
   const [page, setPage] = useState({ identity, offset: 0 });
   const offset = page.identity === identity ? page.offset : 0;
@@ -84,9 +100,8 @@ export function BrowseGrid({
     scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
   }
   const live = tab === "live";
-  const width = useElementWidth(scrollRef);
   const cardMin = live ? 200 : 168;
-  const columns = Math.max(1, Math.floor((width - 48) / cardMin));
+  const columns = Math.max(1, Math.floor((width + GAP) / cardMin));
   const rows = useMemo(() => chunk(items, columns), [items, columns]);
 
   if (isError) {

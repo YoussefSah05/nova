@@ -75,6 +75,9 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
 
 type InvokeArgs = Record<string, unknown> | undefined;
 
+/// Set by a test to make the next favourite toggles fail in Rust.
+let favoriteFails = false;
+
 const profile: Profile = {
   id: "profile-1",
   name: "Youssef",
@@ -190,6 +193,7 @@ function setupInvoke(
           : Promise.reject(new Error("movie not found"));
       }
       case "set_movie_favorite":
+        return favoriteFails ? Promise.reject(new Error("database is locked")) : Promise.resolve();
       case "set_movie_in_watchlist":
         return Promise.resolve();
       case "list_channels":
@@ -237,6 +241,7 @@ async function openReviewMovie() {
 describe("AppShell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    favoriteFails = false;
     mocks.listen.mockResolvedValue(() => {});
   });
 
@@ -339,5 +344,34 @@ describe("AppShell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Movies" }));
     expect(await screen.findByRole("heading", { name: "Cinémathèque" })).toBeInTheDocument();
     expect(screen.queryAllByRole("button", { name: "Back" })).toHaveLength(0);
+  });
+
+  it("keeps a section's screen, scroll included, when another is first visited later", async () => {
+    setupInvoke(() => [], [reviewMovie]);
+    renderShell();
+    await userEvent.click(await screen.findByRole("button", { name: "Library" }));
+    const library = await screen.findByRole("region", { name: "Library" });
+    library.scrollTop = 321;
+    library.dispatchEvent(new Event("scroll"));
+
+    // Movies comes before Library in the section order: visiting it later
+    // must not shift (and so remount) Library's screen.
+    await userEvent.click(screen.getByRole("button", { name: "Movies" }));
+    await screen.findByRole("heading", { name: "Cinémathèque" });
+    await userEvent.click(screen.getByRole("button", { name: "Library" }));
+    const again = await screen.findByRole("region", { name: "Library" });
+    expect(again).toBe(library);
+    expect(again.scrollTop).toBe(321);
+  });
+
+  it("rolls a failed favourite back on the open page and says why", async () => {
+    setupInvoke(() => [], [reviewMovie]);
+    favoriteFails = true;
+    renderShell();
+    await userEvent.click(await openReviewMovie());
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
+    expect(
+      await screen.findByRole("button", { name: "Add Review Movie to favourites" })
+    ).toHaveAttribute("aria-pressed", "false");
   });
 });

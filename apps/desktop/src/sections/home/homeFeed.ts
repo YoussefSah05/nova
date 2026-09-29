@@ -28,13 +28,16 @@ export function homeFeed(
 ): HomeFeed {
   const watching = [...movies, ...series].sort(byNewest);
   const hero = watching[0] ?? null;
+  // Each item shows once: the hero, then episodes under Up next, then the
+  // rest beside the hero.
+  const upNext = [...series]
+    .sort(byNewest)
+    .filter((e) => e !== hero)
+    .slice(0, 2);
   return {
     hero,
-    alsoInProgress: watching.slice(1, 4),
-    upNext: [...series]
-      .sort(byNewest)
-      .filter((e) => e !== hero)
-      .slice(0, 2),
+    alsoInProgress: watching.filter((i) => i !== hero && !upNext.includes(i)).slice(0, 3),
+    upNext,
     recentChannels: [...live].sort(byNewest),
     seedMovie: [...movies].sort(byNewest).find((m) => m.entityId) ?? null,
   };

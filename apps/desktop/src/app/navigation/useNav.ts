@@ -11,6 +11,7 @@ export interface NavActions {
   push: (route: Route) => void;
   back: () => void;
   switchTo: (section: SectionId) => void;
+  resetAll: () => void;
   patchItem: (key: string, patch: Extract<NavAction, { type: "patchItem" }>["patch"]) => void;
 }
 

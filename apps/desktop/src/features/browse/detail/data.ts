@@ -15,6 +15,7 @@ import type {
   TitleFactsView,
 } from "@/types";
 import type { TitleArtSubject } from "../titleArt";
+import { useScreenActive } from "@/lib/screenActive";
 
 const subjectKey = (s: TitleArtSubject) =>
   s.kind === "movie" ? `movie:${s.entityId}` : `series:${s.seriesId}`;
@@ -30,7 +31,11 @@ export function titleFactsQuery(profileId: string, subject: TitleArtSubject | nu
 }
 
 export function useTitleFacts(profileId: string, subject: TitleArtSubject | null) {
-  return useQuery({ ...titleFactsQuery(profileId, subject), enabled: subject !== null });
+  return useQuery({
+    subscribed: useScreenActive(),
+    ...titleFactsQuery(profileId, subject),
+    enabled: subject !== null,
+  });
 }
 
 /// A canonical movie's detail (variants + entity resume). The page refetches
@@ -53,6 +58,7 @@ const seriesArgs = (profileId: string, series: SeriesSummary) => ({
 /// season list comes from here.
 export function useSeriesEpisodes(profileId: string, series: SeriesSummary) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: ["series-episodes", profileId, series.entityId],
     queryFn: () => invoke<SeriesEpisode[]>("list_series_episodes", seriesArgs(profileId, series)),
     enabled: series.entityId !== null,
@@ -62,6 +68,7 @@ export function useSeriesEpisodes(profileId: string, series: SeriesSummary) {
 
 export function useSeasonEpisodes(profileId: string, series: SeriesSummary, season: number | null) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: ["season-episodes", profileId, series.entityId, season],
     queryFn: () =>
       invoke<EpisodeView[]>("get_season_episodes", { ...seriesArgs(profileId, series), season }),
@@ -72,6 +79,7 @@ export function useSeasonEpisodes(profileId: string, series: SeriesSummary, seas
 
 export function useSeriesResume(profileId: string, series: SeriesSummary) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: ["series-resume", profileId, series.entityId],
     queryFn: () =>
       invoke<ContinueWatchingItem | null>("get_series_resume", seriesArgs(profileId, series)),
@@ -99,6 +107,7 @@ export function useRelatedTitles(
   subject: TitleArtSubject | null
 ) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: ["related-titles", profileId, sourceId, subject ? subjectKey(subject) : null],
     queryFn: () => invoke<RelatedTitles>("get_related_titles", { profileId, sourceId, subject }),
     enabled: subject !== null && sourceId !== null,
@@ -114,6 +123,7 @@ export function useTrendingInLibrary(
   section: "movies" | "series" | null
 ) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: ["trending-library", profileId, sourceId, section],
     queryFn: () =>
       invoke<TrendingTitles>("get_trending_in_library", { profileId, sourceId, section }),

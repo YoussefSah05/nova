@@ -1,7 +1,7 @@
 //! Owns the session (`session.ts`): playlists, the active playlist, refresh,
 //! and the cache warm-up that makes every section's first paint a cache read.
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -9,7 +9,13 @@ import type { Profile, Source } from "@/types";
 import { prefetchPersonalRails, prefetchSourceOverview } from "@/features/browse/queries";
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
 import { useAccentTheme } from "@/lib/useAccentTheme";
-import { errorMessage, SessionContext, type Session } from "./session";
+import {
+  errorMessage,
+  SessionContext,
+  SessionStatusContext,
+  type Session,
+  type SessionStatus,
+} from "./session";
 import { useCatalogEvents } from "./useCatalogEvents";
 import { onIdle } from "./idle";
 
@@ -109,17 +115,21 @@ export function SessionProvider({
     },
   });
 
+  // Stable identity: reads the latest state through refs.
+  const refreshState = useRef({ activeSourceId, refreshing });
+  refreshState.current = { activeSourceId, refreshing };
   const refresh = useCallback(async () => {
-    if (activeSourceId === null || refreshing) return;
+    const { activeSourceId: id, refreshing: busy } = refreshState.current;
+    if (id === null || busy) return;
     setRefreshing(true);
     setError(null);
     try {
-      await invoke("refresh_source", { profileId, sourceId: activeSourceId });
+      await invoke("refresh_source", { profileId, sourceId: id });
     } catch (e: unknown) {
       setRefreshing(false);
       setError(errorMessage(e));
     }
-  }, [activeSourceId, profileId, refreshing]);
+  }, [profileId]);
 
   const sourceAdded = useCallback(async () => {
     try {
@@ -133,6 +143,8 @@ export function SessionProvider({
     }
   }, [profileId]);
 
+  const reloadSources = useCallback(() => setReloadKey((k) => k + 1), []);
+
   const value = useMemo<Session>(
     () => ({
       profile,
@@ -142,12 +154,9 @@ export function SessionProvider({
       sourcesLoaded,
       activeSourceId,
       setActiveSourceId,
-      sourceTotals,
-      error,
       setError,
-      refreshing,
       refresh,
-      reloadSources: () => setReloadKey((k) => k + 1),
+      reloadSources,
       sourceAdded,
     }),
     [
@@ -156,13 +165,19 @@ export function SessionProvider({
       sources,
       sourcesLoaded,
       activeSourceId,
-      sourceTotals,
-      error,
-      refreshing,
       refresh,
+      reloadSources,
       sourceAdded,
     ]
   );
+  const status = useMemo<SessionStatus>(
+    () => ({ sourceTotals, error, refreshing }),
+    [sourceTotals, error, refreshing]
+  );
 
-  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+  return (
+    <SessionContext.Provider value={value}>
+      <SessionStatusContext.Provider value={status}>{children}</SessionStatusContext.Provider>
+    </SessionContext.Provider>
+  );
 }

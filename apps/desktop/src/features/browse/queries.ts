@@ -14,6 +14,7 @@ import type {
   SeriesSummary,
   VodItem,
 } from "@/types";
+import { useScreenActive } from "@/lib/screenActive";
 
 export type BrowseTab = "live" | "movies" | "series";
 /// `movie` is a canonical entity (P07); `vod` remains for surfaces not yet
@@ -436,6 +437,7 @@ export function useBrowseCount(
   filters: BrowseFilters = {}
 ) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: browseKeys.count(profileId, sourceId ?? -1, tab, filters),
     queryFn: () => fetchCount(tab, profileId, sourceId!, filters),
     enabled: sourceId !== null,
@@ -444,6 +446,7 @@ export function useBrowseCount(
 
 export function useCategories(tab: BrowseTab, profileId: string, sourceId: number | null) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: browseKeys.categories(profileId, sourceId ?? -1, tab),
     queryFn: () => fetchCategories(tab, profileId, sourceId!),
     enabled: sourceId !== null,
@@ -452,6 +455,7 @@ export function useCategories(tab: BrowseTab, profileId: string, sourceId: numbe
 
 export function useRegions(profileId: string, sourceId: number | null) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: browseKeys.regions(profileId, sourceId ?? -1),
     queryFn: () => fetchRegions(profileId, sourceId!),
     enabled: sourceId !== null,
@@ -460,6 +464,7 @@ export function useRegions(profileId: string, sourceId: number | null) {
 
 export function useCountries(profileId: string, sourceId: number | null) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: browseKeys.countries(profileId, sourceId ?? -1),
     queryFn: () => fetchCountries(profileId, sourceId!),
     enabled: sourceId !== null,
@@ -468,6 +473,7 @@ export function useCountries(profileId: string, sourceId: number | null) {
 
 export function useContinueWatching(profileId: string, sourceId: number, tab: BrowseTab) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: browseKeys.continueWatching(profileId, sourceId, tab),
     queryFn: () => fetchContinueWatching(profileId, sourceId, tab),
   });
@@ -483,6 +489,7 @@ export function useRail(
   enabled: boolean
 ) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: browseKeys.rail(profileId, sourceId ?? -1, tab, spec.id),
     queryFn: () => fetchItems(tab, profileId, sourceId!, spec.filters, RAIL_SIZE, 0),
     enabled: enabled && sourceId !== null,
@@ -526,6 +533,7 @@ export function useBrowseGrid(
   offset: number
 ) {
   return useQuery({
+    subscribed: useScreenActive(),
     queryKey: [...browseKeys.grid(profileId, sourceId ?? -1, tab, filters), offset],
     queryFn: () => fetchBrowsePage(tab, profileId, sourceId!, filters, offset),
     enabled: sourceId !== null,

@@ -1,5 +1,8 @@
-//! The signed-in session: profile, playlists, the active playlist, refresh
-//! state and the app's error line. Provided by `SessionProvider.tsx`.
+//! The signed-in session: profile, playlists and the active playlist
+//! (stable; read by every screen), and its status — playlist totals, refresh
+//! state, the error line — in a separate context that only the chrome reads,
+//! so a status change never re-renders the screens kept mounted underneath.
+//! Provided by `SessionProvider.tsx`.
 
 import { createContext, useContext } from "react";
 
@@ -15,11 +18,8 @@ export interface Session {
   sourcesLoaded: boolean;
   activeSourceId: number | null;
   setActiveSourceId: (id: number) => void;
-  /// Items per playlist, for the switcher's labels.
-  sourceTotals: Record<number, number>;
-  error: string | null;
   setError: (message: string | null) => void;
-  refreshing: boolean;
+  /// Re-fetch the active playlist from the provider.
   refresh: () => Promise<void>;
   /// Re-read the playlists (after Settings added or removed one).
   reloadSources: () => void;
@@ -27,7 +27,23 @@ export interface Session {
   sourceAdded: () => Promise<void>;
 }
 
+export interface SessionStatus {
+  /// Items per playlist, for the switcher's labels.
+  sourceTotals: Record<number, number>;
+  error: string | null;
+  refreshing: boolean;
+}
+
 export const SessionContext = createContext<Session | null>(null);
+export const SessionStatusContext = createContext<SessionStatus>({
+  sourceTotals: {},
+  error: null,
+  refreshing: false,
+});
+
+export function useSessionStatus(): SessionStatus {
+  return useContext(SessionStatusContext);
+}
 
 export function useSession(): Session {
   const session = useContext(SessionContext);

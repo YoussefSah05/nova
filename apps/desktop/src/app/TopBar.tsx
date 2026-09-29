@@ -1,6 +1,7 @@
 //! The floating top bar: sections, the ⌘K pill, the playlist switcher and
-//! the profile menu. It is the window's drag handle, clears the traffic
-//! lights, and turns to glass once the screen under it scrolls.
+//! the profile menu. All of it drags the window (a deep drag region: its
+//! buttons and menus stay clickable), it clears the traffic lights, and it
+//! turns to glass once the screen under it scrolls.
 //!
 //! Both states are stacked layers whose opacity changes (compositor-only):
 //! the blur itself is never switched on and off while scrolling.
@@ -26,7 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SECTIONS, SECTION_LABELS, type SectionId } from "./navigation/nav";
 import { useNav } from "./navigation/useNav";
-import { useSession } from "./session";
+import { useSession, useSessionStatus } from "./session";
 import { useShell } from "./shell";
 
 export const TOP_BAR_HEIGHT = 72;
@@ -35,11 +36,12 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
   const nav = useNav();
   const session = useSession();
   const shell = useShell();
-  const { sources, activeSourceId, sourceTotals } = session;
+  const { sourceTotals, refreshing } = useSessionStatus();
+  const { sources, activeSourceId } = session;
 
   return (
     <header
-      data-tauri-drag-region
+      data-tauri-drag-region="deep"
       className="fixed inset-x-0 top-0 z-40 flex h-[72px] items-center gap-6 pl-[88px] pr-6"
     >
       <div
@@ -64,7 +66,7 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
           aria-label="Nova home"
           className="flex items-center gap-2.5 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <span className="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-gradient-to-br from-[var(--color-brand-hi)] to-[var(--color-brand-lo)] font-display text-lg font-semibold text-primary-foreground shadow-[0_6px_20px_rgba(224,163,62,.25)]">
+          <span className="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-gradient-to-br from-[var(--color-brand-hi)] to-[var(--color-brand-lo)] font-display text-lg font-medium text-primary-foreground shadow-[0_6px_20px_rgba(224,163,62,.25)]">
             N
           </span>
         </button>
@@ -130,7 +132,7 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
             className="relative flex h-[38px] w-[38px] items-center justify-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <span
-              className="flex h-[30px] w-[30px] items-center justify-center rounded-full text-[13px] font-medium text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,.14)]"
+              className="flex h-[30px] w-[30px] items-center justify-center rounded-full text-xs font-medium text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,.14)]"
               style={{ background: session.profile.avatarColor }}
             >
               {session.profile.name.slice(0, 1).toUpperCase()}
@@ -144,14 +146,14 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
           </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() => void session.refresh()}
-            disabled={activeSourceId === null || session.refreshing}
+            disabled={activeSourceId === null || refreshing}
           >
             <RotateCwIcon
-              className={cn("h-4 w-4", session.refreshing && "animate-spin")}
+              className={cn("h-4 w-4", refreshing && "animate-spin")}
               strokeWidth={1.5}
               aria-hidden
             />
-            {session.refreshing ? "Refreshing playlist…" : "Refresh playlist"}
+            {refreshing ? "Refreshing playlist…" : "Refresh playlist"}
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={shell.openAddSource}>
             <PlusIcon className="h-4 w-4" strokeWidth={1.5} aria-hidden /> Add playlist

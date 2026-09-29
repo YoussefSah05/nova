@@ -69,6 +69,7 @@ export function NavProvider({
     (section: SectionId) => withTransition(() => dispatch({ type: "switch", section })),
     []
   );
+  const resetAll = useCallback(() => dispatch({ type: "resetAll" }), []);
   const patchItem = useCallback<NavApi["patchItem"]>(
     (key, patch) => dispatch({ type: "patchItem", key, patch }),
     []
@@ -108,8 +109,8 @@ export function NavProvider({
   }, [back, switchTo]);
 
   const actions = useMemo<NavActions>(
-    () => ({ push, back, switchTo, patchItem }),
-    [push, back, switchTo, patchItem]
+    () => ({ push, back, switchTo, resetAll, patchItem }),
+    [push, back, switchTo, resetAll, patchItem]
   );
 
   const api = useMemo<NavApi>(
@@ -120,9 +121,10 @@ export function NavProvider({
       push,
       back,
       switchTo,
+      resetAll,
       patchItem,
     }),
-    [state, push, back, switchTo, patchItem]
+    [state, push, back, switchTo, resetAll, patchItem]
   );
 
   return (

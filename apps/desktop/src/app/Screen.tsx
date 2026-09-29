@@ -11,6 +11,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
+import { ScreenActiveContext } from "@/lib/screenActive";
 import { ScreenScrollContext } from "./screenContext";
 
 export const Screen = memo(function Screen({
@@ -27,23 +28,38 @@ export const Screen = memo(function Screen({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  /// Kept current by a passive scroll listener, so it is never read after
+  /// the screen was hidden (when an engine might report 0).
   const savedTop = useRef(0);
+  /// What had focus when the screen was hidden, to give it back on return.
+  const lastFocus = useRef<HTMLElement | null>(null);
   const scrolled = useRef(false);
   const report = useRef(onScrolledChange);
   report.current = onScrolledChange;
   const activeRef = useRef(active);
   activeRef.current = active;
 
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (activeRef.current) savedTop.current = el.scrollTop;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
   // Scrolled past the top ↔ the sentinel left the viewport. One observer
-  // callback per crossing, never per scroll frame.
+  // callback per crossing, never per scroll frame; ignored while hidden.
   useEffect(() => {
     const root = ref.current;
     const sentinel = sentinelRef.current;
     if (!root || !sentinel || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(
       ([entry]) => {
+        if (!activeRef.current) return;
         scrolled.current = !entry.isIntersecting;
-        if (activeRef.current) report.current(scrolled.current);
+        report.current(scrolled.current);
       },
       { root }
     );
@@ -51,15 +67,27 @@ export const Screen = memo(function Screen({
     return () => observer.disconnect();
   }, []);
 
-  // Keep the scroll offset across hiding; tell the top bar this screen's state.
+  // On show: the same scroll offset, the top bar's state, and focus back
+  // where it was (or on the screen) if it was left on a hidden screen.
+  // On hide: remember what had focus here.
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (active) {
-      if (el.scrollTop !== savedTop.current) el.scrollTop = savedTop.current;
-      report.current(scrolled.current);
-    } else {
-      savedTop.current = el.scrollTop;
+    if (!active) {
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && el.contains(focused)) lastFocus.current = focused;
+      return;
+    }
+    if (el.scrollTop !== savedTop.current) el.scrollTop = savedTop.current;
+    report.current(scrolled.current);
+    const focused = document.activeElement;
+    const stranded =
+      !focused ||
+      focused === document.body ||
+      (focused instanceof HTMLElement && !!focused.closest("[inert]"));
+    if (stranded) {
+      const target = lastFocus.current?.isConnected ? lastFocus.current : el;
+      target.focus({ preventScroll: true });
     }
   }, [active]);
 
@@ -70,8 +98,9 @@ export const Screen = memo(function Screen({
       aria-label={label}
       aria-hidden={!active}
       inert={!active}
+      tabIndex={-1}
       className={cn(
-        "nova-screen absolute inset-0 overflow-y-auto overflow-x-hidden",
+        "nova-screen absolute inset-0 overflow-y-auto overflow-x-hidden outline-none",
         !active && "nova-screen-hidden"
       )}
     >
@@ -80,7 +109,9 @@ export const Screen = memo(function Screen({
         aria-hidden
         className="pointer-events-none absolute left-0 top-0 h-6 w-px"
       />
-      <ScreenScrollContext.Provider value={ref}>{children}</ScreenScrollContext.Provider>
+      <ScreenActiveContext.Provider value={active}>
+        <ScreenScrollContext.Provider value={ref}>{children}</ScreenScrollContext.Provider>
+      </ScreenActiveContext.Provider>
     </div>
   );
 });

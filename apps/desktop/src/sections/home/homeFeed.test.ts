@@ -37,7 +37,8 @@ describe("home feed", () => {
     const live = [cw("live", 5, 50), cw("live", 6, 60)];
     const feed = homeFeed(movies, series, live);
     expect(feed.hero?.mediaId).toBe(2);
-    expect(feed.alsoInProgress.map((i) => i.mediaId)).toEqual([3, 4, 1]);
+    // Episodes under Up next are not repeated beside the hero.
+    expect(feed.alsoInProgress.map((i) => i.mediaId)).toEqual([1]);
     expect(feed.upNext.map((i) => i.mediaId)).toEqual([3, 4]);
     expect(feed.recentChannels.map((i) => i.mediaId)).toEqual([6, 5]);
     expect(feed.seedMovie?.mediaId).toBe(2);

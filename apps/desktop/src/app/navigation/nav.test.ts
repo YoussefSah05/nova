@@ -71,4 +71,16 @@ describe("navigation", () => {
     }
     expect(navReducer(s, { type: "patchItem", key: "nope", patch: { isFavorite: true } })).toBe(s);
   });
+
+  it("returns every section to its root when the playlist changes", () => {
+    let s = push(initialNav(), "a");
+    s = navReducer(s, { type: "switch", section: "movies" });
+    s = push(push(s, "b"), "c");
+    s = navReducer(s, { type: "resetAll" });
+    for (const section of ["home", "movies", "series", "live", "library"] as const) {
+      expect(s.stacks[section]).toHaveLength(1);
+    }
+    expect(s.section).toBe("movies");
+    expect(navReducer(s, { type: "resetAll" })).toBe(s);
+  });
 });

@@ -11,6 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { ChannelNowAndNext, Program } from "@/types";
+import { useScreenActive } from "@/lib/screenActive";
 
 /// Requests made within this window share one IPC call.
 const BATCH_WINDOW_MS = 16;
@@ -98,6 +99,7 @@ export function useChannelGuide(
   const profileId = options.profileId ?? contextProfile;
   const active = profileId != null && channelId != null && (options.enabled ?? true);
   const { data } = useQuery({
+    subscribed: useScreenActive(),
     queryKey: guideKeys.channel(profileId ?? "", active ? channelId : -1),
     queryFn: () => loadGuide(profileId!, channelId!),
     enabled: active,

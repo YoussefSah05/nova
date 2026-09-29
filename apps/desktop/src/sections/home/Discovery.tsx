@@ -69,7 +69,7 @@ const RankedCard = memo(function RankedCard({ item, rank }: { item: BrowseItem; 
     >
       <span
         aria-hidden
-        className="-mr-[18px] font-display text-[140px] font-semibold leading-[0.78] text-transparent [-webkit-text-stroke:1.5px_rgba(255,255,255,0.28)]"
+        className="-mr-[18px] font-display text-[140px] font-medium leading-[0.78] text-transparent [-webkit-text-stroke:1.5px_rgba(255,255,255,0.28)]"
       >
         {rank}
       </span>

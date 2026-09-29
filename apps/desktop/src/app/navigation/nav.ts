@@ -43,6 +43,8 @@ export type NavAction =
   | { type: "push"; route: Route }
   | { type: "pop" }
   | { type: "popToRoot" }
+  /// Every section back to its root (the playlist changed: pages belong to it).
+  | { type: "resetAll" }
   | {
       type: "patchItem";
       key: string;
@@ -112,6 +114,14 @@ export function navReducer(state: NavState, action: NavAction): NavState {
     case "popToRoot": {
       const stack = state.stacks[state.section];
       return stack.length > 1 ? withStack(state, [stack[0]]) : state;
+    }
+    case "resetAll": {
+      if (SECTIONS.every((s) => state.stacks[s].length === 1)) return state;
+      const stacks = Object.fromEntries(SECTIONS.map((s) => [s, [state.stacks[s][0]]])) as Record<
+        SectionId,
+        Entry[]
+      >;
+      return { ...state, stacks };
     }
     case "patchItem": {
       let changed = false;

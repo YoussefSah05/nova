@@ -30,6 +30,7 @@ import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
 import { canonicalMovieQuery, useRelatedTitles, useTitleFacts } from "./detail/data";
 import { metaLine } from "./detail/meta";
+import { useScreenActive } from "@/lib/screenActive";
 
 /// Preferred audio language choices. `null` = keep the stream's original track.
 const AUDIO_LANGS: { value: string | null; label: string }[] = [
@@ -167,6 +168,7 @@ export function ContentDetail({
   // Canonical movie detail (entity-owned resume state); the card's summary
   // renders immediately and the detail refines it when it arrives.
   const { data: detail } = useQuery({
+    subscribed: useScreenActive(),
     ...canonicalMovieQuery(profileId, item.entityId),
     enabled: item.kind === "movie" && !!item.entityId,
     staleTime: 0,

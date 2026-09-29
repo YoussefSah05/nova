@@ -3,12 +3,9 @@
 //! next, what is new, what is trending, and more like what you just watched.
 //! Every module reads the browse caches, which the session warms at start.
 
-import { DatabaseIcon } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
 import { RECENTLY_ADDED_RAIL, useContinueWatching, useRail } from "@/features/browse/queries";
 import { useSession } from "@/app/session";
-import { useShell } from "@/app/shell";
+import { NoPlaylist } from "@/sections/shared/NoPlaylist";
 import { BecauseYouWatched, TrendingRanked } from "./Discovery";
 import { homeFeed } from "./homeFeed";
 import { OnAirNow } from "./OnAirNow";
@@ -39,29 +36,6 @@ function HomeFeedView({ sourceId }: { sourceId: number }) {
       <UpNextAndNew upNext={feed.upNext} />
       <TrendingRanked />
       <BecauseYouWatched seed={feed.seedMovie} />
-    </div>
-  );
-}
-
-function NoPlaylist() {
-  const { error } = useSession();
-  const { openAddSource } = useShell();
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-5 px-6 text-center">
-      <DatabaseIcon className="h-10 w-10 text-white/40" strokeWidth={1.5} aria-hidden />
-      <div className="flex flex-col gap-2">
-        <h1 className="font-display text-[28px] font-medium">
-          Your library starts with a playlist
-        </h1>
-        <p className="max-w-md text-sm leading-relaxed text-white/60">
-          Add an M3U or Xtream playlist. Nova matches its films and shows, finds their artwork and
-          builds your guide — all on this Mac.
-        </p>
-      </div>
-      {error && <p className="max-w-md text-sm text-destructive">{error}</p>}
-      <Button size="lg" onClick={openAddSource}>
-        Add a playlist
-      </Button>
     </div>
   );
 }

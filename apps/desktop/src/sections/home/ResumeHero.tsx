@@ -22,6 +22,7 @@ import { useActivate } from "@/app/useActivate";
 import { usePlayback } from "@/app/playback";
 import { useSession } from "@/app/session";
 import { clockTime, continueMedia, greeting, progressPct, timeLeft } from "./homeFeed";
+import { useScreenActive } from "@/lib/screenActive";
 
 function useGreetingLine(name: string): string {
   useMinute();
@@ -93,6 +94,7 @@ function ResumeFrame({
   const art = useTitleArtFor(profile.id, entityId ? { kind: "movie", entityId } : null);
   // Shares the movie page's cache: "Details" opens it already loaded.
   const { data: detail } = useQuery({
+    subscribed: useScreenActive(),
     ...canonicalMovieQuery(profile.id, entityId),
     enabled: entityId !== null,
     staleTime: 5 * 60 * 1000,
@@ -127,7 +129,7 @@ function ResumeFrame({
         )}
         <div className="mt-1.5 flex gap-3">
           <Button size="lg" onClick={() => playMedia(continueMedia(item))} className="gap-2.5">
-            <PlayIcon className="h-4 w-4 fill-current" aria-hidden />
+            <PlayIcon className="h-4 w-4 fill-current" strokeWidth={1.5} aria-hidden />
             {item.upNext ? "Play next episode" : "Resume"}
           </Button>
           {detail && (
@@ -148,7 +150,7 @@ function AlsoInProgress({ items }: { items: ContinueWatchingItem[] }) {
   return (
     <aside
       aria-label="Also in progress"
-      className="nova-glass absolute bottom-16 right-14 flex w-[336px] flex-col gap-1 rounded-2xl p-3.5"
+      className="absolute bottom-16 right-14 flex w-[336px] flex-col gap-1 rounded-2xl border border-white/[0.08] bg-[#111113]/[0.92] p-3.5 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
     >
       <p className="mx-1.5 mb-1.5 mt-0.5 text-xs uppercase tracking-[0.12em] text-white/60">
         Also in progress
@@ -224,7 +226,7 @@ function SpotlightFrame({ item }: { item: BrowseItem }) {
         )}
         <div className="mt-1.5 flex gap-3">
           <Button size="lg" onClick={() => void playItem(item)} className="gap-2.5">
-            <PlayIcon className="h-4 w-4 fill-current" aria-hidden />
+            <PlayIcon className="h-4 w-4 fill-current" strokeWidth={1.5} aria-hidden />
             Play
           </Button>
           <Button variant="secondary" size="lg" onClick={() => activate(item)}>

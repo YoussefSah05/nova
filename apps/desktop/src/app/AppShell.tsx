@@ -22,7 +22,7 @@ import { useNav } from "./navigation/useNav";
 import { PlaybackProvider } from "./PlaybackProvider";
 import { Screen } from "./Screen";
 import { SessionProvider } from "./SessionProvider";
-import { useSession } from "./session";
+import { useSession, useSessionStatus } from "./session";
 import { ShellProvider } from "./ShellProvider";
 import { useShell } from "./shell";
 import { TopBar } from "./TopBar";
@@ -68,10 +68,21 @@ function Frame() {
     setVisited((v) => (v.has(section) ? v : new Set([...v, section])));
   }, [section]);
 
+  // Pages belong to the playlist they were opened from.
+  const { activeSourceId } = useSession();
+  const shownSource = useRef(activeSourceId);
+  const { resetAll } = nav;
+  useEffect(() => {
+    if (shownSource.current !== null && shownSource.current !== activeSourceId) resetAll();
+    shownSource.current = activeSourceId;
+  }, [activeSourceId, resetAll]);
+
   return (
     <div className="relative h-screen overflow-hidden bg-background text-foreground">
       <TopBar glass={glass} />
-      {SECTIONS.filter((s) => visited.has(s)).map((s) => {
+      {/* One flat, keyed list: a section visited later never shifts the
+          screens of the others (which would remount them). */}
+      {SECTIONS.filter((s) => visited.has(s)).flatMap((s) => {
         const stack = nav.state.stacks[s];
         return stack.map((entry, i) => {
           const active = s === section && i === stack.length - 1;
@@ -141,7 +152,8 @@ function ScreenContent({ section, entry }: { section: SectionId; entry: Entry })
 
 /// The session's last error, dismissable, over every screen.
 function ErrorBanner() {
-  const { error, setError } = useSession();
+  const { setError } = useSession();
+  const { error } = useSessionStatus();
   if (!error) return null;
   return (
     <div

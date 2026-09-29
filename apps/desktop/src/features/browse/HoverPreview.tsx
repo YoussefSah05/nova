@@ -20,6 +20,7 @@ import { Artwork } from "@/components/Artwork";
 import { ChannelTile } from "./ChannelTile";
 import { useChannelGuide } from "./guide";
 import { GuideSummary } from "./GuideViews";
+import { useScreenActive } from "@/lib/screenActive";
 
 /// Module-level scroll suppression: previews never open within this window of the
 /// last scroll, so fast scrolling past cards can't spawn (then immediately tear
@@ -184,6 +185,7 @@ function clamp(anchor: DOMRect, width: number): { top: number; left: number } {
 export function useHoverPreview(delay = 450) {
   const [open, setOpen] = useState(false);
   const timer = useRef<number | null>(null);
+  const active = useScreenActive();
 
   const cancel = () => {
     if (timer.current !== null) {
@@ -193,6 +195,13 @@ export function useHoverPreview(delay = 450) {
   };
 
   useEffect(() => cancel, []);
+  // Its screen was hidden (another section, a page opened): close with it.
+  useEffect(() => {
+    if (!active) {
+      cancel();
+      setOpen(false);
+    }
+  }, [active]);
 
   return {
     open,

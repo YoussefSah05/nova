@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { TitleArt } from "@/types";
 import type { BrowseItem } from "./queries";
+import { useScreenActive } from "@/lib/screenActive";
 
 export type TitleArtSubject =
   | { kind: "movie"; entityId: string }
@@ -46,6 +47,10 @@ export function useTitleArtFor(
   profileId: string,
   subject: TitleArtSubject | null
 ): TitleArt | undefined {
-  const { data } = useQuery({ ...titleArtQuery(profileId, subject), enabled: subject !== null });
+  const { data } = useQuery({
+    subscribed: useScreenActive(),
+    ...titleArtQuery(profileId, subject),
+    enabled: subject !== null,
+  });
   return data ?? undefined;
 }

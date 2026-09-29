@@ -13,6 +13,7 @@ import { SectionHeader } from "@/ui/SectionHeader";
 import { useActivate } from "@/app/useActivate";
 import { useLibraryActions } from "@/app/libraryActions";
 import { useSession } from "@/app/session";
+import { NoPlaylist } from "@/sections/shared/NoPlaylist";
 
 const SHELVES: { tab: BrowseTab; spec: RailSpec }[] = [
   { tab: "movies", spec: { ...WATCHLIST_RAIL, title: "Films to watch" } },
@@ -23,9 +24,11 @@ const SHELVES: { tab: BrowseTab; spec: RailSpec }[] = [
 ];
 
 export function LibrarySection() {
-  const { profile, activeSourceId } = useSession();
+  const { profile, activeSourceId, sources, sourcesLoaded } = useSession();
   const activate = useActivate();
   const { toggleFavorite, toggleWatchlist } = useLibraryActions();
+
+  if (sourcesLoaded && sources.length === 0) return <NoPlaylist />;
 
   return (
     <div className="flex flex-col gap-8 px-[88px] pb-16 pt-[108px]">
