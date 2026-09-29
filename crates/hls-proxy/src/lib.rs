@@ -1,12 +1,14 @@
 //! Local HLS reverse proxy built on Axum.
 //!
-//! Phase 5 surface:
-//! - Passthrough `/proxy?url=...` route (HLS segments after manifest rewriting
-//!   and direct-file streams come through here).
-//! - Session-based `/stream/{token}/master.m3u8` + `/stream/{token}/local/...`
-//!   routes. Sessions are created via [`SessionRegistry::register`]; the
-//!   proxy routes the upstream and either rewrites the live manifest or
-//!   serves files from an ffmpeg-fed temp dir.
+//! Surface (every route is scoped to a session token; no upstream URL is ever
+//! in a locator, and nothing a session's manifests didn't name is fetched):
+//! - `/stream/{token}/master.m3u8`: the session's manifest, its URIs rewritten
+//!   to `/stream/{token}/r/{id}`; or the remux's local manifest.
+//! - `/stream/{token}/r/{id}`: a segment, key or sub-playlist the session's
+//!   manifests named (sub-playlists rewritten the same way).
+//! - `/stream/{token}/file`: a direct-file session's bytes (Range forwarded).
+//! - `/stream/{token}/local/{file}`: files ffmpeg writes for a remux.
+//!   Sessions are created via [`SessionRegistry::register`].
 //! - `/captions/{token}/...` stub routes that 404 today and will be populated
 //!   by Phase 6 (source captions) and Phase 7 (translated captions) without
 //!   touching the player.
@@ -18,6 +20,7 @@
 //! See `docs/reference/hls-proxy.md` for the manifest rewriting rules.
 
 mod manifest;
+mod resources;
 mod routes;
 mod session;
 
@@ -87,15 +90,22 @@ impl Drop for ProxyHandle {
 /// Boot the proxy on `127.0.0.1:0` (OS picks a free port). Returns once
 /// the listener is bound - the actual serve loop runs in a spawned task.
 pub async fn start() -> Result<ProxyHandle, ProxyError> {
+    start_with(false).await
+}
+
+/// `allow_loopback_upstream` lets tests serve an upstream on 127.0.0.1; the
+/// app never allows it (a manifest must not reach local services).
+async fn start_with(allow_loopback_upstream: bool) -> Result<ProxyHandle, ProxyError> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
 
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
             if attempt.previous().len() >= 10 {
                 attempt.error("too many upstream redirects")
-            } else if !routes::is_safe_upstream(attempt.url().as_str()) {
+            } else if !allow_loopback_upstream && !routes::is_safe_upstream(attempt.url().as_str())
+            {
                 attempt.error("blocked local upstream redirect")
             } else {
                 attempt.follow()
@@ -109,12 +119,14 @@ pub async fn start() -> Result<ProxyHandle, ProxyError> {
         client,
         sessions: sessions.clone(),
         origin: format!("http://127.0.0.1:{port}"),
+        allow_loopback_upstream,
     };
 
     let app = Router::new()
         .route("/health", get(routes::health))
-        .route("/proxy", get(routes::proxy))
         .route("/stream/{token}/master.m3u8", get(routes::stream_master))
+        .route("/stream/{token}/r/{id}", get(routes::stream_resource))
+        .route("/stream/{token}/file", get(routes::stream_file))
         .route("/stream/{token}/local/{file}", get(routes::stream_local))
         // Both "source-only" and "translated" caption URLs share the same
         // {spec} segment. Spec is `<lang>.vtt` for source captions and
@@ -158,7 +170,7 @@ mod tests {
 
     #[test]
     fn rejects_loopback() {
-        assert!(!is_safe_upstream("http://127.0.0.1/proxy?url=foo"));
+        assert!(!is_safe_upstream("http://127.0.0.1/stream/t/file"));
         assert!(!is_safe_upstream("http://localhost:8080/x"));
         for url in [
             "http://[::1]/x",
@@ -216,5 +228,168 @@ mod tests {
             assert_eq!(res.status(), 404);
         }
         handle.shutdown();
+    }
+
+    /// A fake provider on 127.0.0.1 whose paths carry "credentials".
+    async fn upstream() -> String {
+        use axum::http::{header, StatusCode};
+        use axum::response::IntoResponse;
+        let app = Router::new()
+            .route(
+                "/live/alice/s3cret/master.m3u8",
+                get(|| async {
+                    "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nchunks.m3u8\n".into_response()
+                }),
+            )
+            .route(
+                "/live/alice/s3cret/chunks.m3u8",
+                get(|| async {
+                    "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n#EXTINF:6,\nseg1.ts\n"
+                        .into_response()
+                }),
+            )
+            .route("/live/alice/s3cret/seg1.ts", get(|| async { "SEGMENT" }))
+            .route("/live/alice/s3cret/key.bin", get(|| async { "KEY" }))
+            .route(
+                "/movie/alice/s3cret/1.mp4",
+                get(|headers: axum::http::HeaderMap| async move {
+                    match headers.get(header::RANGE) {
+                        Some(_) => (StatusCode::PARTIAL_CONTENT, "MP").into_response(),
+                        None => "MP4BYTES".into_response(),
+                    }
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    async fn text(url: &str) -> (u16, String) {
+        let res = reqwest::get(url).await.unwrap();
+        (res.status().as_u16(), res.text().await.unwrap())
+    }
+
+    /// The URIs a manifest points at (non-tag lines and `URI="…"`).
+    fn uris(manifest: &str) -> Vec<String> {
+        manifest
+            .lines()
+            .filter_map(|line| match line.find("URI=\"") {
+                Some(at) => line[at + 5..].split('"').next().map(str::to_string),
+                None if !line.starts_with('#') && !line.is_empty() => Some(line.to_string()),
+                None => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_session_only_exposes_opaque_urls_of_its_own_manifests() {
+        let provider = upstream().await;
+        let proxy = start_with(true).await.unwrap();
+        let origin = proxy.origin();
+        let live = proxy
+            .sessions()
+            .register(
+                format!("{provider}/live/alice/s3cret/master.m3u8"),
+                true,
+                Some(PlaybackRoute::HlsPassthrough),
+            )
+            .await
+            .unwrap();
+
+        let (status, master) = text(&format!("{origin}/stream/{}/master.m3u8", live.token)).await;
+        assert_eq!(status, 200);
+        let variant = &uris(&master)[0];
+        assert!(variant.starts_with(&format!("{origin}/stream/{}/r/", live.token)));
+        let (_, chunks) = text(variant).await;
+        let links = uris(&chunks);
+        assert_eq!(links.len(), 2, "{chunks}");
+        let mut bodies = Vec::new();
+        for link in &links {
+            bodies.push(text(link).await.1);
+        }
+        assert_eq!(bodies, ["KEY", "SEGMENT"]);
+        for manifest in [&master, &chunks] {
+            assert!(
+                !manifest.contains("alice") && !manifest.contains("s3cret"),
+                "{manifest}"
+            );
+            assert!(!manifest.contains(&provider), "{manifest}");
+        }
+
+        // No open relay: the old route is gone, an unknown id is refused,
+        // and one session's ids mean nothing under another token.
+        let relay = format!("{origin}/proxy?url={provider}/live/alice/s3cret/seg1.ts");
+        assert_eq!(text(&relay).await.0, 404);
+        assert_eq!(
+            text(&format!(
+                "{origin}/stream/{}/r/0000000000000000",
+                live.token
+            ))
+            .await
+            .0,
+            404
+        );
+        let other = proxy
+            .sessions()
+            .register(
+                format!("{provider}/live/alice/s3cret/master.m3u8"),
+                true,
+                Some(PlaybackRoute::HlsPassthrough),
+            )
+            .await
+            .unwrap();
+        let foreign = links[1].replace(&live.token, &other.token);
+        assert_eq!(text(&foreign).await.0, 404);
+
+        // A direct file plays from its session, with Range forwarded.
+        let file = proxy
+            .sessions()
+            .register(
+                format!("{provider}/movie/alice/s3cret/1.mp4"),
+                false,
+                Some(PlaybackRoute::FilePassthrough),
+            )
+            .await
+            .unwrap();
+        let file_url = format!("{origin}/stream/{}/file", file.token);
+        assert_eq!(text(&file_url).await, (200, "MP4BYTES".to_string()));
+        let ranged = reqwest::Client::new()
+            .get(&file_url)
+            .header("Range", "bytes=0-1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ranged.status().as_u16(), 206);
+        assert_eq!(
+            text(&format!("{origin}/stream/{}/file", live.token))
+                .await
+                .0,
+            400,
+            "an HLS session has no file"
+        );
+
+        // Released sessions answer nothing.
+        proxy.sessions().release(&live.token).await;
+        assert_eq!(text(variant).await.0, 404);
+        proxy.shutdown();
+    }
+
+    #[tokio::test]
+    async fn the_app_proxy_never_fetches_local_services() {
+        let provider = upstream().await;
+        let proxy = start().await.unwrap();
+        let live = proxy
+            .sessions()
+            .register(
+                format!("{provider}/live/alice/s3cret/master.m3u8"),
+                true,
+                Some(PlaybackRoute::HlsPassthrough),
+            )
+            .await
+            .unwrap();
+        let url = format!("{}/stream/{}/master.m3u8", proxy.origin(), live.token);
+        assert_eq!(text(&url).await.0, 400, "a 127.0.0.1 upstream is refused");
+        proxy.shutdown();
     }
 }

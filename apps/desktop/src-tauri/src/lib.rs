@@ -5,6 +5,7 @@ pub mod commands;
 pub mod desktop_jobs;
 pub mod ipc;
 pub mod lifecycle;
+pub mod log_redaction;
 #[cfg(target_os = "macos")]
 pub mod mac_model_library;
 pub mod model_registry;
@@ -25,7 +26,8 @@ use tauri::{webview::PageLoadEvent, AppHandle, Emitter, Manager, RunEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt::init();
+    // Every line redacted: no URL in a log keeps its credentials.
+    log_redaction::init();
 
     let (pool, proxy_handle) = tauri::async_runtime::block_on(async {
         let data_dir = validation_data_dir().unwrap_or_else(|| {

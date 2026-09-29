@@ -223,6 +223,52 @@ pub fn display_source_url(url: &str) -> String {
     }
 }
 
+/// Replace every URL in free text (an error message, ffmpeg's stderr, a log
+/// line) with its secret-free label: `scheme://host[:port]`, plus `/…` when
+/// it had a path or query. Xtream puts credentials in the path, TMDB's legacy
+/// key and many providers' tokens in the query, and some URLs carry user
+/// info; the host is kept because it is what diagnostics need.
+pub fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(sep) = rest.find("://") {
+        // The scheme: letters, digits, `+`, `-`, `.` before `://`, starting
+        // with a letter.
+        let scheme_start = rest[..sep]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            .last()
+            .map_or(sep, |(i, _)| i);
+        let scheme = &rest[scheme_start..sep];
+        let tail = &rest[sep + 3..];
+        let end = tail
+            .find(|c: char| {
+                c.is_whitespace()
+                    || matches!(
+                        c,
+                        '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '`'
+                    )
+            })
+            .unwrap_or(tail.len());
+        if !scheme.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            out.push_str(&rest[..sep + 3]);
+            rest = tail;
+            continue;
+        }
+        let span = &rest[scheme_start..sep + 3 + end];
+        out.push_str(&rest[..scheme_start]);
+        out.push_str(&display_source_url(span));
+        let authority_len = tail[..end].find(['/', '?', '#']).unwrap_or(end);
+        if authority_len < end {
+            out.push_str("/…");
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The final path segment with any query, fragment or user info removed, so a
 /// malformed provider URL can't surface its credentials.
 fn last_path_segment(path: &str) -> String {

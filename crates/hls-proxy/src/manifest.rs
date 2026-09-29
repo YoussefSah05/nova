@@ -10,12 +10,16 @@
 
 use std::sync::OnceLock;
 
-/// Rewrite every URI in `body` so it goes through `proxy_origin` (e.g.
-/// `http://127.0.0.1:43521`) using the `/proxy?url=...` route.
+/// Rewrite every URI in `body` to what `proxied` maps its absolute URL to
+/// (the proxy's session-scoped resource URL).
 ///
 /// `base_url` is the absolute URL of the manifest itself; relative URIs in
-/// the playlist are resolved against it before being re-encoded.
-pub fn rewrite_manifest(body: &str, base_url: &str, proxy_origin: &str) -> String {
+/// the playlist are resolved against it before being mapped.
+pub fn rewrite_manifest(
+    body: &str,
+    base_url: &str,
+    mut proxied: impl FnMut(&str) -> String,
+) -> String {
     let mut out = String::with_capacity(body.len() + 256);
     for line in body.split_inclusive('\n') {
         let trimmed = line.trim_end_matches(['\r', '\n']);
@@ -28,7 +32,7 @@ pub fn rewrite_manifest(body: &str, base_url: &str, proxy_origin: &str) -> Strin
             // URIs (EXT-X-MEDIA URI=, EXT-X-KEY URI=, EXT-X-MAP URI=,
             // EXT-X-I-FRAME-STREAM-INF URI=) - those need their URI=
             // attribute rewritten too.
-            if let Some(rewritten) = rewrite_tag_uri(rest, base_url, proxy_origin) {
+            if let Some(rewritten) = rewrite_tag_uri(rest, base_url, &mut proxied) {
                 out.push('#');
                 out.push_str(&rewritten);
                 if line.ends_with('\n') {
@@ -41,8 +45,7 @@ pub fn rewrite_manifest(body: &str, base_url: &str, proxy_origin: &str) -> Strin
         }
         // URI line - rewrite.
         let absolute = resolve(base_url, trimmed);
-        let proxied = format!("{proxy_origin}/proxy?url={}", urlencode(&absolute),);
-        out.push_str(&proxied);
+        out.push_str(&proxied(&absolute));
         if line.ends_with('\n') {
             out.push('\n');
         }
@@ -86,13 +89,17 @@ pub struct SubtitleTrack {
     pub default: bool,
 }
 
-fn rewrite_tag_uri(tag: &str, base_url: &str, proxy_origin: &str) -> Option<String> {
+fn rewrite_tag_uri(
+    tag: &str,
+    base_url: &str,
+    proxied: &mut impl FnMut(&str) -> String,
+) -> Option<String> {
     // Look for `URI="..."` and rewrite the value if present.
     let re = uri_attr_regex();
     let caps = re.captures(tag)?;
     let m = caps.get(1)?;
     let absolute = resolve(base_url, m.as_str());
-    let proxied = format!("{proxy_origin}/proxy?url={}", urlencode(&absolute));
+    let proxied = proxied(&absolute);
     let mut out = String::with_capacity(tag.len() + proxied.len());
     out.push_str(&tag[..m.start()]);
     out.push_str(&proxied);
@@ -179,21 +186,6 @@ fn resolve(base: &str, target: &str) -> String {
     target.to_string()
 }
 
-fn urlencode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 8);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                out.push_str(&format!("%{b:02X}"));
-            }
-        }
-    }
-    out
-}
-
 fn escape_attr(s: &str) -> String {
     s.replace('"', "%22")
 }
@@ -207,29 +199,23 @@ mod tests {
         let manifest =
             "#EXTM3U\n#EXTINF:6,\nseg-001.ts\n#EXTINF:6,\nhttps://cdn.example.com/seg-002.ts\n";
         let base = "https://provider.com/path/playlist.m3u8";
-        let out = rewrite_manifest(manifest, base, "http://127.0.0.1:9999");
-        assert!(out.contains(
-            "http://127.0.0.1:9999/proxy?url=https%3A%2F%2Fprovider.com%2Fpath%2Fseg-001.ts"
-        ));
-        assert!(out.contains(
-            "http://127.0.0.1:9999/proxy?url=https%3A%2F%2Fcdn.example.com%2Fseg-002.ts"
-        ));
+        let out = rewrite_manifest(manifest, base, |u| format!("P[{u}]"));
+        assert!(out.contains("P[https://provider.com/path/seg-001.ts]"));
+        assert!(out.contains("P[https://cdn.example.com/seg-002.ts]"));
     }
 
     #[test]
     fn rewrites_uri_attributes() {
         let manifest = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\",IV=0x0\n";
         let base = "https://provider.com/playlist.m3u8";
-        let out = rewrite_manifest(manifest, base, "http://127.0.0.1:9999");
-        assert!(out.contains(
-            "URI=\"http://127.0.0.1:9999/proxy?url=https%3A%2F%2Fprovider.com%2Fkey.bin\""
-        ));
+        let out = rewrite_manifest(manifest, base, |u| format!("P[{u}]"));
+        assert!(out.contains("URI=\"P[https://provider.com/key.bin]\""));
     }
 
     #[test]
     fn passes_unchanged_tags_through() {
         let manifest = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n";
-        let out = rewrite_manifest(manifest, "https://x.com/a.m3u8", "http://127.0.0.1:1");
+        let out = rewrite_manifest(manifest, "https://x.com/a.m3u8", |u| format!("P[{u}]"));
         assert!(out.contains("#EXT-X-TARGETDURATION:6"));
     }
 

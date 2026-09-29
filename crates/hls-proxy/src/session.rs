@@ -38,7 +38,7 @@ pub enum SessionError {
 /// What the player should do with this session.
 ///
 /// `Hls` - pull `/stream/{token}/master.m3u8` and attach hls.js.
-/// `File` - pull the upstream bytes directly through `/proxy?url=...`; use
+/// `File` - pull the upstream bytes through `/stream/{token}/file`; use
 /// the native `<video>` element with byte-range seek.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -73,6 +73,8 @@ pub(crate) struct Session {
     pub route: PlaybackRoute,
     pub fallback_reason: Option<String>,
     pub remux: Option<RemuxSession>,
+    /// Upstream URLs this session's manifests named, by opaque id.
+    pub resources: crate::resources::ResourceTable,
 }
 
 #[derive(Clone, Default)]
@@ -116,7 +118,8 @@ impl SessionRegistry {
                     }
                     Err(e) => {
                         let route = fallback_route_for_url(&upstream_url);
-                        let reason = format!("probe failed: {e}");
+                        // ffprobe's stderr names the input URL (credentials).
+                        let reason = nova_core::redact_urls(&format!("probe failed: {e}"));
                         tracing::warn!(
                             error = %e,
                             route = ?route,
@@ -154,7 +157,8 @@ impl SessionRegistry {
                         return Err(SessionError::Remux(e));
                     }
                     let fallback_route = fallback_route_for_probe(&upstream_url, &probe);
-                    let reason = format!("remux failed for {route:?}: {e}");
+                    let reason =
+                        nova_core::redact_urls(&format!("remux failed for {route:?}: {e}"));
                     tracing::warn!(
                         error = %e,
                         route = ?route,
@@ -184,6 +188,7 @@ impl SessionRegistry {
             route,
             fallback_reason: fallback_reason.clone(),
             remux,
+            resources: crate::resources::ResourceTable::new(),
         }));
         self.sessions.lock().await.insert(token.clone(), session);
 

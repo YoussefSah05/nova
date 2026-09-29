@@ -95,3 +95,38 @@ fn display_url_drops_user_info_path_and_query() {
         assert_eq!(display_source_url(input), expected, "input {input:?}");
     }
 }
+
+#[test]
+fn free_text_never_keeps_a_urls_credentials() {
+    use nova_core::redact_urls;
+    let cases = [
+        (
+            "ffprobe failed: http://host.tv:8080/live/alice/s3cret/101.ts: Server returned 403 Forbidden",
+            "ffprobe failed: http://host.tv:8080/… Server returned 403 Forbidden",
+        ),
+        (
+            "error sending request for url (https://api.themoviedb.org/3/movie/1?api_key=abc123)",
+            "error sending request for url (https://api.themoviedb.org/…)",
+        ),
+        ("fetch http://bob:pw@cdn.example/x failed", "fetch http://cdn.example/… failed"),
+        ("rtmp://live.example/app/key and https://ok.example", "rtmp://live.example/… and https://ok.example"),
+        ("\"HTTP://Host/get.php?username=u&password=p\"", "\"http://Host/…\""),
+        ("HTTP 404 from upstream", "HTTP 404 from upstream"),
+        ("weird ://nothing here", "weird ://nothing here"),
+    ];
+    for (input, expected) in cases {
+        let out = redact_urls(input);
+        assert_eq!(out, expected, "{input}");
+        for secret in [
+            "alice",
+            "s3cret",
+            "abc123",
+            "bob",
+            "pw@",
+            "password=p",
+            "/app/key",
+        ] {
+            assert!(!out.contains(secret), "{secret} survived in {out}");
+        }
+    }
+}

@@ -52,7 +52,11 @@ pub async fn mpv_open_stream(
             title,
             user_agent: Some("Mozilla/5.0 (compatible; nova-iptv/1.0)".to_string()),
         })
-        .map_err(|e| ApiError::Internal(format!("native player failed: {e}")))?;
+        .map_err(|e| {
+            ApiError::Internal(nova_core::redact_urls(&format!(
+                "native player failed: {e}"
+            )))
+        })?;
     *state.mpv_activity.lock().await = Some(state.own_playback(opened.token.clone(), epoch));
     // Only now that the new file opened: the coordinator writes where the
     // previous item stopped (its last observed position), then tracks this
@@ -331,7 +335,11 @@ pub async fn resolve_stream(
         .hls_sessions
         .register(resolved.upstream_url.clone(), is_live, route_override)
         .await
-        .map_err(|e| ApiError::Internal(format!("playback session failed: {e}")))?;
+        .map_err(|e| {
+            ApiError::Internal(nova_core::redact_urls(&format!(
+                "playback session failed: {e}"
+            )))
+        })?;
 
     let url = match kind {
         PlaybackKind::Hls => format!(
@@ -339,9 +347,8 @@ pub async fn resolve_stream(
             state.hls_proxy_port, token,
         ),
         PlaybackKind::File => format!(
-            "http://127.0.0.1:{}/proxy?url={}",
-            state.hls_proxy_port,
-            urlencode(&resolved.upstream_url),
+            "http://127.0.0.1:{}/stream/{}/file",
+            state.hls_proxy_port, token,
         ),
     };
 
@@ -487,7 +494,11 @@ pub async fn airplay_engage(
         .hls_sessions
         .register(resolved.upstream_url.clone(), is_live, None)
         .await
-        .map_err(|e| ApiError::Internal(format!("airplay session failed: {e}")))?;
+        .map_err(|e| {
+            ApiError::Internal(nova_core::redact_urls(&format!(
+                "airplay session failed: {e}"
+            )))
+        })?;
 
     let url = match info.kind {
         PlaybackKind::Hls => format!(
@@ -495,9 +506,8 @@ pub async fn airplay_engage(
             state.hls_proxy_port, info.token,
         ),
         PlaybackKind::File => format!(
-            "http://127.0.0.1:{}/proxy?url={}",
-            state.hls_proxy_port,
-            urlencode(&resolved.upstream_url),
+            "http://127.0.0.1:{}/stream/{}/file",
+            state.hls_proxy_port, info.token,
         ),
     };
 
@@ -593,17 +603,4 @@ pub fn set_player_surface_active(app: AppHandle, active: bool) -> Result<(), Api
     #[cfg(not(target_os = "macos"))]
     let _ = (&app, active);
     Ok(())
-}
-
-fn urlencode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 8);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
 }

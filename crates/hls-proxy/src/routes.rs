@@ -1,12 +1,12 @@
 //! HTTP routes.
 //!
 //! - `GET /health` - liveness.
-//! - `GET /proxy?url=...` - Phase 5 passthrough (HLS segments after manifest
-//!   rewriting come through here). Also used by the player directly when
-//!   `resolve_stream` returns `PlaybackKind::File`.
 //! - `GET /stream/{token}/master.m3u8` - manifest endpoint. Behaviour depends
 //!   on the session route: passthrough-HLS rewrites the upstream
 //!   manifest; remux serves the file ffmpeg is writing into the temp dir.
+//! - `GET /stream/{token}/r/{id}` - a URI the session's manifests named.
+//! - `GET /stream/{token}/file` - a direct-file session's upstream bytes
+//!   (what the player uses when `resolve_stream` returns `PlaybackKind::File`).
 //! - `GET /stream/{token}/local/{file}` - file inside the remux session's
 //!   temp dir (segments).
 //! - `GET /captions/{token}/{lang}.vtt` - source-language captions. 404 in
@@ -15,15 +15,17 @@
 //!   in Phase 5 until `crates/translate/` populates these in Phase 7.
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use serde::Deserialize;
+use std::sync::Arc;
+
 use tokio::fs::File;
+use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
 
 use crate::manifest::rewrite_manifest;
-use crate::session::SessionRegistry;
+use crate::session::{Session, SessionRegistry};
 use nova_media::PlaybackRoute;
 
 #[derive(Clone)]
@@ -31,26 +33,46 @@ pub(crate) struct AppState {
     pub client: reqwest::Client,
     pub sessions: SessionRegistry,
     pub origin: String,
+    /// Tests only: an upstream on 127.0.0.1.
+    pub allow_loopback_upstream: bool,
 }
 
 pub(crate) async fn health() -> &'static str {
     "ok"
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct ProxyParams {
-    pub url: String,
+/// A segment, key or sub-playlist one of the session's manifests named.
+pub(crate) async fn stream_resource(
+    State(state): State<AppState>,
+    Path((token, id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(session) = state.sessions.get(&token).await else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let Some(url) = session.lock().await.resources.get(&id).map(str::to_string) else {
+        return (StatusCode::NOT_FOUND, "unknown resource").into_response();
+    };
+    forward(&state, &session, &token, &url, &headers).await
 }
 
-pub(crate) async fn proxy(
+/// A direct-file session's upstream bytes.
+pub(crate) async fn stream_file(
     State(state): State<AppState>,
+    Path(token): Path<String>,
     headers: HeaderMap,
-    Query(params): Query<ProxyParams>,
 ) -> Response {
-    if !is_safe_upstream(&params.url) {
-        return (StatusCode::BAD_REQUEST, "invalid upstream URL").into_response();
-    }
-    forward(&state.client, &params.url, &state.origin, &headers).await
+    let Some(session) = state.sessions.get(&token).await else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let url = {
+        let s = session.lock().await;
+        if s.route != PlaybackRoute::FilePassthrough || s.remux.is_some() {
+            return (StatusCode::BAD_REQUEST, "session is not a direct file").into_response();
+        }
+        s.upstream_url.clone()
+    };
+    forward(&state, &session, &token, &url, &headers).await
 }
 
 pub(crate) async fn stream_master(
@@ -76,7 +98,7 @@ pub(crate) async fn stream_master(
         PlaybackRoute::HlsPassthrough => {
             let upstream = session.upstream_url.clone();
             drop(session);
-            fetch_and_rewrite_manifest(&state, &upstream, &headers).await
+            forward(&state, &session_arc, &token, &upstream, &headers).await
         }
         PlaybackRoute::FilePassthrough => {
             tracing::debug!(
@@ -85,7 +107,7 @@ pub(crate) async fn stream_master(
                 fallback_reason = fallback_reason.as_deref(),
                 "master playlist requested for direct-file session"
             );
-            // The player should have routed direct files through /proxy?url=
+            // The player should have used /stream/{token}/file
             // (PlaybackKind::File). If we got here the frontend is confused;
             // serve a synthetic 400 rather than streaming an MP4 disguised
             // as a manifest.
@@ -142,52 +164,20 @@ pub(crate) async fn captions_stub() -> Response {
 
 // -- Helpers -----------------------------------------------------------------
 
-async fn fetch_and_rewrite_manifest(
-    state: &AppState,
-    upstream_url: &str,
-    headers: &HeaderMap,
-) -> Response {
-    let mut req = state.client.get(upstream_url);
-    if let Some(range) = headers.get(header::RANGE) {
-        req = req.header(header::RANGE, range);
-    }
-    let res = match req.send().await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e.without_url(), "manifest fetch failed");
-            return (StatusCode::BAD_GATEWAY, "manifest fetch failed").into_response();
-        }
-    };
-    let status = res.status();
-    let body = match res.text().await {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(error = %e.without_url(), "manifest body read failed");
-            return (StatusCode::BAD_GATEWAY, "manifest body read failed").into_response();
-        }
-    };
-    let rewritten = rewrite_manifest(&body, upstream_url, &state.origin);
-    let mut response = Response::new(Body::from(rewritten));
-    *response.status_mut() = status;
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/vnd.apple.mpegurl"),
-    );
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    add_cors(response.headers_mut());
-    response
-}
-
+/// Fetch `url` for the session `token`. A manifest comes back with its URIs
+/// registered in the session and rewritten to `/stream/{token}/r/{id}`;
+/// anything else streams through (Range forwarded, for seeking).
 async fn forward(
-    client: &reqwest::Client,
+    state: &AppState,
+    session: &Arc<Mutex<Session>>,
+    token: &str,
     url: &str,
-    proxy_origin: &str,
     in_headers: &HeaderMap,
 ) -> Response {
-    let mut req = client.get(url);
-    // Forward Range so byte-seek on direct MP4 works.
+    if !state.allow_loopback_upstream && !is_safe_upstream(url) {
+        return (StatusCode::BAD_REQUEST, "invalid upstream URL").into_response();
+    }
+    let mut req = state.client.get(url);
     if let Some(range) = in_headers.get(header::RANGE) {
         req = req.header(header::RANGE, range);
     }
@@ -205,11 +195,20 @@ async fn forward(
         let body = match upstream.text().await {
             Ok(b) => b,
             Err(e) => {
-                tracing::warn!(error = %e.without_url(), "manifest proxy body read failed");
+                tracing::warn!(error = %e.without_url(), "manifest body read failed");
                 return (StatusCode::BAD_GATEWAY, "manifest body read failed").into_response();
             }
         };
-        let rewritten = rewrite_manifest(&body, url, proxy_origin);
+        let rewritten = {
+            let mut s = session.lock().await;
+            let origin = &state.origin;
+            rewrite_manifest(&body, url, |absolute| {
+                format!(
+                    "{origin}/stream/{token}/r/{}",
+                    s.resources.register(absolute)
+                )
+            })
+        };
         let mut response = Response::new(Body::from(rewritten));
         *response.status_mut() = status;
         response.headers_mut().insert(

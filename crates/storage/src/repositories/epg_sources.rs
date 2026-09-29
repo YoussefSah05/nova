@@ -34,30 +34,6 @@ pub struct EpgFeedStatus {
     pub programme_count: i64,
 }
 
-/// Replace every `http(s)://…` span (up to whitespace or a closing bracket or
-/// quote) with `<url>`.
-pub fn redact_urls(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    loop {
-        let next = ["http://", "https://"]
-            .iter()
-            .filter_map(|scheme| rest.find(scheme))
-            .min();
-        let Some(start) = next else {
-            out.push_str(rest);
-            return out;
-        };
-        out.push_str(&rest[..start]);
-        out.push_str("<url>");
-        let tail = &rest[start..];
-        let end = tail
-            .find(|c: char| c.is_whitespace() || matches!(c, ')' | ']' | '"' | '\'' | '>'))
-            .unwrap_or(tail.len());
-        rest = &tail[end..];
-    }
-}
-
 pub struct EpgSourcesRepository<'a> {
     pool: &'a SqlitePool,
 }
@@ -122,7 +98,7 @@ impl<'a> EpgSourcesRepository<'a> {
                 last_refresh_utc: r.last_refresh_utc,
                 // Errors stored before URLs were stripped from them can still
                 // name a feed URL (with an Xtream account's credentials).
-                last_error: r.last_error.as_deref().map(redact_urls),
+                last_error: r.last_error.as_deref().map(nova_core::redact_urls),
                 programme_count: r.programme_count,
             })
             .collect())
@@ -196,25 +172,5 @@ impl<'a> EpgSourcesRepository<'a> {
         .execute(self.pool)
         .await?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::redact_urls;
-
-    #[test]
-    fn stored_errors_never_show_feed_urls() {
-        assert_eq!(
-            redact_urls(
-                "error sending request for url (http://h:80/xmltv.php?username=u&password=p)"
-            ),
-            "error sending request for url (<url>)"
-        );
-        assert_eq!(
-            redact_urls("a https://x/y then http://z b"),
-            "a <url> then <url> b"
-        );
-        assert_eq!(redact_urls("HTTP 404"), "HTTP 404");
     }
 }

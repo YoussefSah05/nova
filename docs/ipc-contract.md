@@ -328,8 +328,8 @@ type MpvPlayerState = {
 type ResolvedStream = {
   /// URL to give the player. For kind === 'hls' it points at
   /// http://127.0.0.1:<port>/stream/<token>/master.m3u8 served by the proxy.
-  /// For kind === 'file' it's the proxy's /proxy?url=... passthrough with
-  /// byte-range support, suitable for the native <video> element.
+  /// For kind === 'file' it's http://127.0.0.1:<port>/stream/<token>/file,
+  /// with byte-range support, suitable for the native <video> element.
   url: string;
   kind: PlaybackKind;
   /// Backend route decision. MPEG-TS transport streams are not classified as
@@ -408,13 +408,19 @@ Fallback WebKit flow:
    still cannot decode.
 4. On modal close / unmount: `invoke("stop_playback", { token })`.
 
-### Proxy routes (Phase 5)
+### Proxy routes (Phase 5, M25)
+
+Every media route is scoped to a session token (created by `resolve_stream` / `airplay_engage`,
+released by `stop_playback` / `airplay_disengage` / a page reload). No upstream URL appears in any
+locator, and the proxy fetches only URLs the session's own manifests named (never a loopback host):
+there is no open relay. `/proxy?url=` was removed.
 
 | Route | Phase | Purpose |
 |---|---|---|
 | `GET /health` | 5 | Liveness check. Returns `"ok"`. |
-| `GET /proxy?url={encoded}` | 5 | Proxies HLS sub-playlists and segments after manifest rewriting, and direct file playback for `kind === "file"`. Rewrites `.m3u8` responses recursively and forwards `Range` for media bytes. |
 | `GET /stream/{token}/master.m3u8` | 5 | Manifest endpoint. Behaviour depends on session route: passthrough-HLS rewrites the upstream manifest; remuxed/transcoded sessions serve the file ffmpeg is writing. |
+| `GET /stream/{token}/r/{id}` | M25 | A segment, key or sub-playlist the session's manifests named, by opaque per-session id; sub-playlists are rewritten the same way. |
+| `GET /stream/{token}/file` | M25 | A direct-file session's bytes (`kind === "file"`), `Range` forwarded. |
 | `GET /stream/{token}/local/{file}` | 5 | Serves files from the remux session's temp dir (segments). |
 | `GET /captions/{token}/{lang}.vtt` | 6 | Source-language captions. Returns 404 in Phase 5. |
 | `GET /captions/{token}/{src}-to-{tgt}.vtt` | 7 | Translated captions. Returns 404 in Phase 5. |
