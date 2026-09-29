@@ -75,6 +75,8 @@ export interface PlayMedia {
   channelGroup?: string | null;
   category?: string | null;
   region?: string | null;
+  /// Start here (seconds) instead of the saved position: a dialogue moment.
+  startSec?: number | null;
 }
 
 interface PlayerModalProps {
@@ -1063,6 +1065,16 @@ export function PlayerModal({
     },
     [isLive, nativeToken]
   );
+
+  // A moment opens at its line once the stream is ready (after any resume).
+  const startedAt = useRef<number | null>(null);
+  useEffect(() => {
+    const start = media.startSec;
+    if (!ready || isLive || start == null || startedAt.current === start) return;
+    if (USE_MPV_ENGINE && !nativeToken) return;
+    startedAt.current = start;
+    seekTo(Math.max(0, start - 1));
+  }, [ready, isLive, media.startSec, nativeToken, seekTo]);
 
   const seekToLiveEdge = useCallback(() => {
     if (USE_MPV_ENGINE) {

@@ -21,7 +21,7 @@ pub use repositories::{
     EpgSourcesRepository, ExternalLibraryRecord, ExternalMatch, ExternalMatchRepository,
     ExternalMatchWrite, ExternalRegisteredModel, FacetCount, FailedAttempt, FailureStatus, Job,
     JobRepository, LibraryCollection, LineageEntry, LiveOverview, LogoCandidate, MatchMethod,
-    MatchPriority, MatchedMetadata, ModelRepository, MovieFilters, MovieMatchWork,
+    MatchPriority, MatchedMetadata, ModelRepository, MomentHit, MovieFilters, MovieMatchWork,
     MovieSearchCandidate, NowAndNext, PlaybackRepository, ProfileRepository,
     ProfileSettingsRepository, ProgramsRepository, Publication, PublicationMode,
     PublicationRepository, RegisteredModel, ResolutionReport, ResolvedStreamUrl, ResumePosition,

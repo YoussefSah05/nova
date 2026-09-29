@@ -51,7 +51,7 @@ pub use programs::{ChannelGuide, ChannelNowAndNext, NowAndNext, ProgramsReposito
 pub use publication::{
     FailedAttempt, FailureStatus, Publication, PublicationMode, PublicationRepository,
 };
-pub use search::{SearchHit, SearchRepository};
+pub use search::{MomentHit, SearchHit, SearchRepository};
 pub use series::{SeriesFilters, SeriesFlagSnapshot, SeriesRepository, SeriesStatusFilter};
 pub use sources::SourceRepository;
 pub use title_art::{StoredTitleArt, TitleArtMedia, TitleArtRepository};

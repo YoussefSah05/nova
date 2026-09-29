@@ -240,6 +240,7 @@ pub fn run() {
             // Phase 8 — Search (transcript companion panel + dialogue FTS)
             commands::search::get_transcript,
             commands::search::search_transcript,
+            commands::search::search_moments,
             // Semantic / hybrid search (catalog discovery)
             commands::search::semantic_search_catalog,
             commands::search::search_movies,

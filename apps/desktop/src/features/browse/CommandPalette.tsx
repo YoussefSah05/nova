@@ -22,6 +22,7 @@ import {
   MonitorPlay,
   Plus,
   RotateCw,
+  SearchIcon,
   Settings,
   Tv,
   Users,
@@ -51,6 +52,8 @@ export interface CommandPaletteProps {
   onAddPlaylist: () => void;
   onSwitchProfile: () => void;
   onRefresh: () => void;
+  /// Open the search page for what was typed (all groups, dialogue too).
+  onSearchAll?: (query: string) => void;
 }
 
 interface Results {
@@ -165,6 +168,18 @@ export function CommandPalette(props: CommandPaletteProps) {
                 <CommandEmpty className="px-3 py-8 text-center text-sm text-muted-foreground">
                   {q.length < 2 ? "Type to search your catalog." : "No matches."}
                 </CommandEmpty>
+
+                {props.onSearchAll && query.trim().length > 0 && (
+                  <Group heading="Search">
+                    <Row
+                      value="search-everything"
+                      onSelect={() => props.onSearchAll?.(query.trim())}
+                    >
+                      <SearchIcon className="h-4 w-4 text-muted-foreground" />
+                      <span>Search everything for “{query.trim()}”</span>
+                    </Row>
+                  </Group>
+                )}
 
                 {shownActions.length > 0 && (
                   <Group heading="Actions">

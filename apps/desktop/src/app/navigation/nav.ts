@@ -24,7 +24,9 @@ export const SECTION_LABELS: Record<SectionId, string> = {
 export type Route =
   | { kind: "root" }
   | { kind: "title"; item: BrowseItem }
-  | { kind: "series"; series: SeriesSummary };
+  | { kind: "series"; series: SeriesSummary }
+  /// The search page, opened with what was typed in the palette.
+  | { kind: "search"; query: string };
 
 export interface Entry {
   key: string;
@@ -89,6 +91,8 @@ function routeId(route: Route): string {
       return `title:${route.item.key}`;
     case "series":
       return seriesKey(route.series);
+    case "search":
+      return `search:${route.query}`;
   }
 }
 

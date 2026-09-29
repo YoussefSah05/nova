@@ -229,6 +229,29 @@ function setupInvoke(
           withGuide: 180,
           categories: [{ name: "News", count: 250 }],
         });
+      case "search_movies":
+        return Promise.resolve(movies);
+      case "search_moments":
+        return Promise.resolve([
+          {
+            segmentId: 9,
+            startSec: 3723,
+            endSec: 3726,
+            text: "Don't let yourself get attached",
+            kind: "source",
+            mediaKind: "vod",
+            mediaId: 7,
+            title: "Review Movie",
+            season: null,
+            episode: null,
+            episodeTitle: null,
+            numbered: false,
+            posterUrl: null,
+            entityId: "mov-7",
+          },
+        ]);
+      case "get_enrich_model_status":
+        return Promise.resolve({ installed: false, modelId: "e5", availability: "missing" });
       case "epg_refresh_if_stale":
         return Promise.resolve(false);
       case "epg_guide": {
@@ -585,5 +608,48 @@ describe("AppShell", () => {
     // The show's page (the section stays mounted, hidden, underneath).
     await waitFor(() => expect(screen.getAllByText("3 of 10 watched")).toHaveLength(2));
     expect(screen.getByRole("heading", { level: 1, name: "Breaking Bad" })).toBeInTheDocument();
+  });
+
+  it("searches everything from the palette, reading a decade and a genre it can undo", async () => {
+    // cmdk scrolls the active option into view; jsdom has no layout.
+    Element.prototype.scrollIntoView = vi.fn();
+    setupInvoke(() => [], [reviewMovie]);
+    renderShell();
+    await screen.findByRole("button", { name: "Live" });
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+    await userEvent.type(
+      await screen.findByPlaceholderText("Search content or jump to…"),
+      "drama 90s"
+    );
+    await userEvent.click(
+      await screen.findByRole("option", { name: "Search everything for “drama 90s”" })
+    );
+
+    const understood = await screen.findByRole("group", { name: "Understood as" });
+    expect(understood).toHaveTextContent("GenreDrama");
+    expect(understood).toHaveTextContent("Decade1990s");
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith(
+        "list_movies",
+        expect.objectContaining({
+          filters: expect.objectContaining({ genre: "Drama", yearFrom: 1990, yearTo: 1999 }),
+        })
+      )
+    );
+    expect(screen.getByText("Meaning-based search is off")).toBeInTheDocument();
+
+    // Undo the decade: "90s" is searched as words, in films and dialogue.
+    await userEvent.click(screen.getByRole("button", { name: "Search “1990s” as words instead" }));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith(
+        "search_moments",
+        expect.objectContaining({ query: "90s" })
+      )
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Play Review Movie · 1:02:03: “Don't let yourself get attached”",
+      })
+    ).toBeInTheDocument();
   });
 });

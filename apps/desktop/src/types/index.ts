@@ -574,3 +574,25 @@ export interface EpisodeView {
   durationSec: number | null;
   completed: boolean;
 }
+
+/** A spoken line found across the library (`search_moments`). */
+export interface MomentHit {
+  segmentId: number;
+  startSec: number;
+  endSec: number;
+  text: string;
+  /** `source` (spoken) or `translation`. */
+  kind: string;
+  /** What plays: `vod` or `episode`. */
+  mediaKind: "vod" | "episode";
+  mediaId: number;
+  /** The film's title, or the series' for an episode. */
+  title: string;
+  season: number | null;
+  episode: number | null;
+  episodeTitle: string | null;
+  /** Whether `season`/`episode` are real. */
+  numbered: boolean;
+  posterUrl: string | null;
+  entityId: string | null;
+}

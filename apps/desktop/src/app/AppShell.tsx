@@ -17,6 +17,7 @@ import { MoviesSection } from "@/sections/movies/MoviesSection";
 import { SeriesSection } from "@/sections/series/SeriesSection";
 import { LiveSection } from "@/sections/live/LiveSection";
 import { SeriesPage } from "@/pages/SeriesPage";
+import { SearchPage } from "@/pages/SearchPage";
 import { TitlePage } from "@/pages/TitlePage";
 import { SECTIONS, SECTION_LABELS, type Entry, type SectionId } from "./navigation/nav";
 import { NavProvider } from "./navigation/NavProvider";
@@ -114,6 +115,8 @@ function screenLabel(section: SectionId, entry: Entry): string {
       return entry.route.item.title;
     case "series":
       return entry.route.series.displayTitle;
+    case "search":
+      return "Search";
   }
 }
 
@@ -140,6 +143,8 @@ function ScreenContent({ section, entry }: { section: SectionId; entry: Entry })
       return <TitlePage item={route.item} />;
     case "series":
       return <SeriesPage series={route.series} />;
+    case "search":
+      return <SearchPage initialQuery={route.query} />;
     case "root":
       switch (section) {
         case "home":
@@ -201,6 +206,10 @@ function Palette() {
       onAddPlaylist={shell.openAddSource}
       onSwitchProfile={session.switchProfile}
       onRefresh={() => void session.refresh()}
+      onSearchAll={(query) => {
+        shell.setPaletteOpen(false);
+        nav.push({ kind: "search", query });
+      }}
     />
   );
 }

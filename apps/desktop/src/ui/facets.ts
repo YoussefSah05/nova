@@ -13,7 +13,9 @@ export type FacetKind =
   | "genre"
   | "decade"
   | "collection"
-  | "status";
+  | "status"
+  | "year"
+  | "type";
 
 export interface Facet {
   kind: FacetKind;
@@ -33,6 +35,8 @@ export const FACET_LABELS: Record<FacetKind, string> = {
   decade: "Decade",
   collection: "Collection",
   status: "Status",
+  year: "Year",
+  type: "Type",
 };
 
 export type FacetValues = Partial<Record<FacetKind, string>>;

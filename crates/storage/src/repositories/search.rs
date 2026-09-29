@@ -25,9 +25,123 @@ pub struct SearchHit {
     pub score: f64,
 }
 
+/// A spoken line found across the library: where it was said (a film or an
+/// episode of the playlist) and when, so a click plays from that line.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MomentHit {
+    pub segment_id: i64,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub text: String,
+    /// `source` (spoken) or `translation`.
+    pub kind: String,
+    /// `vod` or `episode`: what plays.
+    pub media_kind: String,
+    pub media_id: i64,
+    /// The film's title, or the series' title for an episode.
+    pub title: String,
+    pub season: Option<i64>,
+    pub episode: Option<i64>,
+    pub episode_title: Option<String>,
+    /// Whether `season`/`episode` are real (`season_episode` numbering).
+    pub numbered: bool,
+    pub poster_url: Option<String>,
+    /// The canonical movie or series entity, when bound.
+    pub entity_id: Option<String>,
+}
+
+/// Most FTS matches weighed before scoping to the playlist.
+const MOMENT_CANDIDATES: i64 = 400;
+
 impl<'a> SearchRepository<'a> {
     pub fn new(pool: &'a SqlitePool) -> Self {
         Self { pool }
+    }
+
+    /// Dialogue search across every transcript of the playlist's films and
+    /// episodes (live transcripts have no replayable timeline), best match
+    /// first, one row per spoken line. `match_expr` comes from
+    /// `nova_search::fts_match`.
+    pub async fn search_moments(
+        &self,
+        source_id: i64,
+        match_expr: &str,
+        limit: i64,
+    ) -> Result<Vec<MomentHit>, StorageError> {
+        let rows = sqlx::query!(
+            r#"WITH hits AS (
+                 SELECT CAST(f.segment_id AS INTEGER) AS segment_id, f.text AS text,
+                        f.kind AS kind, bm25(transcript_fts) AS score
+                 FROM transcript_fts f
+                 WHERE f.text MATCH ?2
+                 ORDER BY bm25(transcript_fts)
+                 LIMIT ?4
+               ),
+               best AS (
+                 SELECT segment_id, text, kind, score,
+                        ROW_NUMBER() OVER (PARTITION BY segment_id ORDER BY score) AS rn
+                 FROM hits
+               )
+               SELECT b.segment_id as "segment_id!: i64",
+                      ts.start_sec as "start_sec!: f64", ts.end_sec as "end_sec!: f64",
+                      b.text as "text!: String", b.kind as "kind!: String",
+                      t.media_kind as "media_kind!: String", t.media_id as "media_id!: i64",
+                      CASE WHEN t.media_kind = 'vod'
+                           THEN COALESCE(v.canonical_title, v.clean_title, v.name)
+                           ELSE COALESCE(sm.canonical_title, se.series_title) END
+                          as "title!: String",
+                      CASE WHEN t.media_kind = 'episode' THEN se.season END as "season?: i64",
+                      CASE WHEN t.media_kind = 'episode' THEN se.episode END as "episode?: i64",
+                      se.episode_title as "episode_title?: String",
+                      COALESCE(se.numbering = 'season_episode', 0) as "numbered!: bool",
+                      CASE WHEN t.media_kind = 'vod' THEN COALESCE(v.poster_url, v.logo_url)
+                           ELSE COALESCE(sm.poster_url, se.logo_url) END as "poster_url?: String",
+                      CASE WHEN t.media_kind = 'vod'
+                           THEN (SELECT s.entity_id FROM stream_variants s
+                                 WHERE s.vod_item_id = v.id LIMIT 1)
+                           ELSE (SELECT sb.entity_id FROM series_bindings sb
+                                 WHERE sb.source_id = se.source_id
+                                   AND sb.series_title = se.series_title) END
+                          as "entity_id?: String"
+               FROM best b
+               JOIN transcript_segments ts ON ts.id = b.segment_id
+               JOIN transcripts t ON t.id = ts.transcript_id
+               LEFT JOIN vod_items v ON t.media_kind = 'vod' AND v.id = t.media_id
+               LEFT JOIN series_episodes se ON t.media_kind = 'episode' AND se.id = t.media_id
+               LEFT JOIN series_meta sm
+                      ON sm.source_id = se.source_id AND sm.series_title = se.series_title
+               WHERE b.rn = 1
+                 AND ((v.id IS NOT NULL AND v.source_id = ?1)
+                      OR (se.id IS NOT NULL AND se.source_id = ?1))
+               ORDER BY b.score, b.segment_id
+               LIMIT ?3"#,
+            source_id,
+            match_expr,
+            limit,
+            MOMENT_CANDIDATES,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| MomentHit {
+                segment_id: r.segment_id,
+                start_sec: r.start_sec,
+                end_sec: r.end_sec,
+                text: r.text,
+                kind: r.kind,
+                media_kind: r.media_kind,
+                media_id: r.media_id,
+                title: r.title,
+                season: r.season,
+                episode: r.episode,
+                episode_title: r.episode_title,
+                numbered: r.numbered,
+                poster_url: r.poster_url,
+                entity_id: r.entity_id,
+            })
+            .collect())
     }
 
     /// Full-text search within one transcript. `match_expr` must come from
@@ -191,5 +305,89 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn moments_are_found_across_the_playlists_films_and_episodes() {
+        let (_dir, pool) = temp_pool().await;
+        let sources = crate::SourceRepository::new(&pool);
+        let a = sources.create("m3u", "a", "http://a").await.unwrap().id;
+        let b = sources.create("m3u", "b", "http://b").await.unwrap().id;
+        let insert = |sql: &'static str, source: i64| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(sql)
+                    .bind(source)
+                    .execute(&pool)
+                    .await
+                    .unwrap()
+                    .last_insert_rowid()
+            }
+        };
+        let film = insert(
+            "INSERT INTO vod_items (source_id, name, canonical_title, stream_url)
+             VALUES (?, 'HEAT 1995', 'Heat', 'http://a/1.mkv')",
+            a,
+        )
+        .await;
+        let other_film = insert(
+            "INSERT INTO vod_items (source_id, name, stream_url) VALUES (?, 'Other', 'http://b/1.mkv')",
+            b,
+        )
+        .await;
+        let episode = insert(
+            "INSERT INTO series_episodes (source_id, series_title, season, episode, stream_url)
+             VALUES (?, 'Dark', 1, 2, 'http://a/e.mkv')",
+            a,
+        )
+        .await;
+        let tr = TranscriptRepository::new(&pool);
+        let line = |text: &str| TranscriptSegment {
+            seq: 0,
+            start_sec: 42.0,
+            end_sec: 45.0,
+            text: text.into(),
+            words: None,
+        };
+        for (kind, id, text) in [
+            ("vod", film, "Don't let yourself get attached to anything"),
+            ("vod", other_film, "attached to another playlist"),
+            ("episode", episode, "Everything is attached"),
+            ("live", 1, "a live line, attached"),
+        ] {
+            let t = tr
+                .get_or_create_transcript(
+                    &format!("{kind}{id}"),
+                    kind,
+                    id,
+                    0,
+                    "en",
+                    "m",
+                    "/a.vtt",
+                    "/a.json",
+                )
+                .await
+                .unwrap();
+            tr.append_segments(t, &[line(text)]).await.unwrap();
+        }
+
+        let hits = SearchRepository::new(&pool)
+            .search_moments(a, &nova_search::fts_match("attached"), 20)
+            .await
+            .unwrap();
+        let mut found: Vec<(String, String, Option<i64>, bool)> = hits
+            .iter()
+            .map(|h| (h.media_kind.clone(), h.title.clone(), h.episode, h.numbered))
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                ("episode".to_string(), "Dark".to_string(), Some(2), true),
+                ("vod".to_string(), "Heat".to_string(), None, false),
+            ],
+            "the playlist's films and episodes, never another playlist or live"
+        );
+        assert!(hits.iter().all(|h| h.start_sec == 42.0));
     }
 }

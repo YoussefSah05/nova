@@ -299,6 +299,32 @@ pub async fn search_transcript(
     Ok(out)
 }
 
+/// Most moments one search returns.
+const MOMENTS_LIMIT: i64 = 50;
+
+/// Dialogue search across the playlist's transcribed films and episodes:
+/// where a line was said, to play from it. Lexical (FTS5, spoken and cached
+/// translated text); the per-title search stays hybrid.
+#[tauri::command]
+pub async fn search_moments(
+    profile_id: String,
+    source_id: i64,
+    query: String,
+    limit: Option<i64>,
+    state: State<'_, AppState>,
+) -> Result<Vec<nova_storage::MomentHit>, ApiError> {
+    let match_expr = nova_search::fts_match(&query);
+    if match_expr.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let limit = limit.unwrap_or(MOMENTS_LIMIT).clamp(1, MOMENTS_LIMIT);
+    SearchRepository::new(&pool)
+        .search_moments(source_id, &match_expr, limit)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
 /// Transcript segments nearest to `query`, best first; embeds any segments
 /// not yet embedded. Empty when the model isn't installed.
 async fn semantic_segment_ids(
