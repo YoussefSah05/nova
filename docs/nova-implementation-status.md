@@ -633,13 +633,49 @@ Library and Settings get their own designs in UI-2..UI-7.
   device** (`just dev`): scroll smoothness, the glass bar, View Transitions, the WebKit behaviour of
   hidden screens (scroll kept under `content-visibility: hidden`).
 
+### Frontend redesign, UI-2: Movies "Cinémathèque" and the film page — 2026-09-29
+
+Branch `feat/ui-movies`.
+
+- **Backend (movies DTOs):** summaries carry card facts flattened in (genres, runtime, rating with
+  its source — TMDB over the provider, zero treated as unrated — quality/audio badges from stored
+  hints, version count in the playlist). `ContentSort` gains title, year and rating; filters gain
+  genre, a year range and a TMDB collection. New commands `list_movie_genres`,
+  `list_movie_decades`, `list_library_collections` (≥ 2 films owned). The detail gains original
+  title, release date, votes and keywords; each variant carries badges, "failed recently" and
+  whether it is Nova's pick (the same ranking playback uses, with the profile's audio language).
+  The film list sorts and cuts a materialized page before computing per-film source hints.
+  Migration 0042 indexes genre and year per playlist.
+- **Movies section** (`src/sections/movies/`): a letterboxed spotlight (watchlist first), a
+  collections shelf (fanned poster stacks), decade tiles, a genre cloud sized by share, "Just
+  arrived", then every film on the windowed wall. Choosing a collection, decade or genre (or
+  searching) narrows the wall with chips from the facet model; sort by recent, A–Z, year, rating.
+  Plain search shows one relevance-ranked set, without a list count or sort.
+- **Film page** (`src/pages/MoviePage.tsx`): full-bleed backdrop and logo, meta with rating source
+  and votes, audio language choice (re-ranks Nova's pick once saved), a Versions panel that
+  explains each source's place from its evidence, cast and facts, keywords, the collection strip
+  and more like this. Choosing a source plays exactly it; a source that is gone returns NotFound
+  and the page refreshes. Translate is a disabled "Soon" placeholder.
+- **Tests:** storage (card facts from provider facts written by the real serializer, filters and
+  sorts, facet counts, the page's badges and pick); version ordering and reasons (MULTI, all
+  failed); immediate settings save; shell test narrowing by decade and playing a chosen source.
+- **Independent review:** no Critical. **High, confirmed and fixed:** runtime and release date read
+  snake_case keys that import never writes (fixtures had hand-written JSON). **Medium, fixed:** the
+  audio change refetched before the debounced save; per-film hint subqueries ran for every
+  matching film before the sort (≈4× slower at 100k); the decade poster scan; the plain-search
+  count disagreed with the results; zero ratings sorted as scores; misleading version reasons;
+  a stale source silently played another. **Low, fixed:** reasons hidden from assistive tech,
+  an off-scale type size, duplicate keys, the count refetched on sort. Low, recorded: cards count
+  a film's versions in the active playlist while the page lists every playlist's sources.
+- **Validation:** `just lint`, `just typecheck`, `just test` (601 Rust, 0 failed, 5 opt-in ignored; 92
+  frontend), `cargo fmt --check`, `git diff --check`, production build pass. **Not verified on
+  device** (`just dev`): the page on a real library, wall scrolling with facts at 100k.
+
 ### Next dependency
 
-**UI-2: Movies "Cinémathèque" + the movie page.** Needs the Movies DTO additions: genres, runtime,
-rating and quality/language badges on summaries; genre/decade filters and sorts; library
-collections; original title, release date, votes and keywords on the detail; variant quality,
-languages and why it was chosen. Then UI-3 Series, UI-4 Live + guide (the EPG repass), UI-5
-Search, UI-6 Library history, UI-7 Settings/Models. M26 still needs a real profile copy.
+**UI-3: Series "Shows" + the series page.** Needs `SeriesSummary` genres, rating, status and
+progress, and a "returning soon" filter. Then UI-4 Live + guide (the EPG repass), UI-5 Search,
+UI-6 Library history, UI-7 Settings/Models. M26 still needs a real profile copy.
 
 ---
 
