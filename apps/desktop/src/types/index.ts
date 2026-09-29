@@ -102,7 +102,35 @@ export interface SeriesSummary {
   /// Opaque canonical series entity; null only before the catalog compiler
   /// has bound the series.
   entityId: string | null;
+  // Card facts from stored evidence (TMDB facts fetched earlier, provider
+  // facts) and this profile's progress. Absent on older payloads.
+  /** TMDB genres when matched, else Nova's genre. */
+  genres?: string[];
+  /** Out of 10. */
+  rating?: number | null;
+  ratingSource?: "tmdb" | "provider" | null;
+  /** TMDB's production status, verbatim ("Returning Series", "Ended", …). */
+  status?: string | null;
+  firstYear?: number | null;
+  lastYear?: number | null;
+  /** The next episode TMDB has scheduled. */
+  nextEpisode?: NextEpisode | null;
+  /** Numbered episodes the profile has finished. */
+  watchedCount?: number;
+  /** Unix seconds. */
+  lastWatchedAt?: number | null;
 }
+
+export interface NextEpisode {
+  season: number;
+  episode: number;
+  name: string | null;
+  /** `YYYY-MM-DD`. */
+  airDate: string;
+}
+
+/** Series status filter: still airing, or ended/cancelled. */
+export type SeriesStatus = "airing" | "ended";
 
 export interface SeriesEpisode {
   id: number;

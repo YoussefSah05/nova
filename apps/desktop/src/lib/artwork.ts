@@ -70,3 +70,15 @@ export function useArtworkSrc(src: string | null | undefined): [string | null, (
   };
   return [direct ? src : cached, onError];
 }
+
+const TMDB_IMAGE = /^(https:\/\/image\.tmdb\.org\/t\/p\/)(w\d+|original)(\/.+)$/;
+
+/// A TMDB image at the size a slot needs (`w780` for landscape cards);
+/// other URLs are returned unchanged. Never upsizes.
+export function tmdbSized(url: string | null | undefined, size: `w${number}`): string | null {
+  if (!url) return null;
+  const m = TMDB_IMAGE.exec(url);
+  if (!m) return url;
+  const current = m[2] === "original" ? Infinity : Number(m[2].slice(1));
+  return Number(size.slice(1)) < current ? `${m[1]}${size}${m[3]}` : url;
+}

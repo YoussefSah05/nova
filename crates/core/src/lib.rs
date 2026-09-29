@@ -427,6 +427,44 @@ pub struct SeriesSummary {
     /// catalog compiler hasn't bound yet.
     #[serde(default)]
     pub entity_id: Option<String>,
+    /// Card facts and this profile's progress, from stored evidence.
+    #[serde(flatten, default)]
+    pub facts: SeriesFacts,
+}
+
+/// Card facts of a series, derived from stored evidence (the provider's
+/// facts, the TMDB match and TMDB facts fetched earlier; never the network),
+/// plus the profile's progress through it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SeriesFacts {
+    /// TMDB genres when matched, else Nova's genre.
+    pub genres: Vec<String>,
+    /// Out of 10.
+    pub rating: Option<f32>,
+    /// `tmdb` or `provider`.
+    pub rating_source: Option<String>,
+    /// TMDB's production status, verbatim (`Returning Series`, `Ended`,
+    /// `Canceled`, `In Production`, …).
+    pub status: Option<String>,
+    pub first_year: Option<i32>,
+    pub last_year: Option<i32>,
+    /// The next episode TMDB has scheduled.
+    pub next_episode: Option<NextEpisode>,
+    /// Numbered episodes the profile has finished.
+    pub watched_count: i64,
+    /// When the profile last watched an episode (unix seconds).
+    pub last_watched_at: Option<i64>,
+}
+
+/// A scheduled episode (`airDate` is `YYYY-MM-DD`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NextEpisode {
+    pub season: i64,
+    pub episode: i64,
+    pub name: Option<String>,
+    pub air_date: String,
 }
 
 impl SeriesSummary {

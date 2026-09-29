@@ -74,6 +74,10 @@ export function PlaybackProvider({ children }: { children: ReactNode }) {
     setMedia(null);
     void qc.invalidateQueries({ queryKey: browseKeys.continueWatching(profile.id) });
     invalidateDetailProgress(qc, profile.id);
+    // Shows' watched counts (Continue cards, series pages).
+    void qc.invalidateQueries({
+      predicate: (q) => q.queryKey[1] === profile.id && q.queryKey[3] === "seriesCards",
+    });
   }, [qc, profile.id]);
 
   const value = useMemo<Playback>(

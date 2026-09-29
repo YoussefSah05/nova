@@ -27,6 +27,7 @@ pub mod movies;
 pub mod playback;
 pub mod profile_settings;
 pub mod search;
+pub mod series;
 pub mod settings;
 pub mod title_art;
 pub mod title_facts;
@@ -388,6 +389,9 @@ pub struct ContentFilters {
     /// Movies: a TMDB collection.
     #[serde(default)]
     collection_id: Option<i64>,
+    /// Series: still airing, or ended.
+    #[serde(default)]
+    status: Option<series::SeriesStatus>,
 }
 
 #[tauri::command]
@@ -608,22 +612,12 @@ pub async fn list_series(
     state: State<'_, AppState>,
 ) -> Result<Vec<SeriesSummary>, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
-    let filters = filters.unwrap_or_default();
-    let category = normalize_filter(filters.category);
-    let query = normalize_filter(filters.query);
+    let sort = filters.as_ref().map(|f| f.sort).unwrap_or_default();
+    let filters = series::OwnedSeriesFilters::from(filters.unwrap_or_default());
     let limit = limit.unwrap_or(i64::MAX);
     let offset = offset.unwrap_or(0);
     SeriesRepository::new(&pool)
-        .list_series(
-            source_id,
-            category.as_deref(),
-            query.as_deref(),
-            filters.favorites_only,
-            filters.watchlist_only,
-            filters.sort,
-            limit,
-            offset,
-        )
+        .browse_series(source_id, &filters.borrow(), sort, limit, offset)
         .await
         .map_err(Into::into)
 }
@@ -636,17 +630,9 @@ pub async fn count_series(
     state: State<'_, AppState>,
 ) -> Result<i64, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
-    let filters = filters.unwrap_or_default();
-    let category = normalize_filter(filters.category);
-    let query = normalize_filter(filters.query);
+    let filters = series::OwnedSeriesFilters::from(filters.unwrap_or_default());
     SeriesRepository::new(&pool)
-        .count_series(
-            source_id,
-            category.as_deref(),
-            query.as_deref(),
-            filters.favorites_only,
-            filters.watchlist_only,
-        )
+        .count_browse_series(source_id, &filters.borrow())
         .await
         .map_err(Into::into)
 }

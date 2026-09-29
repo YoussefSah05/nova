@@ -2,7 +2,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CanonicalMediaSummary, Channel, ChannelGroup, Profile, Source } from "@/types";
+import type {
+  CanonicalMediaSummary,
+  Channel,
+  ChannelGroup,
+  ContinueWatchingItem,
+  Profile,
+  SeriesSummary,
+  Source,
+} from "@/types";
 import { AppShell } from "./AppShell";
 
 // The browse grid is windowed (@tanstack/react-virtual), rails lazy-mount via
@@ -77,6 +85,56 @@ type InvokeArgs = Record<string, unknown> | undefined;
 
 /// Set by a test to make the next favourite toggles fail in Rust.
 let favoriteFails = false;
+/// Set by a test: a show in progress with a new episode airing today.
+let showsFixture = false;
+
+function today(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+const breakingBad: SeriesSummary = {
+  seriesTitle: "BREAKING BAD",
+  sourceId: 1,
+  category: "Drama",
+  episodeCount: 10,
+  seasonCount: 2,
+  posterUrl: null,
+  isFavorite: false,
+  isInWatchlist: false,
+  addedAt: 1,
+  canonicalTitle: "Breaking Bad",
+  backdropUrl: null,
+  overview: null,
+  displayTitle: "Breaking Bad",
+  entityId: "ser-1",
+  genres: ["Drama", "Crime"],
+  status: "Returning Series",
+  firstYear: 2008,
+  nextEpisode: { season: 3, episode: 1, name: null, airDate: today() },
+  watchedCount: 3,
+  lastWatchedAt: 1,
+};
+
+const bbInProgress: ContinueWatchingItem = {
+  mediaKind: "episode",
+  mediaId: 41,
+  sourceId: 1,
+  title: "Breaking Bad",
+  subtitle: null,
+  posterUrl: null,
+  positionSec: 0,
+  durationSec: null,
+  watchedAt: 1,
+  entityId: "ser-1",
+  seriesTitle: "BREAKING BAD",
+  season: 2,
+  episode: 1,
+  numbering: "seasonEpisode",
+  episodeTitle: null,
+  upNext: true,
+};
 
 const profile: Profile = {
   id: "profile-1",
@@ -180,7 +238,17 @@ function setupInvoke(
       case "list_series_categories":
         return Promise.resolve(["Series"]);
       case "list_continue_watching":
+        return Promise.resolve(showsFixture && args?.section === "series" ? [bbInProgress] : []);
+      case "list_series_genres":
+        return Promise.resolve([{ name: "Drama", count: 1 }]);
+      case "list_series_schedule":
+      case "list_series_cards":
+        return Promise.resolve(showsFixture ? [breakingBad] : []);
+      case "list_series_episodes":
+      case "get_season_episodes":
         return Promise.resolve([]);
+      case "get_series_resume":
+        return Promise.resolve(null);
       case "list_channel_groups":
         return Promise.resolve(channelsFor(args).map(groupFrom));
       case "semantic_search_channels":
@@ -236,8 +304,9 @@ function setupInvoke(
         return favoriteFails ? Promise.reject(new Error("database is locked")) : Promise.resolve();
       case "set_movie_in_watchlist":
         return Promise.resolve();
-      case "list_channels":
       case "list_series":
+        return Promise.resolve(showsFixture ? [breakingBad] : []);
+      case "list_channels":
         return Promise.resolve([]);
       default:
         throw new Error(`Unexpected command: ${command}`);
@@ -288,6 +357,7 @@ describe("AppShell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     favoriteFails = false;
+    showsFixture = false;
     mocks.listen.mockResolvedValue(() => {});
   });
 
@@ -451,5 +521,29 @@ describe("AppShell", () => {
         variantId: "var-4k",
       })
     );
+  });
+
+  it("leads Shows with the shows in progress and the week's new episodes", async () => {
+    showsFixture = true;
+    setupInvoke(() => []);
+    renderShell();
+    await userEvent.click(await screen.findByRole("button", { name: "Series" }));
+
+    expect(await screen.findByRole("heading", { name: "Continue your shows" })).toBeInTheDocument();
+    const cont = await screen.findByRole("button", {
+      name: "Breaking Bad, S2 · E1 next, 3 of 10 watched",
+    });
+    expect(screen.getByRole("heading", { name: "This week" })).toBeInTheDocument();
+    expect(screen.getByRole("listitem", { name: /^Today/ })).toHaveTextContent("S3 · E1");
+    expect(await screen.findByText(/1 with a new episode this week/)).toBeInTheDocument();
+    // The wall's card names its status from TMDB.
+    expect(
+      await screen.findByRole("button", { name: /^Breaking Bad, Returning, 2 seasons · 2008–/ })
+    ).toBeInTheDocument();
+
+    await userEvent.click(cont);
+    // The show's page (the section stays mounted, hidden, underneath).
+    await waitFor(() => expect(screen.getAllByText("3 of 10 watched")).toHaveLength(2));
+    expect(screen.getByRole("heading", { level: 1, name: "Breaking Bad" })).toBeInTheDocument();
   });
 });

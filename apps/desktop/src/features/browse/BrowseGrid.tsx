@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualRows } from "./VirtualRows";
 import { PosterCard, type PosterCardHandlers } from "./PosterCard";
+import { ShowCard } from "./ShowCard";
 import {
   GRID_PAGE_SIZE,
   useBrowseCount,
@@ -25,6 +26,8 @@ interface BrowseGridProps extends PosterCardHandlers {
   sourceId: number;
   filters: BrowseFilters;
   scrollRef: RefObject<HTMLElement | null>;
+  /// `landscape`: wide show cards (series), fewer per row.
+  layout?: "poster" | "landscape";
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -71,8 +74,9 @@ export function BrowseGrid(props: BrowseGridProps) {
   );
 }
 
-/// Room each card needs: its width plus the 12px gap.
+/// Room each card needs: its width plus the gap.
 const GAP = 12;
+const LANDSCAPE_GAP = 20;
 
 function BrowseGridBody({
   width,
@@ -81,6 +85,7 @@ function BrowseGridBody({
   sourceId,
   filters,
   scrollRef,
+  layout = "poster",
   ...handlers
 }: BrowseGridProps & { width: number }) {
   const identity = JSON.stringify([tab, profileId, sourceId, filters]);
@@ -100,8 +105,12 @@ function BrowseGridBody({
     scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
   }
   const live = tab === "live";
-  const cardMin = live ? 200 : 168;
-  const columns = Math.max(1, Math.floor((width + GAP) / cardMin));
+  const landscape = layout === "landscape";
+  const gap = landscape ? LANDSCAPE_GAP : GAP;
+  // Room per card, gap included.
+  const cardRoom = landscape ? 300 + LANDSCAPE_GAP : live ? 200 : 168;
+  const columns = Math.max(1, Math.floor((width + gap) / cardRoom));
+  const Card_ = landscape ? ShowCard : PosterCard;
   const rows = useMemo(() => chunk(items, columns), [items, columns]);
 
   if (isError) {
@@ -119,11 +128,11 @@ function BrowseGridBody({
   if (isLoading) {
     return (
       <div
-        className="grid gap-3"
-        style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+        className="grid"
+        style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gap }}
       >
         {Array.from({ length: columns * 4 }, (_, i) => (
-          <Skeleton key={i} className={live ? "aspect-video" : "aspect-[2/3]"} />
+          <Skeleton key={i} className={live || landscape ? "aspect-video" : "aspect-[2/3]"} />
         ))}
       </div>
     );
@@ -173,17 +182,21 @@ function BrowseGridBody({
       <VirtualRows
         items={rows}
         scrollRef={scrollRef}
-        estimateSize={live ? 150 : 280}
+        estimateSize={landscape ? Math.round(width / columns / (16 / 9)) + 50 : live ? 150 : 280}
         overscan={6}
         className="rounded-none border-0 bg-transparent"
         keyFor={(_, index) => index}
         renderRow={(row) => (
           <div
-            className="grid gap-3 pb-3"
-            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+            className="grid"
+            style={{
+              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+              gap,
+              paddingBottom: gap,
+            }}
           >
             {row.map((item) => (
-              <PosterCard key={item.key} item={item} {...handlers} />
+              <Card_ key={item.key} item={item} {...handlers} />
             ))}
           </div>
         )}

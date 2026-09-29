@@ -19,6 +19,10 @@ pub struct SeriesFlagSnapshot {
     pub stream_urls: Vec<String>,
 }
 
+mod browse;
+
+pub use browse::{SeriesFilters, SeriesStatusFilter};
+
 pub struct SeriesRepository<'a> {
     pool: &'a SqlitePool,
 }
@@ -372,7 +376,7 @@ impl<'a> SeriesRepository<'a> {
         Ok(())
     }
 
-    /// Returns one summary per unique series title.
+    /// Returns one summary per unique series title, with its card facts.
     ///
     /// `is_favorite` / `is_in_watchlist` are true when *any* episode of the title is
     /// marked — the toggles below always update all episodes at once, so this is consistent.
@@ -388,150 +392,15 @@ impl<'a> SeriesRepository<'a> {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<SeriesSummary>, StorageError> {
-        let search = like_query(query);
-        let search = search.as_deref();
-        let fav_flag: i64 = if favorites_only { 1 } else { 0 };
-        let wl_flag: i64 = if watchlist_only { 1 } else { 0 };
-        let rows = match sort {
-            ContentSort::RecentlyAdded => sqlx::query!(
-                r#"SELECT se.series_title as "series_title!: String",
-                        MIN(se.category) as "category?: String",
-                        SUM(CASE WHEN se.season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
-                        COUNT(DISTINCT CASE WHEN se.season > 0 THEN se.season END) as "season_count!: i64",
-                        COALESCE(MAX(sm.poster_url), MIN(se.logo_url)) as "poster_url?: String",
-                        MAX(se.is_favorite) as "is_favorite!: i64",
-                        MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
-                        MAX(se.added_at) as "added_at?: i64",
-                        MAX(sm.canonical_title) as "canonical_title?: String",
-                        (SELECT b.entity_id FROM series_bindings b
-                         WHERE b.source_id = se.source_id AND b.series_title = se.series_title)
-                            as "entity_id?: String",
-                        COALESCE(MAX(sm.backdrop_url),
-                                 (SELECT json_extract(f.facts, '$.backdropUrl') FROM series_provider_facts f
-                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
-                            as "backdrop_url?: String",
-                        COALESCE(MAX(sm.overview),
-                                 (SELECT json_extract(f.facts, '$.plot') FROM series_provider_facts f
-                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
-                            as "overview?: String"
-                 FROM series_episodes se
-                 LEFT JOIN series_meta sm
-                   ON sm.source_id = se.source_id AND sm.series_title = se.series_title
-                 WHERE se.source_id = ?
-                   AND (? IS NULL OR se.category = ?)
-                   AND (? IS NULL OR se.series_title LIKE ? OR sm.canonical_title LIKE ?
-                        OR sm.original_title LIKE ?)
-                 GROUP BY se.series_title
-                 HAVING (? = 0 OR MAX(se.is_favorite) = 1)
-                    AND (? = 0 OR MAX(se.is_in_watchlist) = 1)
-                 ORDER BY MAX(se.added_at) DESC, se.series_title ASC
-                 LIMIT ? OFFSET ?"#,
-                source_id,
-                category,
-                category,
-                search,
-                search,
-                search,
-                search,
-                fav_flag,
-                wl_flag,
-                limit,
-                offset,
-            )
-            .fetch_all(self.pool)
-            .await?
-            .into_iter()
-            .map(|r| {
-                SeriesSummary {
-                    series_title: r.series_title,
-                    source_id,
-                    category: r.category,
-                    episode_count: r.episode_count,
-                    season_count: r.season_count,
-                    poster_url: r.poster_url,
-                    is_favorite: r.is_favorite != 0,
-                    is_in_watchlist: r.is_in_watchlist != 0,
-                    added_at: r.added_at,
-                    canonical_title: r.canonical_title,
-                    backdrop_url: r.backdrop_url,
-                    overview: r.overview,
-                    display_title: String::new(),
-                    entity_id: r.entity_id,
-                }
-                .with_display_title()
-            })
-            .collect(),
-            // Title/year/rating orders are movie-only: natural order here.
-            ContentSort::Default | ContentSort::Title | ContentSort::Year | ContentSort::Rating => sqlx::query!(
-                r#"SELECT se.series_title as "series_title!: String",
-                        MIN(se.category) as "category?: String",
-                        SUM(CASE WHEN se.season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
-                        COUNT(DISTINCT CASE WHEN se.season > 0 THEN se.season END) as "season_count!: i64",
-                        COALESCE(MAX(sm.poster_url), MIN(se.logo_url)) as "poster_url?: String",
-                        MAX(se.is_favorite) as "is_favorite!: i64",
-                        MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
-                        MAX(se.added_at) as "added_at?: i64",
-                        MAX(sm.canonical_title) as "canonical_title?: String",
-                        (SELECT b.entity_id FROM series_bindings b
-                         WHERE b.source_id = se.source_id AND b.series_title = se.series_title)
-                            as "entity_id?: String",
-                        COALESCE(MAX(sm.backdrop_url),
-                                 (SELECT json_extract(f.facts, '$.backdropUrl') FROM series_provider_facts f
-                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
-                            as "backdrop_url?: String",
-                        COALESCE(MAX(sm.overview),
-                                 (SELECT json_extract(f.facts, '$.plot') FROM series_provider_facts f
-                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
-                            as "overview?: String"
-                 FROM series_episodes se
-                 LEFT JOIN series_meta sm
-                   ON sm.source_id = se.source_id AND sm.series_title = se.series_title
-                 WHERE se.source_id = ?
-                   AND (? IS NULL OR se.category = ?)
-                   AND (? IS NULL OR se.series_title LIKE ? OR sm.canonical_title LIKE ?
-                        OR sm.original_title LIKE ?)
-                 GROUP BY se.series_title
-                 HAVING (? = 0 OR MAX(se.is_favorite) = 1)
-                    AND (? = 0 OR MAX(se.is_in_watchlist) = 1)
-                 ORDER BY se.series_title ASC
-                 LIMIT ? OFFSET ?"#,
-                source_id,
-                category,
-                category,
-                search,
-                search,
-                search,
-                search,
-                fav_flag,
-                wl_flag,
-                limit,
-                offset,
-            )
-            .fetch_all(self.pool)
-            .await?
-            .into_iter()
-            .map(|r| {
-                SeriesSummary {
-                    series_title: r.series_title,
-                    source_id,
-                    category: r.category,
-                    episode_count: r.episode_count,
-                    season_count: r.season_count,
-                    poster_url: r.poster_url,
-                    is_favorite: r.is_favorite != 0,
-                    is_in_watchlist: r.is_in_watchlist != 0,
-                    added_at: r.added_at,
-                    canonical_title: r.canonical_title,
-                    backdrop_url: r.backdrop_url,
-                    overview: r.overview,
-                    display_title: String::new(),
-                    entity_id: r.entity_id,
-                }
-                .with_display_title()
-            })
-            .collect(),
+        let filters = SeriesFilters {
+            category,
+            query,
+            favorites_only,
+            watchlist_only,
+            ..Default::default()
         };
-        Ok(rows)
+        self.browse_series(source_id, &filters, sort, limit, offset)
+            .await
     }
 
     pub async fn list_episodes(
@@ -602,39 +471,14 @@ impl<'a> SeriesRepository<'a> {
         favorites_only: bool,
         watchlist_only: bool,
     ) -> Result<i64, StorageError> {
-        let search = like_query(query);
-        let search = search.as_deref();
-        let fav_flag: i64 = if favorites_only { 1 } else { 0 };
-        let wl_flag: i64 = if watchlist_only { 1 } else { 0 };
-        // Count distinct titles that match. Wrap the grouped result so HAVING applies.
-        let row = sqlx::query!(
-            r#"SELECT COUNT(*) as "n!: i64" FROM (
-                SELECT series_title
-                FROM series_episodes
-                WHERE source_id = ?
-                  AND (? IS NULL OR category = ?)
-                  AND (? IS NULL OR series_title LIKE ? OR EXISTS (
-                      SELECT 1 FROM series_meta sm
-                      WHERE sm.source_id = series_episodes.source_id
-                        AND sm.series_title = series_episodes.series_title
-                        AND (sm.canonical_title LIKE ? OR sm.original_title LIKE ?)))
-                GROUP BY series_title
-                HAVING (? = 0 OR MAX(is_favorite) = 1)
-                   AND (? = 0 OR MAX(is_in_watchlist) = 1)
-              )"#,
-            source_id,
+        let filters = SeriesFilters {
             category,
-            category,
-            search,
-            search,
-            search,
-            search,
-            fav_flag,
-            wl_flag,
-        )
-        .fetch_one(self.pool)
-        .await?;
-        Ok(row.n)
+            query,
+            favorites_only,
+            watchlist_only,
+            ..Default::default()
+        };
+        self.count_browse_series(source_id, &filters).await
     }
 
     /// Toggle favourite for a series. The canonical series entity owns the
@@ -967,71 +811,13 @@ impl<'a> SeriesRepository<'a> {
             .collect())
     }
 
-    /// Hydrate series summaries by title (any order) — for semantic hits. Titles
-    /// passed as a JSON array so one static query handles a variable-length set.
+    /// Hydrate series summaries by title (any order) — for semantic hits.
     pub async fn list_by_titles(
         &self,
         source_id: i64,
         titles: &[String],
     ) -> Result<Vec<SeriesSummary>, StorageError> {
-        if titles.is_empty() {
-            return Ok(Vec::new());
-        }
-        let titles_json = serde_json::to_string(titles)?;
-        let rows = sqlx::query!(
-            r#"SELECT se.series_title as "series_title!: String",
-                    MIN(se.category) as "category?: String",
-                    SUM(CASE WHEN se.season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
-                    COUNT(DISTINCT CASE WHEN se.season > 0 THEN se.season END) as "season_count!: i64",
-                    COALESCE(MAX(sm.poster_url), MIN(se.logo_url)) as "poster_url?: String",
-                    MAX(se.is_favorite) as "is_favorite!: i64",
-                    MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
-                    MAX(se.added_at) as "added_at?: i64",
-                    MAX(sm.canonical_title) as "canonical_title?: String",
-                    (SELECT b.entity_id FROM series_bindings b
-                     WHERE b.source_id = se.source_id AND b.series_title = se.series_title)
-                        as "entity_id?: String",
-                    COALESCE(MAX(sm.backdrop_url),
-                                 (SELECT json_extract(f.facts, '$.backdropUrl') FROM series_provider_facts f
-                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
-                            as "backdrop_url?: String",
-                    COALESCE(MAX(sm.overview),
-                                 (SELECT json_extract(f.facts, '$.plot') FROM series_provider_facts f
-                                  WHERE f.source_id = se.source_id AND f.series_title = se.series_title))
-                            as "overview?: String"
-             FROM series_episodes se
-             LEFT JOIN series_meta sm
-               ON sm.source_id = se.source_id AND sm.series_title = se.series_title
-             WHERE se.source_id = ?
-               AND se.series_title IN (SELECT value FROM json_each(?))
-             GROUP BY se.series_title"#,
-            source_id,
-            titles_json,
-        )
-        .fetch_all(self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| {
-                SeriesSummary {
-                    series_title: r.series_title,
-                    source_id,
-                    category: r.category,
-                    episode_count: r.episode_count,
-                    season_count: r.season_count,
-                    poster_url: r.poster_url,
-                    is_favorite: r.is_favorite != 0,
-                    is_in_watchlist: r.is_in_watchlist != 0,
-                    added_at: r.added_at,
-                    canonical_title: r.canonical_title,
-                    backdrop_url: r.backdrop_url,
-                    overview: r.overview,
-                    display_title: String::new(),
-                    entity_id: r.entity_id,
-                }
-                .with_display_title()
-            })
-            .collect())
+        self.cards_by_titles(source_id, titles).await
     }
 }
 

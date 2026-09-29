@@ -37,6 +37,9 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `list_series` | `{ profileId, sourceId, filters? }` | `SeriesSummary[]` | 3 |
 | `count_series` | `{ profileId, sourceId, filters? }` | `number` | 3 |
 | `list_series_categories` | `{ profileId, sourceId }` | `string[]` | 3 |
+| `list_series_genres` | `{ profileId, sourceId }` | `{ name, count }[]` — Nova's genres of the playlist's series, most common first | UI-3 |
+| `list_series_schedule` | `{ profileId, sourceId, from, to }` | `SeriesSummary[]` — series whose next TMDB-scheduled episode airs between the inclusive local `YYYY-MM-DD` dates, soonest first (at most 60); only series whose facts were fetched are known; `InvalidInput` for other date forms | UI-3 |
+| `list_series_cards` | `{ profileId, sourceId, titles }` | `SeriesSummary[]` — fresh cards for up to 50 series titles, any order | UI-3 |
 | `list_series_episodes` | `{ profileId, seriesId }` | `SeriesEpisode[]` | 3 |
 | `resolve_stream` | `{ profileId, mediaKind: 'live'\|'vod'\|'episode', mediaId, routeOverride?: 'remux_hls'\|'transcode_hls' }` | `ResolvedStream` | 5 |
 | `stop_playback` | `{ token: string }` | `void` | 5 |
@@ -223,6 +226,14 @@ type ContentFilters = {
 Use `limit` and `offset` for Live and VOD pagination. The Home UI currently requests 200 rows
 per page and uses the corresponding `count_*` command to decide whether to show **Load more**.
 `list_series` returns grouped series summaries; use `list_series_episodes` for episode detail.
+Series filters (`list_series`, `count_series`): `category`, `query`, `favoritesOnly`, `watchlistOnly`,
+`genre` (Nova's primary genre) and `status` (`"airing"`: a scheduled episode or a returning /
+in-production TMDB status; `"ended"`: ended or cancelled). `sort`: `recentlyAdded`, `title`,
+`year` (TMDB first air year) or `rating`; anything else keeps the title order.
+Summaries carry card facts from stored evidence and the profile's progress (UI-3): `genres`,
+`rating` + `ratingSource` (`tmdb` | `provider`, zero is unrated), `status` (TMDB's, verbatim),
+`firstYear`, `lastYear`, `nextEpisode { season, episode, name, airDate }`, `watchedCount`
+(finished numbered episodes) and `lastWatchedAt`.
 Series are addressed by `seriesId` — the canonical series entity (`SeriesSummary.entityId`) —
 never by provider title: `list_series_episodes`, `get_season_episodes`, `get_series_resume`,
 `set_series_favorite { profileId, seriesId, isFavorite }`,

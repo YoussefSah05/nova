@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT genre as \"name!: String\", COUNT(*) as \"count!: i64\"\n               FROM (SELECT MAX(genre) AS genre FROM series_episodes\n                     WHERE source_id = ? GROUP BY series_title)\n               WHERE genre IS NOT NULL AND genre <> ''\n               GROUP BY genre\n               ORDER BY COUNT(*) DESC, genre ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "name!: String",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "7deea12300c81a4048dbda19d1759884ad15691713f2ee5fa80ee3b3b32b4b12"
+}

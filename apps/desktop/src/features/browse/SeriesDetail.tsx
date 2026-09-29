@@ -1,19 +1,21 @@
 //! A series' page, on the same frame as a movie's: backdrop and title logo,
 //! a meta line (years · rating · seasons · score), tagline and overview, the
 //! main action (Resume / Next episode / Play S01E01), trailer, watchlist and
-//! favourite, the cast, then a season picker with rich episode rows.
+//! favourite, how far through the show the profile is, the cast, then season
+//! tabs (posters when TMDB has them) with rich episode rows.
 
 import { useEffect, useMemo, useState } from "react";
 import { Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import type { EpisodeView, SeriesSummary } from "@/types";
 import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
 import { useTitleArtFor, type TitleArtSubject } from "./titleArt";
 import { CastStrip } from "./detail/CastStrip";
 import { EpisodeList } from "./detail/EpisodeList";
+import { SeasonTabs } from "./detail/SeasonTabs";
+import { ShowProgress } from "./detail/ShowProgress";
 import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
 import {
@@ -149,6 +151,8 @@ export function SeriesDetail({
         </>
       }
     >
+      <ShowProgress series={series} />
+
       <CastStrip
         cast={facts?.cast ?? []}
         people={facts?.directors ?? []}
@@ -166,25 +170,13 @@ export function SeriesDetail({
         ) : (
           <>
             {seasons.length > 1 && (
-              <div role="tablist" aria-label="Seasons" className="flex flex-wrap gap-2">
-                {seasons.map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    role="tab"
-                    aria-selected={n === season}
-                    onClick={() => setSeason(n)}
-                    className={cn(
-                      "rounded-full px-3 py-1 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      n === season
-                        ? "bg-white text-neutral-950"
-                        : "bg-white/10 text-white/75 hover:bg-white/20"
-                    )}
-                  >
-                    {seasonName(n)}
-                  </button>
-                ))}
-              </div>
+              <SeasonTabs
+                seasons={seasons}
+                selected={season}
+                details={facts?.seasons}
+                nameOf={seasonName}
+                onSelect={setSeason}
+              />
             )}
             {seasons.length === 1 && season !== null && (
               <h2 className="text-sm font-medium text-white/85">{seasonName(season)}</h2>

@@ -14,6 +14,7 @@ import type {
   DecadeCount,
   FacetCount,
   LibraryCollection,
+  SeriesStatus,
   SeriesSummary,
   VodItem,
 } from "@/types";
@@ -65,8 +66,10 @@ export interface BrowseFilters {
   favoritesOnly?: boolean;
   watchlistOnly?: boolean;
   sort?: ContentSort;
-  /** Movies: Nova's primary genre. */
+  /** Movies and series: Nova's primary genre. */
   genre?: string | null;
+  /** Series: still airing, or ended. */
+  status?: SeriesStatus | null;
   /** Movies: release years, inclusive. */
   yearFrom?: number | null;
   yearTo?: number | null;
@@ -196,20 +199,21 @@ const CATEGORIES_COMMAND: Record<BrowseTab, string> = {
 /// Build the per-tab filter payload. Movies/series accept no `country`/`region`.
 function filterPayload(tab: BrowseTab, filters: BrowseFilters): BrowseFilters {
   // Each list only receives the filters it understands.
-  const {
-    genre: _genre,
-    yearFrom: _yearFrom,
-    yearTo: _yearTo,
-    collectionId: _collectionId,
-    ...shared
-  } = filters;
-  if (tab === "movies") {
-    const { country: _country, region: _region, ...movie } = filters;
-    return movie;
-  }
-  if (tab === "live") return shared;
-  const { country: _country, region: _region, ...rest } = shared;
-  return rest;
+  const { country, region, genre, status, yearFrom, yearTo, collectionId, ...shared } = filters;
+  if (tab === "live") return { ...shared, country, region };
+  if (tab === "movies") return { ...shared, genre, yearFrom, yearTo, collectionId };
+  return { ...shared, genre, status };
+}
+
+/// A series filter beyond search is applied (search then stays on the list).
+export function seriesFacetApplied(filters: BrowseFilters): boolean {
+  return Boolean(
+    filters.category ||
+    filters.favoritesOnly ||
+    filters.watchlistOnly ||
+    filters.genre ||
+    filters.status
+  );
 }
 
 /// A movie filter beyond search is applied (search then stays on the list).
@@ -294,7 +298,7 @@ async function fetchItems(
   }
   // Series: plain free-text search → hybrid (semantic + keyword) retrieval.
   const sq = filters.query?.trim();
-  const seriesPlain = !!sq && !filters.category && !filters.favoritesOnly && !filters.watchlistOnly;
+  const seriesPlain = !!sq && !seriesFacetApplied(filters);
   if (seriesPlain) {
     if (offset > 0) return [];
     const hits = await invoke<SeriesSummary[]>("semantic_search_series", {
@@ -564,6 +568,51 @@ export function useLibraryCollections(profileId: string, sourceId: number | null
     subscribed: useScreenActive(),
     queryKey: movieFacetKeys.collections(profileId, sourceId ?? -1),
     queryFn: () => invoke<LibraryCollection[]>("list_library_collections", { profileId, sourceId }),
+    enabled: sourceId !== null,
+  });
+}
+
+export const seriesFacetKeys = {
+  genres: (profileId: string, sourceId: number) =>
+    [...browseKeys.source(profileId, sourceId), "seriesGenres"] as const,
+  schedule: (profileId: string, sourceId: number, from: string, to: string) =>
+    [...browseKeys.source(profileId, sourceId), "seriesSchedule", from, to] as const,
+};
+
+export function useSeriesGenres(profileId: string, sourceId: number | null) {
+  return useQuery({
+    subscribed: useScreenActive(),
+    queryKey: seriesFacetKeys.genres(profileId, sourceId ?? -1),
+    queryFn: () => invoke<FacetCount[]>("list_series_genres", { profileId, sourceId }),
+    enabled: sourceId !== null,
+  });
+}
+
+/// Fresh cards (facts and progress) for series titles of the playlist.
+export function useSeriesCards(profileId: string, sourceId: number | null, titles: string[]) {
+  const sorted = [...titles].sort();
+  return useQuery({
+    subscribed: useScreenActive(),
+    queryKey: [...browseKeys.source(profileId, sourceId ?? -1), "seriesCards", sorted] as const,
+    queryFn: () =>
+      invoke<SeriesSummary[]>("list_series_cards", { profileId, sourceId, titles: sorted }),
+    enabled: sourceId !== null && sorted.length > 0,
+    placeholderData: (previous) => previous,
+  });
+}
+
+/// Series whose next episode airs between the local dates (inclusive).
+export function useSeriesSchedule(
+  profileId: string,
+  sourceId: number | null,
+  from: string,
+  to: string
+) {
+  return useQuery({
+    subscribed: useScreenActive(),
+    queryKey: seriesFacetKeys.schedule(profileId, sourceId ?? -1, from, to),
+    queryFn: () =>
+      invoke<SeriesSummary[]>("list_series_schedule", { profileId, sourceId, from, to }),
     enabled: sourceId !== null,
   });
 }
