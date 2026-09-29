@@ -4,11 +4,24 @@
 
 import type { SeriesSummary } from "@/types";
 
-const AIRING = new Set(["Returning Series", "In Production", "Planned", "Pilot"]);
+const UPCOMING = new Set(["In Production", "Planned", "Pilot"]);
 
-/// A short status for a card, only from TMDB's status or schedule.
-export function statusLabel(s: SeriesSummary): "Returning" | "Ended" | "Cancelled" | null {
-  if (s.nextEpisode || (s.status && AIRING.has(s.status))) return "Returning";
+/// Yesterday's local date: TMDB air dates are in the broadcaster's zone, so
+/// a day of slack before a scheduled episode counts as past.
+function yesterday(now: Date): string {
+  return localDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+}
+
+/// A short status for a card, only from TMDB's status or schedule. A
+/// scheduled episode counts while it hasn't aired; stored facts can be old.
+export function statusLabel(
+  s: SeriesSummary,
+  now: Date = new Date()
+): "Returning" | "In production" | "Ended" | "Cancelled" | null {
+  const scheduled = !!s.nextEpisode && s.nextEpisode.airDate >= yesterday(now);
+  if (s.status === "Returning Series" || (scheduled && !UPCOMING.has(s.status ?? "")))
+    return "Returning";
+  if (s.status && UPCOMING.has(s.status)) return "In production";
   if (s.status === "Ended") return "Ended";
   if (s.status === "Canceled") return "Cancelled";
   return null;

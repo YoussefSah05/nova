@@ -743,6 +743,21 @@ export function patchItemEverywhere(
     { queryKey: browseKeys.source(profileId, sourceId), predicate: gridPredicate },
     (data) => (data ? { ...data, items: data.items.map(mapItem) } : data)
   );
+  // Show cards read as summaries (Continue cards, the week, series pages).
+  qc.setQueriesData<SeriesSummary[]>(
+    { queryKey: browseKeys.source(profileId, sourceId), predicate: seriesSummariesPredicate },
+    (data) =>
+      data
+        ? data.map((s) => {
+            if (seriesKey(s) !== key) return s;
+            if (patch.isFavorite !== undefined && inverse.isFavorite === undefined)
+              inverse.isFavorite = s.isFavorite;
+            if (patch.isInWatchlist !== undefined && inverse.isInWatchlist === undefined)
+              inverse.isInWatchlist = s.isInWatchlist;
+            return { ...s, ...patch };
+          })
+        : data
+  );
 
   return () => {
     if (Object.keys(inverse).length === 0) return;
@@ -755,6 +770,9 @@ function railPredicate(query: { queryKey: readonly unknown[] }): boolean {
 }
 function gridPredicate(query: { queryKey: readonly unknown[] }): boolean {
   return query.queryKey.includes("grid");
+}
+function seriesSummariesPredicate(query: { queryKey: readonly unknown[] }): boolean {
+  return query.queryKey.includes("seriesCards") || query.queryKey.includes("seriesSchedule");
 }
 
 /// After a favourite/watchlist toggle settles, refresh the membership rails for a

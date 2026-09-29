@@ -74,9 +74,12 @@ export function PlaybackProvider({ children }: { children: ReactNode }) {
     setMedia(null);
     void qc.invalidateQueries({ queryKey: browseKeys.continueWatching(profile.id) });
     invalidateDetailProgress(qc, profile.id);
-    // Shows' watched counts (Continue cards, series pages).
+    // Shows' watched counts (Continue cards, series pages, the wall).
     void qc.invalidateQueries({
-      predicate: (q) => q.queryKey[1] === profile.id && q.queryKey[3] === "seriesCards",
+      predicate: (q) =>
+        q.queryKey[1] === profile.id &&
+        (q.queryKey[3] === "seriesCards" ||
+          (q.queryKey[3] === "grid" && q.queryKey[4] === "series")),
     });
   }, [qc, profile.id]);
 

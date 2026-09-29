@@ -2,11 +2,12 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { CanonicalMediaSummary } from "@/types";
+import type { CanonicalMediaSummary, SeriesSummary } from "@/types";
 import {
   browseKeys,
   fetchBrowsePage,
   patchItemEverywhere,
+  seriesToItem,
   useBrowseGrid,
   type BrowsePage,
 } from "./queries";
@@ -95,4 +96,30 @@ it("movies are canonical entities addressed by entity id, not provider rows", as
     ["movie", "movie-mov-2", "mov-2"],
   ]);
   expect(JSON.stringify(page.items)).not.toMatch(/streamUrl|http/);
+});
+it("a toggle patches show cards read as summaries, and rolls back", () => {
+  const client = new QueryClient();
+  const show: SeriesSummary = {
+    seriesTitle: "Dark",
+    sourceId: 1,
+    category: null,
+    episodeCount: 26,
+    seasonCount: 3,
+    posterUrl: null,
+    isFavorite: false,
+    isInWatchlist: false,
+    addedAt: null,
+    canonicalTitle: null,
+    backdropUrl: null,
+    overview: null,
+    displayTitle: "Dark",
+    entityId: "ser-1",
+  };
+  const key = [...browseKeys.source("p", 1), "seriesCards", ["Dark"]];
+  client.setQueryData(key, [show]);
+  const undo = patchItemEverywhere(client, "p", 1, seriesToItem(show).key, { isFavorite: true });
+  expect(client.getQueryData<SeriesSummary[]>(key)?.[0].isFavorite).toBe(true);
+  undo();
+  expect(client.getQueryData<SeriesSummary[]>(key)?.[0].isFavorite).toBe(false);
+  client.clear();
 });

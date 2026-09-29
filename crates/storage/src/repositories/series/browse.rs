@@ -7,7 +7,10 @@
 //!
 //! The query groups the playlist's episodes per title (cheap columns only),
 //! filters and cuts the page, then computes the per-series aggregates and
-//! progress for the page's titles alone.
+//! progress for the page's titles alone. With a category, a card describes
+//! the episodes in that category. Progress is the series entity's episode
+//! state (by durable episode key), so it survives provider URL changes.
+//! Status and TMDB years exist only for series whose facts were fetched.
 
 use nova_core::{ContentSort, NextEpisode, SeriesFacts, SeriesSummary};
 
@@ -118,10 +121,10 @@ impl SeriesRepository<'_> {
                  AND (?5 = 0 OR g.wl = 1)
                  AND (?6 IS NULL OR g.genre = ?6)
                  AND (?7 IS NULL
-                      OR (?7 = 'airing' AND (json_extract(f.facts, '$.nextEpisode') IS NOT NULL
+                      OR (?7 = 'airing' AND (json_extract(f.facts, '$.nextEpisode.airDate') >= date('now', '-1 day')
                           OR json_extract(f.facts, '$.status') IN
                              ('Returning Series', 'In Production', 'Planned', 'Pilot')))
-                      OR (?7 = 'ended' AND json_extract(f.facts, '$.nextEpisode') IS NULL
+                      OR (?7 = 'ended' AND COALESCE(json_extract(f.facts, '$.nextEpisode.airDate') < date('now', '-1 day'), 1)
                           AND json_extract(f.facts, '$.status') IN ('Ended', 'Canceled')))
                  AND (?8 IS NULL
                       OR json_extract(f.facts, '$.nextEpisode.airDate') BETWEEN ?8 AND ?9)"#,
@@ -229,6 +232,9 @@ impl SeriesRepository<'_> {
                         sm.canonical_title AS canonical_title, sm.poster_url AS poster_url,
                         sm.backdrop_url AS backdrop_url, sm.overview AS overview,
                         sm.tmdb_genres AS tmdb_genres, f.facts AS facts, pf.facts AS provider_facts,
+                        COALESCE(json_extract(f.facts, '$.firstYear'),
+                                 CAST(NULLIF(substr(json_extract(pf.facts, '$.releaseDate'), 1, 4), '') AS INTEGER))
+                            AS first_year,
                         COALESCE(NULLIF(json_extract(f.facts, '$.rating'), 0),
                                  NULLIF(json_extract(pf.facts, '$.rating'), 0)) AS rating,
                         CASE WHEN NULLIF(json_extract(f.facts, '$.rating'), 0) IS NOT NULL THEN 'tmdb'
@@ -238,7 +244,8 @@ impl SeriesRepository<'_> {
                           ORDER BY CASE WHEN ?11 = 1 THEN g.added_at END DESC,
                                    CASE WHEN ?11 = 2 THEN COALESCE(sm.canonical_title, g.series_title) END
                                         COLLATE NOCASE ASC,
-                                   CASE WHEN ?11 = 3 THEN json_extract(f.facts, '$.firstYear') END DESC,
+                                   CASE WHEN ?11 = 3 THEN COALESCE(json_extract(f.facts, '$.firstYear'),
+                                        CAST(NULLIF(substr(json_extract(pf.facts, '$.releaseDate'), 1, 4), '') AS INTEGER)) END DESC,
                                    CASE WHEN ?11 = 4 THEN COALESCE(NULLIF(json_extract(f.facts, '$.rating'), 0),
                                                                    NULLIF(json_extract(pf.facts, '$.rating'), 0)) END DESC,
                                    CASE WHEN ?11 = 5 THEN json_extract(f.facts, '$.nextEpisode.airDate') END ASC,
@@ -257,10 +264,10 @@ impl SeriesRepository<'_> {
                    AND (?5 = 0 OR g.wl = 1)
                    AND (?6 IS NULL OR g.genre = ?6)
                    AND (?7 IS NULL
-                        OR (?7 = 'airing' AND (json_extract(f.facts, '$.nextEpisode') IS NOT NULL
+                        OR (?7 = 'airing' AND (json_extract(f.facts, '$.nextEpisode.airDate') >= date('now', '-1 day')
                             OR json_extract(f.facts, '$.status') IN
                                ('Returning Series', 'In Production', 'Planned', 'Pilot')))
-                        OR (?7 = 'ended' AND json_extract(f.facts, '$.nextEpisode') IS NULL
+                        OR (?7 = 'ended' AND COALESCE(json_extract(f.facts, '$.nextEpisode.airDate') < date('now', '-1 day'), 1)
                             AND json_extract(f.facts, '$.status') IN ('Ended', 'Canceled')))
                    AND (?8 IS NULL
                         OR json_extract(f.facts, '$.nextEpisode.airDate') BETWEEN ?8 AND ?9)
@@ -270,16 +277,16 @@ impl SeriesRepository<'_> {
                )
                SELECT p.series_title as "series_title!: String",
                       MIN(se.category) as "category?: String",
-                      SUM(CASE WHEN se.season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",
+                      COUNT(DISTINCT CASE WHEN se.season > 0
+                                          THEN COALESCE(se.episode_key, 'row:' || se.id) END)
+                          as "episode_count!: i64",
                       COUNT(DISTINCT CASE WHEN se.season > 0 THEN se.season END) as "season_count!: i64",
                       COALESCE(p.poster_url, MIN(se.logo_url)) as "poster_url?: String",
                       MAX(se.is_favorite) as "is_favorite!: i64",
                       MAX(se.is_in_watchlist) as "is_in_watchlist!: i64",
                       MAX(se.added_at) as "added_at?: i64",
                       p.canonical_title as "canonical_title?: String",
-                      (SELECT b.entity_id FROM series_bindings b
-                       WHERE b.source_id = ?1 AND b.series_title = p.series_title)
-                          as "entity_id?: String",
+                      MAX(b.entity_id) as "entity_id?: String",
                       COALESCE(p.backdrop_url, json_extract(p.provider_facts, '$.backdropUrl'))
                           as "backdrop_url?: String",
                       COALESCE(p.overview, json_extract(p.provider_facts, '$.plot'))
@@ -289,18 +296,23 @@ impl SeriesRepository<'_> {
                       p.rating as "rating?: f64",
                       p.rating_source as "rating_source?: String",
                       json_extract(p.facts, '$.status') as "status?: String",
-                      json_extract(p.facts, '$.firstYear') as "first_year?: i64",
+                      p.first_year as "first_year?: i64",
                       json_extract(p.facts, '$.lastYear') as "last_year?: i64",
                       json_extract(p.facts, '$.nextEpisode.season') as "next_season?: i64",
                       json_extract(p.facts, '$.nextEpisode.episode') as "next_episode?: i64",
                       json_extract(p.facts, '$.nextEpisode.name') as "next_name?: String",
                       json_extract(p.facts, '$.nextEpisode.airDate') as "next_air_date?: String",
-                      SUM(CASE WHEN se.season > 0 AND w.completed = 1 THEN 1 ELSE 0 END)
-                          as "watched_count!: i64",
+                      COUNT(DISTINCT CASE WHEN se.season > 0 AND w.completed = 1
+                                          THEN se.episode_key END) as "watched_count!: i64",
                       MAX(w.watched_at) as "last_watched_at?: i64"
                FROM page p
-               JOIN series_episodes se ON se.source_id = ?1 AND se.series_title = p.series_title
-               LEFT JOIN watch_history w ON w.media_kind = 'episode' AND w.media_id = se.id
+               JOIN series_episodes se
+                 ON se.source_id = ?1 AND se.series_title = p.series_title
+                AND (?2 IS NULL OR se.category = ?2)
+               LEFT JOIN series_bindings b
+                      ON b.source_id = ?1 AND b.series_title = p.series_title
+               LEFT JOIN episode_watch_state w
+                      ON w.series_entity_id = b.entity_id AND w.episode_key = se.episode_key
                GROUP BY p.series_title
                ORDER BY MIN(p.position)"#,
             source_id,
@@ -382,7 +394,7 @@ mod tests {
             episode: number,
             episode_title: None,
             logo_url: None,
-            stream_url: format!("http://host/series/{title}/{season}/{number}.mkv"),
+            stream_url: format!("http://host/files/{title}/s{season}e{number}.mkv"),
             added_at: None,
             numbering: EpisodeNumberingKind::SeasonEpisode,
             evidence: SourceEvidence::default(),
@@ -459,7 +471,7 @@ mod tests {
                 1396,
                 "en-US",
                 r#"{"rating":9.0,"status":"Returning Series","firstYear":2008,"lastYear":2013,
-                    "nextEpisode":{"season":3,"episode":1,"name":"Return","airDate":"2026-10-01"}}"#,
+                    "nextEpisode":{"season":3,"episode":1,"name":"Return","airDate":"2099-10-01"}}"#,
                 1,
             )
             .await
@@ -487,16 +499,32 @@ mod tests {
         )
         .await
         .unwrap();
-        tx.commit().await.unwrap();
-        // The profile finished Breaking Bad's first episode.
-        sqlx::query(
-            "INSERT INTO watch_history (media_kind, media_id, position_sec, duration_sec, watched_at, completed)
-             SELECT 'episode', id, 2900, 2900, 1700000000, 1 FROM series_episodes
-             WHERE series_title = 'BREAKING BAD' AND season = 1 AND episode = 1",
+        // Fleabag has no TMDB facts: its year comes from the provider.
+        SeriesRepository::upsert_series_facts_tx(
+            &mut tx,
+            source,
+            "Fleabag",
+            Some(&ProviderFacts {
+                release_date: Some("2016-07-21".into()),
+                ..Default::default()
+            }),
+            None,
         )
-        .execute(&pool)
         .await
         .unwrap();
+        tx.commit().await.unwrap();
+        // The profile finished Breaking Bad's first episode.
+        let first: i64 = sqlx::query_scalar(
+            "SELECT id FROM series_episodes
+             WHERE series_title = 'BREAKING BAD' AND season = 1 AND episode = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        crate::WatchHistoryRepository::new(&pool)
+            .record_progress("episode", first, 2900.0, Some(2900.0), true, None)
+            .await
+            .unwrap();
         (dir, pool, source)
     }
 
@@ -535,10 +563,11 @@ mod tests {
                 season: 3,
                 episode: 1,
                 name: Some("Return".into()),
-                air_date: "2026-10-01".into(),
+                air_date: "2099-10-01".into(),
             })
         );
-        assert_eq!((f.watched_count, f.last_watched_at), (1, Some(1700000000)));
+        assert_eq!(f.watched_count, 1);
+        assert!(f.last_watched_at.is_some());
         let dark = &all[1].facts;
         assert_eq!(
             (dark.rating, dark.rating_source.as_deref()),
@@ -548,6 +577,11 @@ mod tests {
         let fleabag = &all[2].facts;
         assert_eq!(fleabag.genres, ["Comedy"], "Nova's genre without a match");
         assert_eq!((fleabag.rating, fleabag.watched_count), (None, 0));
+        assert_eq!(
+            fleabag.first_year,
+            Some(2016),
+            "the provider's release year"
+        );
         // Title lookups (semantic hits) carry the same facts.
         let hit = repo.list_by_titles(source, &["Dark".into()]).await.unwrap();
         assert_eq!(hit.len(), 1);
@@ -594,7 +628,8 @@ mod tests {
         );
         assert_eq!(
             list(SeriesFilters::default(), ContentSort::Year).await,
-            ["Dark", "Breaking Bad", "Fleabag"]
+            ["Dark", "Fleabag", "Breaking Bad"],
+            "the provider's release year when TMDB has none"
         );
         let search = SeriesFilters {
             query: Some("breaking"),
@@ -616,17 +651,69 @@ mod tests {
         let (_dir, pool, source) = fixture().await;
         let repo = SeriesRepository::new(&pool);
         let week = repo
-            .series_schedule(source, "2026-09-29", "2026-10-05", 60)
+            .series_schedule(source, "2099-09-29", "2099-10-05", 60)
             .await
             .unwrap();
         assert_eq!(titles(&week), ["Breaking Bad"]);
         let later = repo
-            .series_schedule(source, "2026-10-02", "2026-10-08", 60)
+            .series_schedule(source, "2099-10-02", "2099-10-08", 60)
             .await
             .unwrap();
         assert!(
             later.is_empty(),
             "an episode before the window is not listed"
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_follows_the_episode_not_its_stream_url() {
+        let (_dir, pool, source) = fixture().await;
+        // The provider moves the episode to a new URL; its durable key stays
+        // and the row-keyed history mirror is gone.
+        sqlx::query(
+            "UPDATE series_episodes SET stream_url = 'http://new-host/bb/1/1.mp4'
+             WHERE series_title = 'BREAKING BAD' AND season = 1 AND episode = 1",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM watch_history")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let cards = SeriesRepository::new(&pool)
+            .list_by_titles(source, &["BREAKING BAD".into()])
+            .await
+            .unwrap();
+        assert_eq!(cards[0].facts.watched_count, 1);
+    }
+
+    #[tokio::test]
+    async fn a_category_card_describes_the_episodes_in_it() {
+        let (_dir, pool, source) = fixture().await;
+        sqlx::query(
+            "UPDATE series_episodes SET category = 'Classics'
+             WHERE series_title = 'BREAKING BAD' AND season = 1",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let filters = SeriesFilters {
+            category: Some("Classics"),
+            ..Default::default()
+        };
+        let cards = SeriesRepository::new(&pool)
+            .browse_series(source, &filters, ContentSort::Default, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(titles(&cards), ["Breaking Bad"]);
+        assert_eq!(
+            (
+                cards[0].category.as_deref(),
+                cards[0].episode_count,
+                cards[0].season_count
+            ),
+            (Some("Classics"), 2, 1)
         );
     }
 }

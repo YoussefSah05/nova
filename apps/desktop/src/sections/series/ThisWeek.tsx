@@ -23,7 +23,9 @@ export const ThisWeek = memo(function ThisWeek({ week }: { week: ReturnType<type
         <h2 id="shows-week" className="font-display text-[28px] font-medium">
           This week
         </h2>
-        <span className="text-sm text-white/60">New episodes of your shows, by air date</span>
+        <span className="text-sm text-white/60">
+          Next episodes of shows in your library, by air date
+        </span>
       </div>
       <ol className="grid grid-cols-7 gap-2.5">
         {week.map((day) => (

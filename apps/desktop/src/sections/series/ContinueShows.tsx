@@ -73,13 +73,16 @@ const ContinueCard = memo(function ContinueCard({
   const backdrop =
     art?.backdropUrl ?? tmdbSized(show?.backdropUrl ?? null, "w780") ?? item.posterUrl;
   const pct = item.upNext ? 0 : progressPct(item);
-  const open = () => (browseItem ? activate(browseItem) : playMedia(continueMedia(item)));
+  // Until the show's card loads there is no page to open: the play button
+  // still works.
+  const open = () => browseItem && activate(browseItem);
 
   return (
     <div className="group relative flex flex-col overflow-hidden rounded-2xl bg-[#111113] shadow-[inset_0_0_0_1px_rgba(255,255,255,.06)] transition-transform duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-1">
       <button
         type="button"
         onClick={open}
+        disabled={!browseItem}
         aria-label={[item.title, next, watched].filter(Boolean).join(", ")}
         className="flex flex-col text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >

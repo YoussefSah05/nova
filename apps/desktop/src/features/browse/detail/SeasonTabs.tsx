@@ -1,6 +1,6 @@
 //! A series' seasons as tabs. With TMDB season posters they are small poster
-//! tabs (name, episode count); without, compact pills. Arrow keys move
-//! between tabs, as in any tab list.
+//! tabs (name, episode count); without, compact pills. Arrow keys, Home
+//! and End move between tabs, as in any tab list.
 
 import { memo, useRef, type KeyboardEvent } from "react";
 
@@ -28,10 +28,18 @@ export const SeasonTabs = memo(function SeasonTabs({
   const detail = (n: number) => details?.find((s) => s.number === n);
   const posters = seasons.some((n) => detail(n)?.posterUrl);
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
     const at = selected === null ? 0 : seasons.indexOf(selected);
-    const next =
-      seasons[Math.min(seasons.length - 1, Math.max(0, at + (e.key === "ArrowRight" ? 1 : -1)))];
+    const target =
+      e.key === "ArrowRight"
+        ? Math.min(seasons.length - 1, at + 1)
+        : e.key === "ArrowLeft"
+          ? Math.max(0, at - 1)
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? seasons.length - 1
+              : null;
+    const next = target === null ? undefined : seasons[target];
     if (next === undefined) return;
     e.preventDefault();
     onSelect(next);

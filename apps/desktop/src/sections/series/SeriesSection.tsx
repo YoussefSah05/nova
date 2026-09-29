@@ -147,7 +147,7 @@ export function SeriesSection() {
       ? null
       : [
           `${count.toLocaleString()} ${count === 1 ? "show" : "shows"}`,
-          airing.length > 0 ? `${airing.length} with a new episode this week` : null,
+          airing.length > 0 ? `${airing.length} with an episode this week` : null,
         ]
           .filter(Boolean)
           .join(" · ");
@@ -187,6 +187,12 @@ export function SeriesSection() {
                     ? "Shows"
                     : `${matching.toLocaleString()} ${matching === 1 ? "show" : "shows"}`}
               </h2>
+              {facets.status && (
+                <p className="-mt-2.5 text-sm text-white/60">
+                  Status is known for shows Nova has details for — open a show or follow it to add
+                  its details.
+                </p>
+              )}
               <BrowseGrid
                 tab="series"
                 layout="landscape"

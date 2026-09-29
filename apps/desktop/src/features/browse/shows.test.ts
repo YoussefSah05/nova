@@ -28,11 +28,13 @@ describe("show descriptions", () => {
     expect(statusLabel(show({ status: "Ended" }))).toBe("Ended");
     expect(statusLabel(show({ status: "Canceled" }))).toBe("Cancelled");
     expect(statusLabel(show({ status: "Returning Series" }))).toBe("Returning");
-    expect(
-      statusLabel(
-        show({ nextEpisode: { season: 2, episode: 1, name: null, airDate: "2026-10-01" } })
-      )
-    ).toBe("Returning");
+    const now = new Date(2026, 8, 29);
+    const scheduled = (airDate: string) =>
+      show({ nextEpisode: { season: 2, episode: 1, name: null, airDate } });
+    expect(statusLabel(scheduled("2026-10-01"), now)).toBe("Returning");
+    // A scheduled date long past is stale facts, not proof it still airs.
+    expect(statusLabel(scheduled("2025-01-01"), now)).toBeNull();
+    expect(statusLabel(show({ status: "In Production" }))).toBe("In production");
     expect(statusLabel(show())).toBeNull();
   });
 

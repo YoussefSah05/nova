@@ -6,12 +6,8 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import type { ContinueWatchingItem, SeriesSummary } from "@/types";
 import { titleFactsQuery } from "@/features/browse/detail/data";
-import {
-  browseKeys,
-  useContinueWatching,
-  useSeriesCards,
-  useSeriesSchedule,
-} from "@/features/browse/queries";
+import { useContinueWatching, useSeriesCards, useSeriesSchedule } from "@/features/browse/queries";
+import { useMinute } from "@/features/browse/guide";
 import { localDate, weekOf } from "@/features/browse/shows";
 import { useSession } from "@/app/session";
 
@@ -43,8 +39,8 @@ export function useShowsInProgress(): {
 }
 
 /// Fetch the facts of followed shows Nova hasn't described yet (one at a
-/// time, once per session: the facts query caches them), then refresh the
-/// schedule if any were fetched.
+/// time, once per session: the facts query caches them), refreshing the
+/// schedule and show cards after each one.
 export function useWarmShowFacts(shows: SeriesSummary[]) {
   const qc = useQueryClient();
   const { profile, activeSourceId } = useSession();
@@ -61,22 +57,25 @@ export function useWarmShowFacts(shows: SeriesSummary[]) {
     if (!key || activeSourceId === null) return;
     let cancelled = false;
     void (async () => {
-      let fetched = 0;
       for (const seriesId of key.split(",")) {
         if (cancelled) return;
         const query = titleFactsQuery(profile.id, { kind: "series", seriesId });
         if (qc.getQueryData(query.queryKey) !== undefined) continue;
         try {
           await qc.fetchQuery(query);
-          fetched += 1;
         } catch {
           // Offline or TMDB off: the schedule shows what is known.
+          continue;
         }
-      }
-      if (fetched > 0 && !cancelled)
+        // Newly known air dates and statuses: refresh what shows them, even
+        // if a newer run (more followed shows loaded) replaced this one.
         void qc.invalidateQueries({
-          queryKey: [...browseKeys.source(profile.id, activeSourceId), "seriesSchedule"],
+          predicate: (q) =>
+            q.queryKey[1] === profile.id &&
+            q.queryKey[2] === activeSourceId &&
+            (q.queryKey[3] === "seriesSchedule" || q.queryKey[3] === "seriesCards"),
         });
+      }
     })();
     return () => {
       cancelled = true;
@@ -87,6 +86,8 @@ export function useWarmShowFacts(shows: SeriesSummary[]) {
 /// The week's window and schedule (shared with the section summary).
 export function useWeekSchedule() {
   const { profile, activeSourceId } = useSession();
+  // Re-read the date every minute, so the week rolls over at midnight.
+  useMinute();
   const today = localDate(new Date());
   const [y, m, d] = today.split("-").map(Number);
   const start = useMemo(() => new Date(y, m - 1, d), [y, m, d]);

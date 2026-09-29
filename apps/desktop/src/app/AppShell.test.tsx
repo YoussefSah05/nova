@@ -535,7 +535,7 @@ describe("AppShell", () => {
     });
     expect(screen.getByRole("heading", { name: "This week" })).toBeInTheDocument();
     expect(screen.getByRole("listitem", { name: /^Today/ })).toHaveTextContent("S3 · E1");
-    expect(await screen.findByText(/1 with a new episode this week/)).toBeInTheDocument();
+    expect(await screen.findByText(/1 with an episode this week/)).toBeInTheDocument();
     // The wall's card names its status from TMDB.
     expect(
       await screen.findByRole("button", { name: /^Breaking Bad, Returning, 2 seasons · 2008–/ })
