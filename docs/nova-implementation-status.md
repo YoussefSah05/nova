@@ -48,7 +48,7 @@
 | M21 Smart discovery / personalization | PARTIAL | TMDB related/collections/trending intersected with the library. | No embedding similarity or history-based personalization. |
 | M22 Frontend canonicalization | PARTIAL | Movies and series address canonical entities (series by `seriesId`: detail, episodes, resume, favourites, art/facts/related). | Live, player, transcripts and episode/live Continue Watching play by row ID; client `seriesGroupKey`/`prettyBrand` grouping remains. |
 | M23 Series / autoplay | PARTIAL | Episode progress owned by the series entity per durable episode key (0037); resume, Up next and series Continue Watching read it; autoplay uses the normal play path. | In-player next episode chosen in React; episodes aren't canonical entities; no cross-source episodes. |
-| M24 Live / EPG boundary | PARTIAL | Programmes owned per feed (0040); feed spooled to disk with a 512 MiB cap, streamed parse into staged batches (0041), one short publish transaction; empty feeds refused; one guide feed per channel, preferring the viewing source's. | Channels still matched by `tvg_id` (no canonical channel/ChannelMatcher); no gzip feeds; no refresh scheduling; no grid guide UI. |
+| M24 Live / EPG boundary | PARTIAL | Programmes owned per feed (0040); feed spooled with a 512 MiB cap, staged batches (0041), one short publish; empty feeds refused; one guide feed per channel. The guide is on screen: live cards, hover preview, bundle channels, the live player and its channel strip; refreshed after every import; Settings shows each source's guide status. | Channels still matched by `tvg_id` (no canonical channel/ChannelMatcher); no gzip feeds; no scheduled refresh; no grid guide view. |
 | M25 Security / privacy | PARTIAL | TMDB credential write-only; proxy/EPG errors drop URLs; source and stream URLs no longer cross IPC. | `csp: null`; `/proxy` has no session token and its locator carries the upstream URL; provider logo/poster URLs are passed through. |
 | M26 Migration-chain qualification | PARTIAL | Upgrade-chain tests; `real_profile_upgrade` (opt-in). | Never run against a real profile copy. |
 | M27 Scale qualification | PARTIAL | 30k release scale probes; `tools/catalog-scale`. | No 100k/250k app-level measurements. |
@@ -478,11 +478,44 @@ Branch `feat/epg-boundary`.
   frontend), `cargo fmt --check`, `git diff --check` pass. **Not verified on device:** a real provider
   feed refresh (`just dev`, Live tab → refresh the guide).
 
+### Live guide on screen (M24, part 2) — 2026-09-29
+
+Branch `feat/epg-surface`. The first part stored guides, but nothing showed them: the Now/Next chip
+was dropped with the old browse view on 2026-06-01 (`e385640`) and never re-wired, a source refresh
+never refreshed its guide, and a guide URL added in Settings stayed empty.
+
+- **Reads:** `epg_channels_now_and_next { channelIds }` resolves each channel row's `tvg_id` and
+  source and reads that source's guide feed. `list_epg_feeds` reports each feed's kind, last
+  refresh, redacted last error and programme count (never the URL).
+- **On screen** (`features/browse/guide.ts`, `GuideViews.tsx`): one TanStack query per channel,
+  requests from the same moment coalesced into one call (≤ 100 channels), refetched when the
+  programme ends, invalidated once per finished refresh job (`epg:refresh:done`). Live cards show
+  "Now · title" with its elapsed share; the hover preview and the live player's title bar show now
+  (time slot, progress) and next; brand-bundle channels and the player's channel strip show now.
+  Cards that aren't a single channel (series, VOD, bundles) never show a guide.
+- **Refresh:** every successful import (add or refresh, and a recovered one) queues the source's
+  guide refresh in Rust; adding a guide URL queues it too; Settings → Sources shows the guide status
+  with a "Refresh guide" button.
+- **Tests (9 new):** storage (channels read their own source's guide in request order; feed status
+  counts and never carries a URL; URL redaction); frontend (one batched request for many channels; a
+  finished refresh refetches; a disabled id never shows another item's cached guide; a failed batch
+  settles every waiter; refetch timing; Settings summary).
+- **Independent review:** no Critical. **High, confirmed and fixed:** series and VOD cards (and
+  bundles) showed a cached channel's guide under the same id. **Medium, fixed:** Settings could stay
+  "Refreshing…" when a job ended without a per-feed terminal event; adding a guide URL gave no
+  feedback or status reload. **Low, fixed:** a recovered import skipped its guide refresh; errors
+  stored before URLs were stripped could show credentials; unbounded batch size; the cinema tiles
+  relied on context for the profile; block markup inside buttons and no progress semantics. Low,
+  recorded: four small queries per channel per batch; 11 px guide text follows the existing cards
+  (off the documented scale). Mutation check: dropping the disabled-id guard fails its test.
+- **Validation:** `just lint`, `just typecheck`, `just test` (583 Rust, 0 failed, 5 opt-in ignored; 70
+  frontend), `cargo fmt --check`, `git diff --check` pass. **Not verified on device.**
+
 ### Next dependency
 
 **macOS lifecycle (M29):** there is no sleep/wake or window-event handling, and playback guards and
 sessions leak when the webview reloads. Release sessions on reload and close, and pause or resume
-around sleep. Confirm the playback slices and an EPG refresh on device first.
+around sleep. Confirm the playback slices and the live guide on device first.
 
 ---
 
