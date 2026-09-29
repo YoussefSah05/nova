@@ -335,7 +335,13 @@ export function PlayerModal({
   usePlaybackRecover(USE_MPV_ENGINE, nativeToken, (attempt) => {
     recoveringRef.current = true;
     setError(null);
-    setRecoveryNote(attempt.otherSource ? "Trying another source…" : "Retrying…");
+    setRecoveryNote(
+      attempt.reason === "wake"
+        ? "Reconnecting…"
+        : attempt.otherSource
+          ? "Trying another source…"
+          : "Retrying…"
+    );
     if (attempt.mediaKind === media.kind && attempt.mediaId === media.id) {
       setReopenNonce((n) => n + 1);
     } else {

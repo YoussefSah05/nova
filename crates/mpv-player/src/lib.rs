@@ -257,6 +257,19 @@ impl MpvEngine {
         Ok(())
     }
 
+    /// End whatever session is open, whoever opened it: the app is quitting or
+    /// its webview reloaded, so no caller holds a token any more.
+    pub fn close_active(self: &Arc<Self>) -> Result<(), MpvError> {
+        self.inner.lock().map_err(|_| MpvError::Poisoned)?.take();
+        Ok(())
+    }
+
+    /// Pause or resume the session `token` names.
+    pub fn set_pause(self: &Arc<Self>, token: &str, paused: bool) -> Result<(), MpvError> {
+        let mut guard = self.inner.lock().map_err(|_| MpvError::Poisoned)?;
+        active_session(&mut guard, token)?.set_property("pause", if paused { "yes" } else { "no" })
+    }
+
     /// Snapshot the current session's state. `token` is ignored for matching:
     /// a state *read* should never fail just because the caller is still using
     /// the previous load's token (e.g. a stale heartbeat fired mid-switch). The

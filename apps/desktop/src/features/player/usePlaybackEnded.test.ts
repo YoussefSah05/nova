@@ -29,6 +29,7 @@ const recover = (payload: Partial<PlaybackRecover>) =>
       mediaId: 12,
       attempt: 1,
       otherSource: true,
+      reason: "failure",
       ...payload,
     },
   });

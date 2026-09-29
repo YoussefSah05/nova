@@ -118,6 +118,12 @@ impl SessionPolicy {
         }
     }
 
+    /// A live stream that was playing: after the Mac sleeps its connection
+    /// is gone, so it reconnects (at the live edge) on wake.
+    pub fn reconnects_on_wake(&self) -> bool {
+        self.live && self.ready && self.active && !self.ended && !self.failed
+    }
+
     fn completed(&self, position_sec: f64) -> bool {
         !self.live
             && self
@@ -262,8 +268,20 @@ pub struct PlaybackEnded {
     pub autoplay: bool,
 }
 
+/// Why the player is asked to reopen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecoverReason {
+    /// The engine reported an error.
+    Failure,
+    /// The Mac woke from sleep while a live channel was playing.
+    Wake,
+}
+
 /// `playback:recover` — the native session failed; the coordinator chose
 /// what to try next (the same item once, then another source of the title).
+/// Also sent on wake to reconnect a live channel (`reason: wake`, outside
+/// the recovery budget).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaybackRecover {
@@ -275,6 +293,7 @@ pub struct PlaybackRecover {
     pub attempt: u32,
     /// Another source of the title rather than a retry of the same one.
     pub other_source: bool,
+    pub reason: RecoverReason,
 }
 
 /// What the coordinator announces to the player.
@@ -350,6 +369,10 @@ enum Msg {
         token: String,
         mode: Option<String>,
     },
+    /// The Mac is going to sleep.
+    Sleep(oneshot::Sender<()>),
+    /// The Mac woke up.
+    Wake(oneshot::Sender<()>),
 }
 
 /// Owns the one native playback session's policy, on an ordered actor task.
@@ -427,6 +450,22 @@ impl PlaybackCoordinator {
         });
     }
 
+    /// The Mac is about to sleep: pause the native session (the pause writes
+    /// its progress) and remember whether a live stream should reconnect.
+    pub async fn sleep(&self) {
+        let (done, wait) = oneshot::channel();
+        let _ = self.tx.send(Msg::Sleep(done));
+        let _ = wait.await;
+    }
+
+    /// The Mac woke up: a live channel that was playing reconnects; anything
+    /// else stays paused for the user.
+    pub async fn wake(&self) {
+        let (done, wait) = oneshot::channel();
+        let _ = self.tx.send(Msg::Wake(done));
+        let _ = wait.await;
+    }
+
     /// Decide on one given snapshot, in order with everything else (tests).
     pub async fn observe(&self, state: MpvPlayerState) {
         self.observe_at(state, self.now_ms()).await;
@@ -449,6 +488,8 @@ impl PlaybackCoordinator {
         // The item a `playback:recover` asked the player to open next: when
         // it arrives its chain continues; any other open is the user's.
         let mut expected: Option<(String, i64)> = None;
+        // The live session (by token) to reconnect when the Mac wakes.
+        let mut reconnect_on_wake: Option<String> = None;
         while let Some(msg) = rx.recv().await {
             match msg {
                 Msg::Poke => {
@@ -502,6 +543,35 @@ impl PlaybackCoordinator {
                     if let Some(session) = active.as_mut().filter(|s| s.token == token) {
                         session.caption_mode = mode;
                     }
+                }
+                Msg::Sleep(done) => {
+                    reconnect_on_wake = None;
+                    if let Some(session) = active.as_ref() {
+                        if session.policy.reconnects_on_wake() {
+                            reconnect_on_wake = Some(session.token.clone());
+                        }
+                        if let Err(e) = self.engine.set_pause(&session.token, true) {
+                            tracing::debug!(error = %e, "could not pause for sleep");
+                        }
+                    }
+                    let _ = done.send(());
+                }
+                Msg::Wake(done) => {
+                    let token = reconnect_on_wake.take();
+                    if let Some(session) =
+                        active.as_ref().filter(|s| Some(&s.token) == token.as_ref())
+                    {
+                        expected = Some((session.media_kind.clone(), session.media_id));
+                        self.emit(PlaybackEvent::Recover(PlaybackRecover {
+                            token: session.token.clone(),
+                            media_kind: session.media_kind.clone(),
+                            media_id: session.media_id,
+                            attempt: 0,
+                            other_source: false,
+                            reason: RecoverReason::Wake,
+                        }));
+                    }
+                    let _ = done.send(());
                 }
             }
         }
@@ -671,6 +741,7 @@ impl PlaybackCoordinator {
             media_id,
             attempt: chain.recoveries_in_window,
             other_source,
+            reason: RecoverReason::Failure,
         })
     }
 

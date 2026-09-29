@@ -208,6 +208,11 @@ impl SessionRegistry {
         let _ = self.sessions.lock().await.remove(token);
     }
 
+    /// Drop every session (the webview that held their tokens is gone).
+    pub async fn release_all(&self) {
+        self.sessions.lock().await.clear();
+    }
+
     pub(crate) async fn get(&self, token: &str) -> Option<Arc<Mutex<Session>>> {
         self.sessions.lock().await.get(token).cloned()
     }

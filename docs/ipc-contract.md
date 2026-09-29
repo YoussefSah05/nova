@@ -247,7 +247,7 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | `epg:refresh:done` | `{ sourceId, ok }` — a source's guide refresh job ended, however it ended (cancelled, failed, done); invalidates cached guides | M24 |
 | `mpv:state` | `MpvPlayerState` | 5 |
 | `playback:ended` | `{ token, nextEpisode: SeriesEpisode \| null, autoplay }` — native media played to its end; next episode and autoplay decided in Rust | M14 |
-| `playback:recover` | `{ token, mediaKind, mediaId, attempt, otherSource }` — the native session failed; bounded recovery (same item once, then another source of the title, ≤ 3 attempts) decided in Rust; the player reopens it for its own token | M15 |
+| `playback:recover` | `{ token, mediaKind, mediaId, attempt, otherSource, reason: 'failure'\|'wake' }` — `failure`: the native session failed; bounded recovery (same item once, then another source of the title, ≤ 3 attempts) decided in Rust. `wake`: the Mac woke while a live channel played; reconnect it (attempt 0, outside the recovery budget). The player reopens it for its own token | M15, M29 |
 | `airplay:status` | `AirPlayStatus` (poll while a route is reachable / engaged) | 5 |
 | `airplay:picker-closed` | `void` (user finished with the native route picker) | 5 |
 
@@ -450,6 +450,18 @@ for each profile/media/audio-track activation. `transcription:cues` and
 `transcription:status` echo that `sessionId`. The player subscribes before starting
 and ignores events from other sessions. Starts and stops are serialized per engine;
 model-download completion cannot restart an inactive session.
+
+## App lifecycle (M29)
+
+No command: Rust owns it (`lifecycle.rs`).
+
+- **Webview page load** (a reload, and the first load) and **app exit**: the native session's
+  progress is written (bounded to 2 s), then mpv is closed, AirPlay disengaged, every proxy session
+  (and its ffmpeg remux) released, caption transcription stopped and every playback guard dropped —
+  background work resumes. The frontend holds no playback token across a reload.
+- **Sleep** (`NSWorkspaceWillSleepNotification`): the native session pauses, which writes its
+  progress. **Wake**: a live channel that was playing gets `playback:recover { reason: 'wake' }` and
+  reconnects at the live edge; VOD and a channel the user had paused stay paused.
 
 ## Translation removed (2026-09-27)
 

@@ -4,6 +4,7 @@ pub mod caption_session;
 pub mod commands;
 pub mod desktop_jobs;
 pub mod ipc;
+pub mod lifecycle;
 #[cfg(target_os = "macos")]
 pub mod mac_model_library;
 pub mod model_registry;
@@ -20,7 +21,7 @@ use std::sync::Arc;
 
 use nova_mpv_player::{EventEmitter, MpvEngine};
 use nova_storage::init_app_db;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{webview::PageLoadEvent, AppHandle, Emitter, Manager, RunEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -124,7 +125,22 @@ pub fn run() {
                 let airplay = app.state::<state::AppState>().airplay.clone();
                 airplay::install_picker(&window, &airplay, app.handle());
             }
+            // Sleep pauses native playback; wake reconnects a live channel.
+            lifecycle::observe_power(app.handle());
             Ok(())
+        })
+        // A page starting to load (a reload, or the first load) has no player:
+        // nothing from a previous page may keep playing or hold playback
+        // guards.
+        .on_page_load(|webview, payload| {
+            if payload.event() != PageLoadEvent::Started || webview.label() != "main" {
+                return;
+            }
+            let app = webview.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<state::AppState>();
+                lifecycle::release_all_playback(&state, Some(&app)).await;
+            });
         })
         .invoke_handler(tauri::generate_handler![
             // Phase 1
@@ -258,8 +274,16 @@ pub fn run() {
             commands::playback::airplay_set_mute,
             commands::playback::airplay_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Nova");
+        .build(tauri::generate_context!())
+        .expect("error while building Nova")
+        .run(|app, event| {
+            // Quitting: write the native session's progress and stop every
+            // playback resource (ffmpeg remuxes, caption transcription).
+            if let RunEvent::Exit = event {
+                let state = app.state::<state::AppState>();
+                tauri::async_runtime::block_on(lifecycle::release_all_playback(&state, Some(app)));
+            }
+        });
 }
 
 /// libmpv wakeup callback adapter. Fires on libmpv's internal thread, so we

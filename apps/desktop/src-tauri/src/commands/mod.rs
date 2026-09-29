@@ -3433,6 +3433,71 @@ mod stabilization_tests {
     }
 
     #[tokio::test]
+    async fn waking_reconnects_a_playing_live_channel_and_leaves_the_rest_paused() {
+        use crate::playback_coordinator::{
+            PlaybackCoordinator, PlaybackEvent, PlaybackRecover, RecoverReason,
+        };
+        use nova_mpv_player::MpvPlaybackPhase::{Paused, Playing};
+
+        let dir = tempfile::tempdir().unwrap();
+        let pool = open_db(&dir.path().join("p.db")).await;
+        let coordinator = PlaybackCoordinator::new(nova_mpv_player::MpvEngine::new());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PlaybackRecover>();
+        coordinator.start(std::sync::Arc::new(move |event| {
+            if let PlaybackEvent::Recover(r) = event {
+                let _ = tx.send(r);
+            }
+        }));
+        let play = |token: &'static str, kind: &'static str, phase| {
+            let (coordinator, pool) = (coordinator.clone(), pool.clone());
+            async move {
+                coordinator.begin(token.into(), pool, kind.into(), 7).await;
+                coordinator
+                    .observe_at(engine_state(token, phase, 30.0), 1_000)
+                    .await;
+            }
+        };
+
+        // A live channel playing through sleep reconnects on wake, once.
+        play("live", "live", Playing).await;
+        coordinator.sleep().await;
+        coordinator.wake().await;
+        let r = rx.try_recv().expect("a reconnect");
+        assert_eq!(
+            (
+                r.token.as_str(),
+                r.media_kind.as_str(),
+                r.media_id,
+                r.reason,
+                r.other_source
+            ),
+            ("live", "live", 7, RecoverReason::Wake, false)
+        );
+        coordinator.wake().await;
+        assert!(
+            rx.try_recv().is_err(),
+            "a second wake without sleep does nothing"
+        );
+
+        // A movie stays paused for the user; so does a live channel the user
+        // had paused.
+        play("vod", "vod", Playing).await;
+        coordinator.sleep().await;
+        coordinator.wake().await;
+        play("paused-live", "live", Paused).await;
+        coordinator.sleep().await;
+        coordinator.wake().await;
+        assert!(rx.try_recv().is_err());
+
+        // A live channel replaced between sleep and wake isn't reconnected.
+        play("live-a", "live", Playing).await;
+        coordinator.sleep().await;
+        play("live-b", "live", Playing).await;
+        coordinator.wake().await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn the_playback_coordinator_owns_resume_progress_completion_and_next() {
         use crate::playback_coordinator::{PlaybackCoordinator, PlaybackEvent};
         use nova_mpv_player::MpvPlaybackPhase::{Ended, Playing};

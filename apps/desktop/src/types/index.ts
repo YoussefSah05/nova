@@ -155,6 +155,8 @@ export interface PlaybackRecover {
   mediaId: number;
   attempt: number;
   otherSource: boolean;
+  /// `wake`: the Mac woke while this live channel played; reconnect it.
+  reason: "failure" | "wake";
 }
 
 /// One card on a tab's Continue Watching rail (`list_continue_watching`).
