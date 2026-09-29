@@ -671,11 +671,51 @@ Branch `feat/ui-movies`.
   frontend), `cargo fmt --check`, `git diff --check`, production build pass. **Not verified on
   device** (`just dev`): the page on a real library, wall scrolling with facts at 100k.
 
+### Frontend redesign, UI-3: Series "Shows" and the series page — 2026-09-29
+
+Branch `feat/ui-series`.
+
+- **Backend:** `SeriesSummary` carries flattened `SeriesFacts` from stored evidence — genres (TMDB,
+  else Nova's), rating with its source (zero is unrated), TMDB status verbatim, first/last year
+  (TMDB, else the provider's release year), the next scheduled episode — and the profile's
+  progress: finished episodes and last watched, from `episode_watch_state` by durable episode
+  key. One page-first query (`repositories/series/browse.rs`) serves `list_series`,
+  `count_series`, title lookups (semantic hits), the genre facet and the schedule; filters gain
+  genre and status (airing / ended), sorts gain title, year and rating. New commands
+  `list_series_genres`, `list_series_schedule` (dates validated, ≤ 60) and `list_series_cards`
+  (≤ 50 titles). A desktop test pins the TMDB facts JSON keys the SQL reads.
+- **Shows section** (`src/sections/series/`): Continue your shows (text-free backdrop and logo,
+  resume or next episode, one tick per episode, a play button), This week (a seven-day
+  calendar of scheduled episodes, facts of followed shows warmed a few at a time, once per
+  session), then every show on a windowed wall of wide cards (`ShowCard`, TMDB images sized to the
+  slot) with their status. Search, genre and status narrow the wall as chips.
+- **Series page:** progress and status under the meta line, season tabs with TMDB season posters
+  (arrow/Home/End keys); fresh card facts over the navigation seed's flags.
+- **Tests:** storage (facts and progress, zero rating, provider year, genre/status/sort with
+  count agreement, schedule window, progress surviving a URL change, category-scoped cards);
+  status/meta/ticks/week helpers; show cards patched and rolled back on a toggle; shell test for
+  the section and opening a show.
+- **Independent review:** no Critical. **High, confirmed and fixed:** progress read the row-keyed
+  history mirror, which loses rows when a provider changes an episode URL. **Medium, fixed:**
+  category-filtered cards described the whole show; show cards kept stale flags after a
+  toggle; warming could skip refreshing the schedule; status filtering only covers shows with
+  fetched facts (now said so, and years fall back to the provider). **Low, fixed:** stale
+  scheduled dates read as airing, "In production" shown as returning, overclaiming week copy, an
+  early click on a Continue card played instead of opening, the week didn't roll over, the
+  wall's progress stayed stale after playback, season tab keys. Low, recorded: a whole-library
+  facts backfill (status for every show) is not done; the A–Z list is ~30 ms at 5k shows (was
+  ~1 ms: the page is now sorted after grouping); some spacing values follow the prototype rather
+  than the 4 px grid; no "new episode" badge (episode `added_at` resets on refresh).
+- **Validation:** `just lint`, `just typecheck`, `just test` (608 Rust, 0 failed, 5 opt-in ignored; 99
+  frontend), `cargo fmt --check`, `git diff --check`, production build pass. **Not verified on
+  device** (`just dev`).
+
 ### Next dependency
 
-**UI-3: Series "Shows" + the series page.** Needs `SeriesSummary` genres, rating, status and
-progress, and a "returning soon" filter. Then UI-4 Live + guide (the EPG repass), UI-5 Search,
-UI-6 Library history, UI-7 Settings/Models. M26 still needs a real profile copy.
+**UI-4: Live + guide** — the EPG repass: `ChannelGroup` gains `tvgId`, a server-clamped
+`epg_range`, a virtualized guide grid with the now-line, a focused-channel preview, the logo wall
+and the channel bundle page. Then UI-5 Search, UI-6 Library history, UI-7 Settings/Models. M26
+still needs a real profile copy.
 
 ---
 
