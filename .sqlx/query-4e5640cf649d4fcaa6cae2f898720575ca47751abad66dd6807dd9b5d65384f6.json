@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT channel_tvg_id, title, sub_title, description,\n                          start_utc as \"start_utc!: i64\", stop_utc as \"stop_utc!: i64\",\n                          category, icon_url\n                   FROM programs\n                   WHERE channel_tvg_id = ? AND stop_utc > ? AND start_utc < ?\n                   ORDER BY start_utc ASC",
+  "query": "SELECT p.channel_tvg_id, p.title, p.sub_title, p.description,\n                          p.start_utc as \"start_utc!: i64\", p.stop_utc as \"stop_utc!: i64\",\n                          p.category, p.icon_url\n                   FROM programs p\n                   LEFT JOIN epg_sources e ON e.id = p.epg_source_id\n                   WHERE p.channel_tvg_id = ?1 AND p.stop_utc > ?2 AND p.start_utc < ?3\n                     AND (?4 IS NULL OR e.source_id IS ?4 OR NOT EXISTS (\n                           SELECT 1 FROM programs p2\n                           JOIN epg_sources e2 ON e2.id = p2.epg_source_id\n                           WHERE p2.channel_tvg_id = ?1 AND e2.source_id = ?4))\n                   ORDER BY p.start_utc ASC",
   "describe": {
     "columns": [
       {
@@ -45,7 +45,7 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 4
     },
     "nullable": [
       false,
@@ -58,5 +58,5 @@
       true
     ]
   },
-  "hash": "ad039c39c9659f75ee93ffec94aa4fe31dc19d0838ea68b29a8004d1bf6d29e4"
+  "hash": "4e5640cf649d4fcaa6cae2f898720575ca47751abad66dd6807dd9b5d65384f6"
 }

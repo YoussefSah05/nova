@@ -4,10 +4,13 @@
 //! auto-registered during `add_source`; community fallbacks (iptv-org, epg.pw,
 //! …) get a manual `add_epg_url` entry point so users can paste any XMLTV URL.
 //!
-//! Refresh: a manual `epg_refresh` command per source. The refresh worker
-//! streams the XMLTV body, parses programmes via `nova_epg::parse`, replaces
-//! all programmes for the touched channels, and prunes anything older than
-//! one day. Progress is emitted on the `epg:refresh:progress` event channel.
+//! Refresh: a manual `epg_refresh` command per source. For each of the
+//! source's feeds the worker spools the XMLTV body to a temp file (refusing
+//! feeds over [`MAX_EPG_BYTES`]), parses it on a blocking thread and hands
+//! bounded batches to one transaction that replaces *that feed's* programmes
+//! — feeds covering the same channel never overwrite each other — then prunes
+//! anything older than one day. Memory stays flat whatever the feed size.
+//! Progress is emitted on the `epg:refresh:progress` event channel.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +28,11 @@ use crate::state::AppState;
 use super::require_profile_pool;
 
 const REFRESH_BATCH: usize = 500;
+/// Parsed batches in flight between the parser thread and the inserter.
+const BATCHES_IN_FLIGHT: usize = 4;
+/// XMLTV feeds larger than this are refused (full multi-country guides run to
+/// a few hundred MB; anything bigger is a mistake or hostile).
+pub(crate) const MAX_EPG_BYTES: u64 = 512 * 1024 * 1024;
 
 // ── Event payload ─────────────────────────────────────────────────────────────
 
@@ -56,34 +64,38 @@ fn emit(app: &AppHandle, payload: EpgRefreshProgress) {
 
 /// Now-and-next for a list of channel TVG IDs. Returns one entry per ID —
 /// entries without EPG data still come back with both fields `None` so the
-/// frontend can render a stable list.
+/// frontend can render a stable list. With `source_id`, that source's feeds
+/// win where several feeds cover a channel.
 #[tauri::command]
 pub async fn epg_now_and_next(
     profile_id: String,
     tvg_ids: Vec<String>,
+    source_id: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<NowAndNext>, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     let now = now_ts();
     ProgramsRepository::new(&pool)
-        .now_and_next_batch(&tvg_ids, now)
+        .now_and_next_batch(&tvg_ids, now, source_id)
         .await
         .map_err(Into::into)
 }
 
 /// All programmes for a list of channel TVG IDs whose [start, stop) interval
-/// overlaps `[from_utc, to_utc)`. Used by the full grid guide view.
+/// overlaps `[from_utc, to_utc)`. Used by the full grid guide view. With
+/// `source_id`, that source's feeds win where feeds overlap.
 #[tauri::command]
 pub async fn epg_range(
     profile_id: String,
     tvg_ids: Vec<String>,
     from_utc: i64,
     to_utc: i64,
+    source_id: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<Program>, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     ProgramsRepository::new(&pool)
-        .range(&tvg_ids, from_utc, to_utc)
+        .range(&tvg_ids, from_utc, to_utc, source_id)
         .await
         .map_err(Into::into)
 }
@@ -200,21 +212,8 @@ async fn run_refresh(
         }
     };
 
-    let bytes = match client.get(url).send().await {
-        Ok(r) if r.status().is_success() => match r.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                return fail(
-                    &app,
-                    source_id,
-                    epg_source_id,
-                    started_at,
-                    e.without_url().to_string(),
-                    pool,
-                )
-                .await
-            }
-        },
+    let response = match client.get(url).send().await {
+        Ok(r) if r.status().is_success() => r,
         Ok(r) => {
             return fail(
                 &app,
@@ -238,6 +237,10 @@ async fn run_refresh(
             .await
         }
     };
+    let spooled = match spool_capped(response, MAX_EPG_BYTES).await {
+        Ok(file) => file,
+        Err(e) => return fail(&app, source_id, epg_source_id, started_at, e, pool).await,
+    };
 
     emit(
         &app,
@@ -251,94 +254,19 @@ async fn run_refresh(
         },
     );
 
-    // quick-xml is sync — run the streaming parser on a blocking thread. The
-    // feed's `<channel>` icons come back alongside the programmes.
-    type Parsed = (Vec<Program>, Vec<nova_epg::ChannelIcon>);
-    let parse_result = tokio::task::spawn_blocking(move || -> Result<Parsed, String> {
-        let cursor = std::io::Cursor::new(bytes);
-        let reader = std::io::BufReader::new(cursor);
-        let mut programs = Vec::new();
-        let mut parser = nova_epg::parse(reader);
-        for p in parser.by_ref() {
-            match p {
-                Ok(p) => programs.push(p),
-                Err(e) => {
-                    // Soft-fail individual programmes — broken element shouldn't
-                    // discard the entire feed.
-                    tracing::warn!(error = %e, "EPG parse: skipped malformed programme");
-                }
-            }
-        }
-        Ok((programs, parser.take_channel_icons()))
-    })
-    .await;
-
-    let (programs, channel_icons) = match parse_result {
-        Ok(Ok(p)) => p,
-        Ok(Err(e)) => return fail(&app, source_id, epg_source_id, started_at, e, pool).await,
-        Err(e) => {
-            return fail(
-                &app,
-                source_id,
-                epg_source_id,
-                started_at,
-                e.to_string(),
-                pool,
-            )
-            .await
-        }
-    };
-
-    // Channel logos this feed declares, matched to the source's channels the
-    // same way programmes are (tvg-id). A read failure only costs the logos.
-    let channel_logos = match EpgSourcesRepository::new(pool)
+    // Channel logos this feed declares are matched to the source's channels
+    // the same way programmes are (tvg-id). A read failure only costs logos.
+    let source_tvg_ids = match EpgSourcesRepository::new(pool)
         .channel_tvg_ids(source_id)
         .await
     {
-        Ok(tvg_ids) => nova_epg::match_channel_icons(&tvg_ids, &channel_icons),
+        Ok(ids) => ids,
         Err(e) => {
             tracing::warn!(error = %e, "epg_refresh: channel tvg-ids unavailable");
             Vec::new()
         }
     };
-
-    // Collect the unique channel IDs we just got data for and clear them
-    // before re-inserting. Keeps the table in sync with upstream rather than
-    // accumulating duplicates run after run.
-    let touched_channels: Vec<String> = {
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        for p in &programs {
-            if seen.insert(p.channel_tvg_id.clone()) {
-                out.push(p.channel_tvg_id.clone());
-            }
-        }
-        out
-    };
-
-    let insert_result: Result<u64, String> = async {
-        let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-        nova_storage::ProgramsRepository::delete_for_channels_tx(&mut tx, &touched_channels)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut total: u64 = 0;
-        for chunk in programs.chunks(REFRESH_BATCH) {
-            total += nova_storage::ProgramsRepository::insert_batch_tx(&mut tx, chunk)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        EpgSourcesRepository::replace_channel_logos_tx(
-            &mut tx,
-            epg_source_id,
-            source_id,
-            &channel_logos,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        tx.commit().await.map_err(|e| e.to_string())?;
-        Ok(total)
-    }
-    .await;
+    let insert_result = ingest_feed(pool, source_id, epg_source_id, spooled, source_tvg_ids).await;
 
     match insert_result {
         Ok(inserted) => {
@@ -372,6 +300,128 @@ async fn run_refresh(
     }
 }
 
+/// Write a response body to a temp file, refusing it once it passes `cap`
+/// bytes (checked while streaming, and up front when the length is declared).
+pub(crate) async fn spool_capped(
+    mut response: reqwest::Response,
+    cap: u64,
+) -> Result<std::fs::File, String> {
+    use std::io::{Seek, Write};
+    let too_large = || format!("EPG feed is larger than {} MB", cap / (1024 * 1024));
+    if response.content_length().is_some_and(|len| len > cap) {
+        return Err(too_large());
+    }
+    let mut file = tempfile::tempfile().map_err(|e| format!("EPG spool: {e}"))?;
+    let mut written: u64 = 0;
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                written += chunk.len() as u64;
+                if written > cap {
+                    return Err(too_large());
+                }
+                file.write_all(&chunk)
+                    .map_err(|e| format!("EPG spool: {e}"))?;
+            }
+            Ok(None) => break,
+            Err(e) => return Err(e.without_url().to_string()),
+        }
+    }
+    file.rewind().map_err(|e| format!("EPG spool: {e}"))?;
+    Ok(file)
+}
+
+enum ParsedChunk {
+    Programs(Vec<Program>),
+    /// The feed ended; its `<channel>` icons.
+    Done(Vec<nova_epg::ChannelIcon>),
+}
+
+/// Parse a spooled XMLTV feed on a blocking thread and replace the feed's
+/// programmes (and logos) in one transaction, batch by batch: at most
+/// [`BATCHES_IN_FLIGHT`] batches are ever held in memory.
+pub(crate) async fn ingest_feed(
+    pool: &SqlitePool,
+    source_id: i64,
+    epg_source_id: i64,
+    feed: std::fs::File,
+    source_tvg_ids: Vec<String>,
+) -> Result<u64, String> {
+    let (tx_batches, mut rx_batches) = tokio::sync::mpsc::channel(BATCHES_IN_FLIGHT);
+    let parser = tokio::task::spawn_blocking(move || {
+        let mut programs = nova_epg::parse(std::io::BufReader::new(feed));
+        let mut batch = Vec::with_capacity(REFRESH_BATCH);
+        for p in programs.by_ref() {
+            match p {
+                Ok(p) => {
+                    batch.push(p);
+                    if batch.len() == REFRESH_BATCH {
+                        let full = std::mem::replace(&mut batch, Vec::with_capacity(REFRESH_BATCH));
+                        if tx_batches
+                            .blocking_send(ParsedChunk::Programs(full))
+                            .is_err()
+                        {
+                            return; // the inserter gave up
+                        }
+                    }
+                }
+                // A broken element shouldn't discard the entire feed.
+                Err(e) => tracing::warn!(error = %e, "EPG parse: skipped malformed programme"),
+            }
+        }
+        if !batch.is_empty()
+            && tx_batches
+                .blocking_send(ParsedChunk::Programs(batch))
+                .is_err()
+        {
+            return;
+        }
+        let _ = tx_batches.blocking_send(ParsedChunk::Done(programs.take_channel_icons()));
+    });
+
+    let result: Result<u64, String> = async {
+        let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+        ProgramsRepository::clear_feed_tx(&mut tx, epg_source_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut covered = std::collections::HashSet::new();
+        let mut total: u64 = 0;
+        let icons = loop {
+            match rx_batches.recv().await {
+                Some(ParsedChunk::Programs(batch)) => {
+                    for p in &batch {
+                        if !covered.contains(&p.channel_tvg_id) {
+                            covered.insert(p.channel_tvg_id.clone());
+                        }
+                    }
+                    total += ProgramsRepository::insert_batch_tx(&mut tx, epg_source_id, &batch)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                Some(ParsedChunk::Done(icons)) => break icons,
+                None => return Err("EPG parser stopped unexpectedly".to_string()),
+            }
+        };
+        // Programmes written before feeds owned them, for the channels this
+        // feed now covers.
+        let covered: Vec<String> = covered.into_iter().collect();
+        ProgramsRepository::clear_unowned_tx(&mut tx, &covered)
+            .await
+            .map_err(|e| e.to_string())?;
+        let logos = nova_epg::match_channel_icons(&source_tvg_ids, &icons);
+        EpgSourcesRepository::replace_channel_logos_tx(&mut tx, epg_source_id, source_id, &logos)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(total)
+    }
+    .await;
+    // On failure the receiver is dropped: the parser stops at its next send.
+    drop(rx_batches);
+    let _ = parser.await;
+    result
+}
+
 async fn fail(
     app: &AppHandle,
     source_id: i64,
@@ -399,4 +449,172 @@ async fn fail(
         },
     );
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn profile_with_feed() -> (tempfile::TempDir, SqlitePool, i64, i64) {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = nova_storage::init_profile_db(dir.path().join("p.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let source = nova_storage::SourceRepository::new(&pool)
+            .create("xtream", "t", "http://h/get.php")
+            .await
+            .unwrap()
+            .id;
+        let feeds = EpgSourcesRepository::new(&pool);
+        feeds
+            .upsert(source, "http://h/xmltv.php", "xtream")
+            .await
+            .unwrap();
+        feeds
+            .upsert(source, "http://h/community.xml", "community")
+            .await
+            .unwrap();
+        let feed = feeds.list_for_source(source).await.unwrap()[0].id;
+        (dir, pool, source, feed)
+    }
+
+    fn xmltv(programmes: usize) -> std::fs::File {
+        let mut file = tempfile::tempfile().unwrap();
+        let mut body = String::from(
+            "<?xml version=\"1.0\"?><tv><channel id=\"cnn.us\"><icon src=\"https://img.example/cnn.png\"/></channel>",
+        );
+        for n in 0..programmes {
+            let channel = if n % 2 == 0 { "cnn.us" } else { "bbc.uk" };
+            body.push_str(&format!(
+                "<programme channel=\"{channel}\" start=\"20260101{:02}0000 +0000\" stop=\"20260101{:02}3000 +0000\"><title>Show {n}</title></programme>",
+                n % 24,
+                n % 24
+            ));
+        }
+        body.push_str("</tv>");
+        file.write_all(body.as_bytes()).unwrap();
+        std::io::Seek::rewind(&mut file).unwrap();
+        file
+    }
+
+    #[tokio::test]
+    async fn a_feed_is_ingested_in_bounded_batches_and_replaces_only_itself() {
+        let (_dir, pool, source, feed) = profile_with_feed().await;
+        let other = EpgSourcesRepository::new(&pool)
+            .list_for_source(source)
+            .await
+            .unwrap()[1]
+            .id;
+        // Another feed's programme for the same channel.
+        let mut tx = pool.begin().await.unwrap();
+        ProgramsRepository::insert_batch_tx(
+            &mut tx,
+            other,
+            &[Program {
+                channel_tvg_id: "cnn.us".into(),
+                title: "community".into(),
+                sub_title: None,
+                description: None,
+                start_utc: 0,
+                stop_utc: 10,
+                category: None,
+                icon_url: None,
+            }],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let tvg_ids = vec!["cnn.us".to_string()];
+        let n = 3 * REFRESH_BATCH + 7; // several batches through the channel
+        let inserted = ingest_feed(&pool, source, feed, xmltv(n), tvg_ids.clone())
+            .await
+            .unwrap();
+        assert_eq!(inserted, n as u64);
+        let again = ingest_feed(&pool, source, feed, xmltv(10), tvg_ids)
+            .await
+            .unwrap();
+        assert_eq!(again, 10);
+        let counts: Vec<(Option<i64>, i64)> = sqlx::query_as(
+            "SELECT epg_source_id, COUNT(*) FROM programs GROUP BY epg_source_id ORDER BY epg_source_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            counts,
+            [(Some(feed), 10), (Some(other), 1)],
+            "replaced itself only"
+        );
+        let logos: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM epg_channel_logos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(logos, 1, "the feed's channel icon is kept");
+    }
+
+    /// A one-shot loopback HTTP server answering with `head` then `body`.
+    async fn serve(head: String, body: Vec<u8>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request).await;
+            let _ = socket.write_all(head.as_bytes()).await;
+            let _ = socket.write_all(&body).await;
+            let _ = socket.shutdown().await;
+        });
+        format!("http://{addr}/xmltv.xml")
+    }
+
+    async fn fetch(url: &str) -> reqwest::Response {
+        reqwest::get(url).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn feeds_over_the_cap_are_refused_while_downloading() {
+        use std::io::Read;
+        // Under the cap: spooled whole.
+        let body = vec![b'x'; 1_000];
+        let url = serve(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            ),
+            body.clone(),
+        )
+        .await;
+        let mut file = spool_capped(fetch(&url).await, 2_000).await.unwrap();
+        let mut spooled = Vec::new();
+        file.read_to_end(&mut spooled).unwrap();
+        assert_eq!(spooled, body);
+
+        // A declared length over the cap: refused before reading the body.
+        let url = serve(
+            "HTTP/1.1 200 OK\r\nContent-Length: 5000\r\nConnection: close\r\n\r\n".into(),
+            vec![b'x'; 5_000],
+        )
+        .await;
+        assert!(spool_capped(fetch(&url).await, 2_000).await.is_err());
+
+        // No declared length: refused once the stream passes the cap.
+        let chunk = vec![b'x'; 1_500];
+        let mut chunked = Vec::new();
+        for _ in 0..4 {
+            chunked.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+            chunked.extend_from_slice(&chunk);
+            chunked.extend_from_slice(b"\r\n");
+        }
+        chunked.extend_from_slice(b"0\r\n\r\n");
+        let url = serve(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".into(),
+            chunked,
+        )
+        .await;
+        let refused = spool_capped(fetch(&url).await, 2_000).await.unwrap_err();
+        assert!(refused.contains("larger than"), "{refused}");
+    }
 }
