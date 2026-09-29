@@ -1962,15 +1962,17 @@ function ChannelTile({
   logoUrl,
   active,
   onClick,
+  profileId,
   channelId,
 }: {
   title: string;
   logoUrl: string | null;
   active: boolean;
   onClick: () => void;
+  profileId: string;
   channelId?: number;
 }) {
-  const guide = useChannelGuide(channelId, { enabled: channelId != null });
+  const guide = useChannelGuide(channelId, { profileId, enabled: channelId != null });
   return (
     <button
       type="button"
@@ -2064,6 +2066,7 @@ function CinemaChannelStrip({
           <div className="-mx-1 flex gap-3 overflow-x-auto px-1 [scrollbar-width:thin]">
             {bundle.map((c) => (
               <ChannelTile
+                profileId={profileId}
                 key={c.key}
                 title={c.title}
                 logoUrl={c.posterUrl}
@@ -2094,6 +2097,7 @@ function CinemaChannelStrip({
           <div className="-mx-1 flex gap-3 overflow-x-auto px-1 [scrollbar-width:thin]">
             {suggestions.map((g) => (
               <ChannelTile
+                profileId={profileId}
                 key={g.group}
                 title={g.title}
                 logoUrl={g.logoUrl}

@@ -294,6 +294,12 @@ export interface EpgFeedStatus {
 
 export type EpgRefreshStage = "downloading" | "parsing" | "complete" | "failed";
 
+/// `epg:refresh:done`: a source's guide refresh job ended.
+export interface EpgRefreshDone {
+  sourceId: number;
+  ok: boolean;
+}
+
 export interface EpgRefreshProgress {
   sourceId: number;
   epgSourceId: number;

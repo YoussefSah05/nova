@@ -122,7 +122,7 @@ export const PosterCard = memo(function PosterCard({
 
           <div className="min-w-0">
             <p className="line-clamp-1 text-xs font-medium text-foreground">{item.title}</p>
-            {guide?.now ? (
+            {live && guide?.now ? (
               <GuideLine guide={guide} className="mt-0.5" />
             ) : (
               item.subtitle && (

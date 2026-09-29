@@ -26,6 +26,9 @@ export function SourcesEpgSection({
   const [sources, setSources] = useState<Source[]>([]);
   const [epgUrl, setEpgUrl] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState<number | null>(null);
+  const [epgError, setEpgError] = useState<Record<number, string>>({});
+  /// Bumped per source when adding a feed queued its guide refresh.
+  const [guideQueued, setGuideQueued] = useState<Record<number, number>>({});
 
   const load = useCallback(async () => {
     try {
@@ -67,8 +70,15 @@ export function SourcesEpgSection({
   const addEpg = async (id: number) => {
     const url = (epgUrl[id] ?? "").trim();
     if (!url) return;
-    await invoke("add_epg_url", { profileId, sourceId: id, url }).catch(() => undefined);
+    try {
+      await invoke("add_epg_url", { profileId, sourceId: id, url });
+    } catch (e) {
+      setEpgError((prev) => ({ ...prev, [id]: `Couldn't add the feed: ${String(e)}` }));
+      return;
+    }
+    setEpgError((prev) => ({ ...prev, [id]: "" }));
     setEpgUrl((prev) => ({ ...prev, [id]: "" }));
+    setGuideQueued((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }));
   };
 
   if (sources.length === 0) {
@@ -92,10 +102,13 @@ export function SourcesEpgSection({
               options={REFRESH_OPTIONS}
             />
           </SettingRow>
-          <GuideStatusRow profileId={profileId} sourceId={s.id} />
+          <GuideStatusRow profileId={profileId} sourceId={s.id} refreshQueued={guideQueued[s.id]} />
           <SettingRow
             title="EPG (XMLTV) URL"
-            description="Add a community guide feed for this source; it is fetched right away."
+            description={
+              epgError[s.id] ||
+              "Add a community guide feed for this source; it is fetched right away."
+            }
           >
             <div className="flex w-72 items-center gap-2">
               <TextInput

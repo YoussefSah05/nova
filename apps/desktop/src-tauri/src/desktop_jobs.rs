@@ -286,23 +286,40 @@ impl JobHandler for ImportHandler {
             // process could mark its job done. Replaying it would duplicate
             // catalog rows; a committed import stamps the source atomically.
             if mode == ImportMode::Append && source.last_refreshed_at.is_some() {
+                // Its guide refresh may not have been queued before the stop.
+                queue_guide_refresh(&epg, source_id).await;
                 return Ok(());
             }
             emit_import_stage(&app, source_id, ImportStage::Connecting);
             if run_source_import(pool, app, source, mode).await {
-                match epg
-                    .enqueue_unique(&source_id.to_string(), EXPLICIT_PRIORITY)
-                    .await
-                {
-                    Ok(_) => epg.kick(),
-                    Err(error) => tracing::warn!(%error, source_id, "could not queue EPG refresh"),
-                }
+                queue_guide_refresh(&epg, source_id).await;
                 Ok(())
             } else {
                 Err("import failed".into())
             }
         })
     }
+}
+
+/// Queue a source's guide refresh after its catalog changed: its feeds may be
+/// new (an M3U `url-tvg`) and its channels' tvg-ids may have changed.
+async fn queue_guide_refresh(epg: &Arc<JobQueue>, source_id: i64) {
+    match epg
+        .enqueue_unique(&source_id.to_string(), EXPLICIT_PRIORITY)
+        .await
+    {
+        Ok(_) => epg.kick(),
+        Err(error) => tracing::warn!(%error, source_id, "could not queue EPG refresh"),
+    }
+}
+
+/// `epg:refresh:done`: a source's guide refresh job ended, however it ended
+/// (per-feed progress can stop short of `complete` on cancellation or error).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpgRefreshDone {
+    pub source_id: i64,
+    pub ok: bool,
 }
 
 struct EpgHandler {
@@ -325,7 +342,16 @@ impl JobHandler for EpgHandler {
             let _slot = take_slot(permit)?;
             let source_id = job.payload.parse().map_err(|_| "invalid EPG job")?;
             let running = control.start(EPG_KIND, source_id);
-            epg::run_epg_refresh_job(source_id, pool, app, &running.cancellation).await
+            let result =
+                epg::run_epg_refresh_job(source_id, pool, app.clone(), &running.cancellation).await;
+            let _ = app.emit(
+                "epg:refresh:done",
+                EpgRefreshDone {
+                    source_id,
+                    ok: result.is_ok(),
+                },
+            );
+            result
         })
     }
 }

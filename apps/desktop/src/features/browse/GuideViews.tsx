@@ -6,20 +6,18 @@ import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 
 import { cn } from "@/lib/utils";
-import type { ChannelNowAndNext, EpgRefreshProgress, Program } from "@/types";
+import type { ChannelNowAndNext, Program } from "@/types";
 import { formatGuideTime, GuideProfile, guideKeys, programmeProgress, useMinute } from "./guide";
 
 /// Makes the active profile's guide available to catalog cards, and drops
-/// cached guides whenever a guide refresh completes.
+/// cached guides once a source's guide refresh job finishes.
 export function GuideProvider({ profileId, children }: { profileId: string; children: ReactNode }) {
   const qc = useQueryClient();
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    void listen<EpgRefreshProgress>("epg:refresh:progress", (event) => {
-      if (event.payload.stage === "complete") {
-        void qc.invalidateQueries({ queryKey: guideKeys.all });
-      }
+    void listen("epg:refresh:done", () => {
+      void qc.invalidateQueries({ queryKey: guideKeys.all });
     })
       .then((stop) => {
         if (cancelled) stop();
@@ -35,16 +33,25 @@ export function GuideProvider({ profileId, children }: { profileId: string; chil
 }
 
 // ── Presentation ──────────────────────────────────────────────────────────────
+// Inline elements only: these render inside card and tile buttons.
 
 function ProgressBar({ programme, className }: { programme: Program; className?: string }) {
   useMinute();
+  const pct = Math.round(programmeProgress(programme));
   return (
-    <div className={cn("h-0.5 w-full overflow-hidden rounded-full bg-white/10", className)}>
-      <div
-        className="h-full rounded-full bg-primary/80 transition-[width] duration-500"
-        style={{ width: `${programmeProgress(programme)}%` }}
+    <span
+      role="progressbar"
+      aria-label={`${programme.title}: ${pct}% elapsed`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={pct}
+      className={cn("block h-0.5 w-full overflow-hidden rounded-full bg-white/10", className)}
+    >
+      <span
+        className="block h-full rounded-full bg-primary/80 transition-[width] duration-500"
+        style={{ width: `${pct}%` }}
       />
-    </div>
+    </span>
   );
 }
 
@@ -59,12 +66,12 @@ export function GuideLine({
 }) {
   if (!guide?.now) return null;
   return (
-    <div className={cn("flex min-w-0 flex-col gap-1", className)}>
-      <p className="truncate text-[11px] text-muted-foreground" title={guide.now.title}>
+    <span className={cn("flex min-w-0 flex-col gap-1", className)}>
+      <span className="block truncate text-[11px] text-muted-foreground" title={guide.now.title}>
         <span className="text-foreground/80">Now</span> · {guide.now.title}
-      </p>
+      </span>
       <ProgressBar programme={guide.now} />
-    </div>
+    </span>
   );
 }
 
@@ -85,25 +92,25 @@ export function GuideSummary({
   const dim = tone === "overlay" ? "text-white/65" : "text-muted-foreground";
   const strong = tone === "overlay" ? "text-white/90" : "text-foreground";
   return (
-    <div className={cn("flex min-w-0 flex-col gap-1.5 text-xs", className)}>
+    <span className={cn("flex min-w-0 flex-col gap-1.5 text-xs", className)}>
       {now && (
-        <div className="flex min-w-0 flex-col gap-1">
-          <p className={cn("truncate", strong)} title={now.title}>
+        <span className="flex min-w-0 flex-col gap-1">
+          <span className={cn("block truncate", strong)} title={now.title}>
             <span className="font-medium text-primary">Now</span> {now.title}
-          </p>
-          <div className="flex items-center gap-2">
+          </span>
+          <span className="flex items-center gap-2">
             <span className={cn("shrink-0 tabular-nums", dim)}>
               {formatGuideTime(now.startUtc)}–{formatGuideTime(now.stopUtc)}
             </span>
             <ProgressBar programme={now} className="max-w-40" />
-          </div>
-        </div>
+          </span>
+        </span>
       )}
       {next && (
-        <p className={cn("truncate", dim)} title={next.title}>
+        <span className={cn("block truncate", dim)} title={next.title}>
           <span className="tabular-nums">{formatGuideTime(next.startUtc)}</span> Next · {next.title}
-        </p>
+        </span>
       )}
-    </div>
+    </span>
   );
 }

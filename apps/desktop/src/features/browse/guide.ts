@@ -4,7 +4,7 @@
 //! `useChannelGuide`; requests made in the same moment are coalesced into one
 //! `epg_channels_now_and_next` call, cached per channel by TanStack Query,
 //! refetched when the current programme ends, and invalidated when a guide
-//! refresh completes. Rust picks each channel's guide (its own source's feed).
+//! refresh finishes. Rust picks each channel's guide (its own source's feed).
 
 import { createContext, useContext, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -14,9 +14,11 @@ import type { ChannelNowAndNext, Program } from "@/types";
 
 /// Requests made within this window share one IPC call.
 const BATCH_WINDOW_MS = 16;
-/// Re-check a channel with no current programme this often (a refresh
-/// completing also invalidates it).
-const IDLE_REFETCH_MS = 5 * 60_000;
+/// Re-check a channel with no current programme this often (a finished guide
+/// refresh also invalidates it).
+const IDLE_REFETCH_MS = 15 * 60_000;
+/// Channels per IPC call (a grid page can hold a few hundred cards).
+const MAX_BATCH = 100;
 
 export const guideKeys = {
   all: ["guide"] as const,
@@ -54,18 +56,22 @@ async function flush(profileId: string) {
   const batch = pending.get(profileId);
   pending.delete(profileId);
   if (!batch) return;
-  try {
-    const guides = await invoke<ChannelNowAndNext[]>("epg_channels_now_and_next", {
-      profileId,
-      channelIds: [...batch.keys()],
-    });
-    const byId = new Map(guides.map((g) => [g.channelId, g]));
-    for (const [channelId, waiters] of batch) {
-      const guide = byId.get(channelId) ?? { channelId, now: null, next: null };
-      for (const w of waiters) w.resolve(guide);
+  const ids = [...batch.keys()];
+  for (let i = 0; i < ids.length; i += MAX_BATCH) {
+    const chunk = ids.slice(i, i + MAX_BATCH);
+    try {
+      const guides = await invoke<ChannelNowAndNext[]>("epg_channels_now_and_next", {
+        profileId,
+        channelIds: chunk,
+      });
+      const byId = new Map(guides.map((g) => [g.channelId, g]));
+      for (const channelId of chunk) {
+        const guide = byId.get(channelId) ?? { channelId, now: null, next: null };
+        for (const w of batch.get(channelId) ?? []) w.resolve(guide);
+      }
+    } catch (error) {
+      for (const channelId of chunk) for (const w of batch.get(channelId) ?? []) w.reject(error);
     }
-  } catch (error) {
-    for (const waiters of batch.values()) for (const w of waiters) w.reject(error);
   }
 }
 
@@ -81,23 +87,25 @@ export function msUntilGuideChange(
 }
 
 /// What's on now and next on a channel row. `profileId` defaults to the
-/// surrounding `GuideProvider`'s; pass `enabled: false` for channels that
-/// can't have a guide (no `tvgId`).
+/// surrounding `GuideProvider`'s. With `enabled: false` (not a channel, or a
+/// bundle of several) it is always `undefined` — never another item's cached
+/// guide under the same id.
 export function useChannelGuide(
   channelId: number | null | undefined,
   options: { profileId?: string; enabled?: boolean } = {}
 ): ChannelNowAndNext | undefined {
   const contextProfile = useContext(GuideProfile);
   const profileId = options.profileId ?? contextProfile;
+  const active = profileId != null && channelId != null && (options.enabled ?? true);
   const { data } = useQuery({
-    queryKey: guideKeys.channel(profileId ?? "", channelId ?? -1),
+    queryKey: guideKeys.channel(profileId ?? "", active ? channelId : -1),
     queryFn: () => loadGuide(profileId!, channelId!),
-    enabled: profileId != null && channelId != null && (options.enabled ?? true),
+    enabled: active,
     staleTime: 60_000,
     refetchInterval: (query) => msUntilGuideChange(query.state.data),
     retry: false,
   });
-  return data;
+  return active ? data : undefined;
 }
 
 // ── Shared minute clock (progress bars) ───────────────────────────────────────

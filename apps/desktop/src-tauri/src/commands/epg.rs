@@ -106,7 +106,8 @@ pub async fn epg_range(
 /// Manually register an XMLTV URL for a source. Use this to wire up community
 /// EPG feeds (iptv-org, epg.pw, EPGTalk, etc.) for sources that don't ship
 /// their own EPG, or to supplement provider EPG with extra channel coverage.
-/// The feed is refreshed straight away (a queued EPG job).
+/// The feed is refreshed straight away (a queued EPG job); a failure to
+/// queue it is logged — the feed is saved and the next refresh fetches it.
 #[tauri::command]
 pub async fn add_epg_url(
     profile_id: String,
@@ -119,12 +120,15 @@ pub async fn add_epg_url(
     EpgSourcesRepository::new(&pool)
         .upsert(source_id, url.trim(), "community")
         .await?;
-    state
+    if let Err(error) = state
         .jobs_for_profile(&profile_id, pool, app)
         .await
         .epg_refresh(source_id)
         .await
-        .map_err(ApiError::Internal)
+    {
+        tracing::warn!(%error, source_id, "could not queue EPG refresh for a new feed");
+    }
+    Ok(())
 }
 
 /// Now-and-next for channel rows (what the browse cards and the live player

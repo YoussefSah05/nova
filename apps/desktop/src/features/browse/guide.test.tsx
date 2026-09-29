@@ -71,7 +71,7 @@ it("coalesces the channels on screen into one guide request", async () => {
   expect(result.current.map((g) => g?.now?.title ?? null)).toEqual(["show 1", "show 2", null]);
 });
 
-it("refetches a channel's guide when a guide refresh completes", async () => {
+it("refetches a channel's guide when a guide refresh job finishes", async () => {
   mocks.invoke.mockResolvedValueOnce([{ channelId: 7, now: null, next: null }]);
   const { result } = renderHook(() => useChannelGuide(7), { wrapper: wrapper() });
   await waitFor(() => expect(result.current).toBeDefined());
@@ -81,11 +81,38 @@ it("refetches a channel's guide when a guide refresh completes", async () => {
   mocks.invoke.mockResolvedValueOnce([
     { channelId: 7, now: programme("News", now - 60, now + 600), next: null },
   ]);
-  // Progress along the way doesn't refetch; completion does.
-  act(() => mocks.handlers.forEach((h) => h({ payload: { sourceId: 1, stage: "parsing" } })));
-  act(() => mocks.handlers.forEach((h) => h({ payload: { sourceId: 1, stage: "complete" } })));
+  act(() => mocks.handlers.forEach((h) => h({ payload: { sourceId: 1, ok: true } })));
   await waitFor(() => expect(result.current?.now?.title).toBe("News"));
   expect(mocks.invoke).toHaveBeenCalledTimes(2);
+});
+
+it("never shows a channel's guide on another item with the same id", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  mocks.invoke.mockResolvedValue([
+    { channelId: 1, now: programme("Channel 1 show", now - 60, now + 600), next: null },
+  ]);
+  const { result } = renderHook(
+    () => ({
+      channel: useChannelGuide(1),
+      // A series card from source 1, or a bundle whose representative is 1.
+      other: useChannelGuide(1, { enabled: false }),
+    }),
+    { wrapper: wrapper() }
+  );
+  await waitFor(() => expect(result.current.channel?.now?.title).toBe("Channel 1 show"));
+  expect(result.current.other).toBeUndefined();
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+});
+
+it("a failed guide request fails every channel waiting on it", async () => {
+  mocks.invoke.mockRejectedValueOnce(new Error("profile closed"));
+  const { result } = renderHook(() => [4, 5].map((id) => useChannelGuide(id)), {
+    wrapper: wrapper(),
+  });
+  await waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(1));
+  // Neither query hangs: both settle (as errors) and show no guide.
+  await new Promise((r) => setTimeout(r, 50));
+  expect(result.current).toEqual([undefined, undefined]);
 });
 
 it("checks again when the current programme ends", () => {
@@ -99,8 +126,8 @@ it("checks again when the current programme ends", () => {
   expect(msUntilGuideChange(guide(programme("a", at - 60, at + 120), null), nowMs)).toBe(121_000);
   expect(msUntilGuideChange(guide(null, programme("b", at + 30, at + 90)), nowMs)).toBe(31_000);
   expect(msUntilGuideChange(guide(programme("a", at - 60, at), null), nowMs)).toBe(5_000);
-  expect(msUntilGuideChange(guide(null, null), nowMs)).toBe(300_000);
-  expect(msUntilGuideChange(guide(programme("a", at, at + 86_400), null), nowMs)).toBe(300_000);
+  expect(msUntilGuideChange(guide(null, null), nowMs)).toBe(900_000);
+  expect(msUntilGuideChange(guide(programme("a", at, at + 86_400), null), nowMs)).toBe(900_000);
 });
 
 it("summarises a source's guide feeds in plain words", () => {

@@ -39,9 +39,9 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `stop_playback` | `{ token: string }` | `void` | 5 |
 | `epg_now_and_next` | `{ profileId, tvgIds: string[], sourceId?: number }` | `NowAndNext[]` (one per requested id; a channel shows one feed's guide — with `sourceId`, that source's first feed covering it, else the first covering feed — so now and next never mix feeds) | 4, M24 |
 | `epg_range` | `{ profileId, tvgIds, fromUtc, toUtc, sourceId?: number }` | `Program[]` (each channel from the same single guide feed as `epg_now_and_next`; no duplicates across feeds) | 4, M24 |
-| `add_epg_url` | `{ profileId, sourceId, url }` | `void` (registers a community feed and queues the source's guide refresh) | 4, M24 |
+| `add_epg_url` | `{ profileId, sourceId, url }` | `void` (registers a community feed and queues the source's guide refresh; a failure to queue is logged, the feed stays saved) | 4, M24 |
 | `epg_channels_now_and_next` | `{ profileId, channelIds: number[] }` | `ChannelNowAndNext[] { channelId, now, next }` (one per requested id, in order; each channel reads its own source's guide feed; empty for channels without a `tvgId`) — what cards, previews and the live player use, batched client-side | M24 |
-| `list_epg_feeds` | `{ profileId, sourceId }` | `EpgFeedStatus[] { id, kind, lastRefreshUtc, lastError, programmeCount }` — never the feed URL (Xtream feed URLs carry credentials) | M24 |
+| `list_epg_feeds` | `{ profileId, sourceId }` | `EpgFeedStatus[] { id, kind, lastRefreshUtc, lastError, programmeCount }` — never the feed URL (Xtream feed URLs carry credentials); URLs in stored errors are redacted | M24 |
 | `epg_refresh` | `{ profileId, sourceId }` | `void` (durable job: each feed is downloaded to a temp file capped at 512 MiB, parsed into bounded staged batches, then replaces only its own programmes in one short transaction; a feed that parses to no programmes fails and keeps its previous guide). Also queued automatically after every successful import (add or refresh) | 4, M24 |
 | `mpv_open_stream` | `{ profileId, mediaKind, mediaId, title }` | `{ token, engine: 'mpv', embedded }` | 5 |
 | `mpv_close` | `{ token }` | `void` | 5 |
@@ -243,7 +243,8 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | `live:caption` | `{ channel_id: number, cue: VttCue }` | 9 |
 | `live:caption:translated` | `{ channel_id: number, target_lang: string, cue: VttCue }` | 10 |
 | `jobs:queue:changed` | `{ jobs: JobSummary[] }` | 2 |
-| `epg:refresh:progress` | `{ sourceId, epgSourceId, stage: 'downloading'\|'parsing'\|'complete'\|'failed', inserted, elapsedMs, error }` (per feed; `complete` invalidates cached guides) | 4, M24 |
+| `epg:refresh:progress` | `{ sourceId, epgSourceId, stage: 'downloading'\|'parsing'\|'complete'\|'failed', inserted, elapsedMs, error }` (per feed) | 4, M24 |
+| `epg:refresh:done` | `{ sourceId, ok }` — a source's guide refresh job ended, however it ended (cancelled, failed, done); invalidates cached guides | M24 |
 | `mpv:state` | `MpvPlayerState` | 5 |
 | `playback:ended` | `{ token, nextEpisode: SeriesEpisode \| null, autoplay }` — native media played to its end; next episode and autoplay decided in Rust | M14 |
 | `playback:recover` | `{ token, mediaKind, mediaId, attempt, otherSource }` — the native session failed; bounded recovery (same item once, then another source of the title, ≤ 3 attempts) decided in Rust; the player reopens it for its own token | M15 |
