@@ -1,7 +1,11 @@
 use nova_hls_proxy::SessionRegistry;
 use nova_mpv_player::MpvEngine;
 use sqlx::SqlitePool;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering},
+    sync::Arc,
+};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::airplay::AirPlayEngine;
@@ -10,6 +14,15 @@ use crate::desktop_jobs::DesktopJobs;
 use crate::model_runtime::ModelRuntimeManager;
 use crate::playback_coordinator::PlaybackCoordinator;
 use crate::resource_policy::PlaybackActivityGuard;
+
+/// A playback resource held for the page that opened it: its session token,
+/// the page epoch it was opened in, and the guard that keeps background work
+/// suspended while it plays.
+pub struct OwnedPlayback {
+    pub token: String,
+    pub epoch: u64,
+    _guard: PlaybackActivityGuard,
+}
 
 pub struct AppState {
     /// Pool for app.db (profiles, app_settings).
@@ -40,12 +53,15 @@ pub struct AppState {
     /// Playback policy of the native session: resume, progress, completion,
     /// next episode (Rust-owned; React renders).
     pub playback: Arc<PlaybackCoordinator>,
-    /// Native mpv has one replaceable session; this guard tracks its lifetime.
-    pub mpv_activity: Mutex<Option<PlaybackActivityGuard>>,
-    /// Web/HLS and AirPlay sessions are released by their proxy token.
-    pub stream_activity: Mutex<HashMap<String, PlaybackActivityGuard>>,
-    /// AirPlay has one AVPlayer item, separate from local mpv and proxy tokens.
-    pub airplay_activity: Mutex<Option<PlaybackActivityGuard>>,
+    /// Native mpv has one replaceable session; this tracks its lifetime.
+    pub mpv_activity: Mutex<Option<OwnedPlayback>>,
+    /// Web/HLS sessions, by proxy token.
+    pub stream_activity: Mutex<HashMap<String, OwnedPlayback>>,
+    /// AirPlay has one AVPlayer item (token: its proxy session).
+    pub airplay_activity: Mutex<Option<OwnedPlayback>>,
+    /// Bumped whenever the webview starts loading a page: playback opened for
+    /// an older page has no owner left and is released (see `lifecycle`).
+    page_epoch: AtomicU64,
 }
 
 impl AppState {
@@ -68,6 +84,26 @@ impl AppState {
             mpv_activity: Mutex::new(None),
             stream_activity: Mutex::new(HashMap::new()),
             airplay_activity: Mutex::new(None),
+            page_epoch: AtomicU64::new(0),
+        }
+    }
+
+    /// The current page's epoch; capture it before a playback open awaits.
+    pub fn page_epoch(&self) -> u64 {
+        self.page_epoch.load(Ordering::SeqCst)
+    }
+
+    /// A new page started loading; returns its epoch.
+    pub fn next_page(&self) -> u64 {
+        self.page_epoch.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Hold a playback resource for the page of `epoch`.
+    pub fn own_playback(&self, token: String, epoch: u64) -> OwnedPlayback {
+        OwnedPlayback {
+            token,
+            epoch,
+            _guard: self.model_runtime.playback_activity(),
         }
     }
 
@@ -107,11 +143,9 @@ impl AppState {
         self.desktop_jobs.lock().await.get(profile_id).cloned()
     }
 
-    pub async fn track_stream_activity(&self, token: String) {
-        self.stream_activity
-            .lock()
-            .await
-            .insert(token, self.model_runtime.playback_activity());
+    pub async fn track_stream_activity(&self, token: String, epoch: u64) {
+        let owned = self.own_playback(token.clone(), epoch);
+        self.stream_activity.lock().await.insert(token, owned);
     }
 
     pub async fn release_stream_activity(&self, token: &str) {
@@ -168,8 +202,8 @@ mod tests {
             .unwrap();
         let state = AppState::new(pool, 0, SessionRegistry::default());
 
-        state.track_stream_activity("one".into()).await;
-        state.track_stream_activity("two".into()).await;
+        state.track_stream_activity("one".into(), 0).await;
+        state.track_stream_activity("two".into(), 0).await;
         assert_eq!(
             state
                 .model_runtime

@@ -455,13 +455,18 @@ model-download completion cannot restart an inactive session.
 
 No command: Rust owns it (`lifecycle.rs`).
 
-- **Webview page load** (a reload, and the first load) and **app exit**: the native session's
-  progress is written (bounded to 2 s), then mpv is closed, AirPlay disengaged, every proxy session
-  (and its ffmpeg remux) released, caption transcription stopped and every playback guard dropped —
-  background work resumes. The frontend holds no playback token across a reload.
+- **Webview page load** (a reload, and the first load): the page epoch moves on at once. Playback
+  opened for an older page is released — the native session after its progress write (bounded to
+  2 s), AirPlay, proxy sessions and their ffmpeg remuxes, caption transcription — with its
+  guards, so background work resumes. What the new page already opened stays. An open still in
+  flight for the old page (`mpv_open_stream`, `resolve_stream`, `airplay_engage`) undoes itself and
+  fails with "the page reloaded".
+- **App exit**: the native session's progress is written (bounded), proxy sessions, remuxes and
+  transcription stop, every guard drops; mpv and AirPlay end with the process.
 - **Sleep** (`NSWorkspaceWillSleepNotification`): the native session pauses, which writes its
-  progress. **Wake**: a live channel that was playing gets `playback:recover { reason: 'wake' }` and
-  reconnects at the live edge; VOD and a channel the user had paused stay paused.
+  progress. **Wake**: after 3 s for the network, a live channel that was playing gets
+  `playback:recover { reason: 'wake' }` (with a fresh recovery budget) and reconnects at the live
+  edge, unless the Mac slept again first; VOD and a channel the user had paused stay paused.
 
 ## Translation removed (2026-09-27)
 

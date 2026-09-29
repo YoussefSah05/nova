@@ -130,16 +130,18 @@ pub fn run() {
             Ok(())
         })
         // A page starting to load (a reload, or the first load) has no player:
-        // nothing from a previous page may keep playing or hold playback
-        // guards.
+        // nothing a previous page opened may keep playing or hold playback
+        // guards. The epoch moves at once, so opens still in flight for the
+        // old page undo themselves.
         .on_page_load(|webview, payload| {
             if payload.event() != PageLoadEvent::Started || webview.label() != "main" {
                 return;
             }
             let app = webview.app_handle().clone();
+            let epoch = app.state::<state::AppState>().next_page();
             tauri::async_runtime::spawn(async move {
                 let state = app.state::<state::AppState>();
-                lifecycle::release_all_playback(&state, Some(&app)).await;
+                lifecycle::release_for_page(&state, Some(&app), epoch).await;
             });
         })
         .invoke_handler(tauri::generate_handler![
@@ -281,7 +283,7 @@ pub fn run() {
             // playback resource (ffmpeg remuxes, caption transcription).
             if let RunEvent::Exit = event {
                 let state = app.state::<state::AppState>();
-                tauri::async_runtime::block_on(lifecycle::release_all_playback(&state, Some(app)));
+                tauri::async_runtime::block_on(lifecycle::release_for_exit(&state));
             }
         });
 }

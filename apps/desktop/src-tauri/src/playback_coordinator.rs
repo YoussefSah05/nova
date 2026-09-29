@@ -15,6 +15,7 @@
 //! can't race its own progress writes.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
@@ -51,6 +52,9 @@ const MAX_SOURCE_SWITCHES: u32 = 3;
 /// however often a source plays and fails again.
 const MAX_RECOVERIES_PER_WINDOW: u32 = 5;
 const RECOVERY_WINDOW_MS: i64 = 10 * 60 * 1000;
+/// After a wake, how long to give Wi-Fi to come back before reconnecting a
+/// live channel (a reconnect before the network is up would just fail).
+const WAKE_SETTLE_MS: u64 = 3_000;
 
 /// What the policy asks the coordinator to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -369,10 +373,16 @@ enum Msg {
         token: String,
         mode: Option<String>,
     },
-    /// The Mac is going to sleep.
-    Sleep(oneshot::Sender<()>),
-    /// The Mac woke up.
-    Wake(oneshot::Sender<()>),
+    /// The Mac is going to sleep (`done` for tests).
+    Sleep(Option<oneshot::Sender<()>>),
+    /// The Mac woke up (`done` for tests).
+    Wake(Option<oneshot::Sender<()>>),
+    /// The network had time to come back after a wake: reconnect `token`
+    /// unless the Mac slept again since (`sleep_seq`).
+    Reconnect {
+        token: String,
+        sleep_seq: u64,
+    },
 }
 
 /// Owns the one native playback session's policy, on an ordered actor task.
@@ -382,6 +392,8 @@ pub struct PlaybackCoordinator {
     engine: Arc<MpvEngine>,
     sink: OnceLock<EventSink>,
     clock: Instant,
+    /// How long a wake waits before reconnecting a live channel.
+    wake_settle_ms: AtomicU64,
 }
 
 impl PlaybackCoordinator {
@@ -393,6 +405,7 @@ impl PlaybackCoordinator {
             engine,
             sink: OnceLock::new(),
             clock: Instant::now(),
+            wake_settle_ms: AtomicU64::new(WAKE_SETTLE_MS),
         })
     }
 
@@ -452,18 +465,36 @@ impl PlaybackCoordinator {
 
     /// The Mac is about to sleep: pause the native session (the pause writes
     /// its progress) and remember whether a live stream should reconnect.
+    /// Never blocks: called on the main thread by the OS notification, and
+    /// queued in order with the wake that follows.
+    pub fn notify_sleep(&self) {
+        let _ = self.tx.send(Msg::Sleep(None));
+    }
+
+    /// The Mac woke up: a live channel that was playing reconnects once the
+    /// network had [`WAKE_SETTLE_MS`] to come back; anything else stays
+    /// paused for the user. Never blocks.
+    pub fn notify_wake(&self) {
+        let _ = self.tx.send(Msg::Wake(None));
+    }
+
+    /// [`Self::notify_sleep`], returning once handled (tests).
     pub async fn sleep(&self) {
         let (done, wait) = oneshot::channel();
-        let _ = self.tx.send(Msg::Sleep(done));
+        let _ = self.tx.send(Msg::Sleep(Some(done)));
         let _ = wait.await;
     }
 
-    /// The Mac woke up: a live channel that was playing reconnects; anything
-    /// else stays paused for the user.
+    /// [`Self::notify_wake`], returning once handled (tests).
     pub async fn wake(&self) {
         let (done, wait) = oneshot::channel();
-        let _ = self.tx.send(Msg::Wake(done));
+        let _ = self.tx.send(Msg::Wake(Some(done)));
         let _ = wait.await;
+    }
+
+    /// Shorten the wake settle (tests).
+    pub fn set_wake_settle_ms(&self, ms: u64) {
+        self.wake_settle_ms.store(ms, Ordering::Relaxed);
     }
 
     /// Decide on one given snapshot, in order with everything else (tests).
@@ -488,8 +519,10 @@ impl PlaybackCoordinator {
         // The item a `playback:recover` asked the player to open next: when
         // it arrives its chain continues; any other open is the user's.
         let mut expected: Option<(String, i64)> = None;
-        // The live session (by token) to reconnect when the Mac wakes.
+        // The live session (by token) to reconnect when the Mac wakes, and
+        // how many sleeps began (a reconnect after a newer sleep is stale).
         let mut reconnect_on_wake: Option<String> = None;
+        let mut sleep_seq: u64 = 0;
         while let Some(msg) = rx.recv().await {
             match msg {
                 Msg::Poke => {
@@ -536,6 +569,9 @@ impl PlaybackCoordinator {
                         if let Some(session) = active.take() {
                             self.close_session(session).await;
                         }
+                        // A recovery the player never acted on doesn't make
+                        // the user's next open of that item a recovery.
+                        expected = None;
                     }
                     let _ = done.send(());
                 }
@@ -545,6 +581,7 @@ impl PlaybackCoordinator {
                     }
                 }
                 Msg::Sleep(done) => {
+                    sleep_seq += 1;
                     reconnect_on_wake = None;
                     if let Some(session) = active.as_ref() {
                         if session.policy.reconnects_on_wake() {
@@ -554,13 +591,38 @@ impl PlaybackCoordinator {
                             tracing::debug!(error = %e, "could not pause for sleep");
                         }
                     }
-                    let _ = done.send(());
+                    if let Some(done) = done {
+                        let _ = done.send(());
+                    }
                 }
                 Msg::Wake(done) => {
-                    let token = reconnect_on_wake.take();
-                    if let Some(session) =
-                        active.as_ref().filter(|s| Some(&s.token) == token.as_ref())
-                    {
+                    if let Some(token) = reconnect_on_wake.take() {
+                        let tx = self.tx.clone();
+                        let settle = self.wake_settle_ms.load(Ordering::Relaxed);
+                        let seq = sleep_seq;
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(settle)).await;
+                            let _ = tx.send(Msg::Reconnect {
+                                token,
+                                sleep_seq: seq,
+                            });
+                        });
+                    }
+                    if let Some(done) = done {
+                        let _ = done.send(());
+                    }
+                }
+                Msg::Reconnect {
+                    token,
+                    sleep_seq: seq,
+                } => {
+                    if seq != sleep_seq {
+                        continue; // the Mac slept again since
+                    }
+                    if let Some(session) = active.as_ref().filter(|s| s.token == token) {
+                        // A connection dropped by sleep isn't a failing
+                        // source: the title gets a fresh recovery budget.
+                        chains.remove(&session.chain_key());
                         expected = Some((session.media_kind.clone(), session.media_id));
                         self.emit(PlaybackEvent::Recover(PlaybackRecover {
                             token: session.token.clone(),
@@ -571,7 +633,6 @@ impl PlaybackCoordinator {
                             reason: RecoverReason::Wake,
                         }));
                     }
-                    let _ = done.send(());
                 }
             }
         }

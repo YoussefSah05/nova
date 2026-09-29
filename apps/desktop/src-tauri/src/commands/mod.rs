@@ -3437,11 +3437,13 @@ mod stabilization_tests {
         use crate::playback_coordinator::{
             PlaybackCoordinator, PlaybackEvent, PlaybackRecover, RecoverReason,
         };
-        use nova_mpv_player::MpvPlaybackPhase::{Paused, Playing};
+        use nova_mpv_player::MpvPlaybackPhase::{Error, Paused, Playing};
+        use std::time::Duration;
 
         let dir = tempfile::tempdir().unwrap();
         let pool = open_db(&dir.path().join("p.db")).await;
         let coordinator = PlaybackCoordinator::new(nova_mpv_player::MpvEngine::new());
+        coordinator.set_wake_settle_ms(20);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PlaybackRecover>();
         coordinator.start(std::sync::Arc::new(move |event| {
             if let PlaybackEvent::Recover(r) = event {
@@ -3457,12 +3459,21 @@ mod stabilization_tests {
                     .await;
             }
         };
+        async fn next(
+            rx: &mut tokio::sync::mpsc::UnboundedReceiver<PlaybackRecover>,
+        ) -> Option<PlaybackRecover> {
+            tokio::time::timeout(Duration::from_millis(300), rx.recv())
+                .await
+                .ok()
+                .flatten()
+        }
 
-        // A live channel playing through sleep reconnects on wake, once.
+        // A live channel playing through sleep reconnects once the network
+        // had a moment, once.
         play("live", "live", Playing).await;
         coordinator.sleep().await;
         coordinator.wake().await;
-        let r = rx.try_recv().expect("a reconnect");
+        let r = next(&mut rx).await.expect("a reconnect");
         assert_eq!(
             (
                 r.token.as_str(),
@@ -3475,9 +3486,27 @@ mod stabilization_tests {
         );
         coordinator.wake().await;
         assert!(
-            rx.try_recv().is_err(),
+            next(&mut rx).await.is_none(),
             "a second wake without sleep does nothing"
         );
+
+        // A connection dropped by sleep isn't a failing source: a channel that
+        // already spent its retry gets a fresh one after the wake reconnect.
+        play("live-0", "live", Playing).await;
+        coordinator
+            .observe_at(engine_state("live-0", Error, 30.0), 2_000)
+            .await;
+        assert_eq!(next(&mut rx).await.unwrap().reason, RecoverReason::Failure);
+        play("live-1", "live", Playing).await; // the recovery's reopen
+        coordinator.sleep().await;
+        coordinator.wake().await;
+        assert_eq!(next(&mut rx).await.unwrap().reason, RecoverReason::Wake);
+        play("live-2", "live", Playing).await; // the wake's reopen
+        coordinator
+            .observe_at(engine_state("live-2", Error, 30.0), 3_000)
+            .await;
+        let failure = next(&mut rx).await.expect("a fresh retry after the wake");
+        assert_eq!(failure.reason, RecoverReason::Failure);
 
         // A movie stays paused for the user; so does a live channel the user
         // had paused.
@@ -3487,14 +3516,24 @@ mod stabilization_tests {
         play("paused-live", "live", Paused).await;
         coordinator.sleep().await;
         coordinator.wake().await;
-        assert!(rx.try_recv().is_err());
+        assert!(next(&mut rx).await.is_none());
 
         // A live channel replaced between sleep and wake isn't reconnected.
         play("live-a", "live", Playing).await;
         coordinator.sleep().await;
         play("live-b", "live", Playing).await;
         coordinator.wake().await;
-        assert!(rx.try_recv().is_err());
+        assert!(next(&mut rx).await.is_none());
+
+        // Sleeping again before the reconnect fires cancels it.
+        play("live-c", "live", Playing).await;
+        coordinator.sleep().await;
+        coordinator.wake().await;
+        coordinator.sleep().await;
+        assert!(
+            next(&mut rx).await.is_none(),
+            "no reconnect into a sleeping Mac"
+        );
     }
 
     #[tokio::test]

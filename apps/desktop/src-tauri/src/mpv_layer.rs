@@ -33,7 +33,7 @@ use nova_mpv_player::{MpvRawHandle, MpvRenderContext, RenderLifecycleHandler, Vi
 
 use objc2::rc::Retained;
 use objc2::runtime::Bool;
-use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
+use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass, MainThreadMarker};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use objc2_quartz_core::{CALayer, CAOpenGLLayer};
 
@@ -422,6 +422,14 @@ impl RenderLifecycleHandler for MpvLayerHandler {
         // to the main thread, synchronously — this guarantees the free
         // completes before the engine destroys the underlying mpv handle.
         let boxed = Box::into_raw(Box::new(Some(render_ctx)));
+        // Already on the main thread (the app quitting drops the session
+        // there): free inline — `dispatch_sync` onto the main queue from the
+        // main queue traps or deadlocks.
+        if MainThreadMarker::new().is_some() {
+            // SAFETY: `boxed` is freshly leaked and freed exactly once here.
+            unsafe { drop_render_ctx_on_main(boxed as *mut c_void) };
+            return;
+        }
         // SAFETY: `boxed` is freshly leaked; main will reconstitute the Box
         // and drop it, ensuring the MpvRenderContext (and the libmpv free
         // call) runs exactly once on the main thread.

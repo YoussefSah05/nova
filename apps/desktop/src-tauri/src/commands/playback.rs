@@ -39,6 +39,7 @@ pub async fn mpv_open_stream(
     title: String,
     state: State<'_, AppState>,
 ) -> Result<MpvOpenResult, ApiError> {
+    let epoch = state.page_epoch();
     let pool = require_profile_pool(&profile_id, &state).await?;
     let resolved = PlaybackRepository::new(&pool)
         .resolve_stream_url(&media_kind, media_id)
@@ -52,7 +53,7 @@ pub async fn mpv_open_stream(
             user_agent: Some("Mozilla/5.0 (compatible; nova-iptv/1.0)".to_string()),
         })
         .map_err(|e| ApiError::Internal(format!("native player failed: {e}")))?;
-    *state.mpv_activity.lock().await = Some(state.model_runtime.playback_activity());
+    *state.mpv_activity.lock().await = Some(state.own_playback(opened.token.clone(), epoch));
     // Only now that the new file opened: the coordinator writes where the
     // previous item stopped (its last observed position), then tracks this
     // one. A failed open leaves the previous session tracked.
@@ -60,6 +61,17 @@ pub async fn mpv_open_stream(
         .playback
         .begin(opened.token.clone(), pool, media_kind, media_id)
         .await;
+    if state.page_epoch() != epoch {
+        // The page that asked for this reloaded meanwhile: nobody will show
+        // or close it.
+        state.playback.finish(Some(&opened.token)).await;
+        let _ = state.mpv_engine.close(&opened.token);
+        let mut activity = state.mpv_activity.lock().await;
+        if activity.as_ref().is_some_and(|a| a.token == opened.token) {
+            activity.take();
+        }
+        return Err(ApiError::Internal("the page reloaded".into()));
+    }
     Ok(opened)
 }
 
@@ -296,6 +308,7 @@ pub async fn resolve_stream(
     route_override: Option<PlaybackRoute>,
     state: State<'_, AppState>,
 ) -> Result<ResolvedStream, ApiError> {
+    let epoch = state.page_epoch();
     let pool = require_profile_pool(&profile_id, &state).await?;
     let resolved = PlaybackRepository::new(&pool)
         .resolve_stream_url(&media_kind, media_id)
@@ -332,7 +345,13 @@ pub async fn resolve_stream(
         ),
     };
 
-    state.track_stream_activity(token.clone()).await;
+    state.track_stream_activity(token.clone(), epoch).await;
+    if state.page_epoch() != epoch {
+        // Opened for a page that reloaded meanwhile.
+        state.hls_sessions.release(&token).await;
+        state.release_stream_activity(&token).await;
+        return Err(ApiError::Internal("the page reloaded".into()));
+    }
 
     Ok(ResolvedStream {
         url,
@@ -457,6 +476,7 @@ pub async fn airplay_engage(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AirPlayEngageResult, ApiError> {
+    let epoch = state.page_epoch();
     let pool = require_profile_pool(&profile_id, &state).await?;
     let resolved = PlaybackRepository::new(&pool)
         .resolve_stream_url(&media_kind, media_id)
@@ -481,7 +501,12 @@ pub async fn airplay_engage(
         ),
     };
 
-    *state.airplay_activity.lock().await = Some(state.model_runtime.playback_activity());
+    if state.page_epoch() != epoch {
+        // Asked for by a page that reloaded meanwhile.
+        state.hls_sessions.release(&info.token).await;
+        return Err(ApiError::Internal("the page reloaded".into()));
+    }
+    *state.airplay_activity.lock().await = Some(state.own_playback(info.token.clone(), epoch));
 
     state.airplay.engage(&app, url, position_sec.max(0.0));
     Ok(AirPlayEngageResult {
