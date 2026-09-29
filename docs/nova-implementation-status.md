@@ -29,7 +29,7 @@
 | M02 Model library domain/persistence | COMPLETE | `nova-core::models`, app migrations 0002/0003, `model_registry.rs`. | Descriptor set is fixed at compile time (Whisper, E5); `artifact_revision` always null. |
 | M03 External model storage | COMPLETE (unqualified) | Bookmarks in `mac_model_library.rs`; offline → `unavailable`, reconnect restores. | No physical-drive or sandbox qualification; downloads always go to the internal library. |
 | M04 Runtime manager / leases | COMPLETE (backend) | `model_runtime.rs`: shared load, leases, LRU eviction, residency budget. | `model_runtime_status` / `unload_model` have no React consumer. |
-| M05 Resource governor | PARTIAL | `resource_policy.rs` lanes; playback guards suspend background classes. | Channel-logo matching, series refetch, `url-tvg` registration and on-demand TMDB/Xtream fetches bypass admission. Playback guards are released only by frontend calls, so a webview reload leaves background work suspended. |
+| M05 Resource governor | PARTIAL | `resource_policy.rs` lanes; playback guards suspend background classes. | Channel-logo matching, series refetch, `url-tvg` registration and on-demand TMDB/Xtream fetches bypass admission. A webview reload now releases the old page's playback guards (M29). |
 | M06 Canonical domain / provider boundary | PARTIAL | Movies: `canonical_entities` / `stream_variants` (0021). Series identity, favorite/watchlist and TMDB match: `kind = 'series'` entities via `series_bindings` (0036); `SeriesSummary.entityId`. Secret-free legacy DTOs. | Seasons, episodes and live are provider rows; series screens still key on `(sourceId, seriesTitle)`. |
 | M07 Naming / normalization / classification | PARTIAL | Naming v1 parser; raw title/group kept (0026); `naming::display_title`. | Media type is endpoint/URL-heuristic only, M3U defaults to Live, no `Unknown` in `MediaKind`. Movie cards use a hand-written SQL COALESCE instead of `display_title`; series `raw` fallback is set to the parsed title. |
 | M08 Fingerprints / candidate blocking | PARTIAL | `catalog::{fingerprint, reconcile}`; blocking used by movie resolution. | Refresh still deletes and reinserts. Unchanged/changed/new/deleted classification is unwired; movie/live embeddings and enrichment status are discarded on every refresh. |
@@ -53,7 +53,7 @@
 | M26 Migration-chain qualification | PARTIAL | Upgrade-chain tests; `real_profile_upgrade` (opt-in). | Never run against a real profile copy. |
 | M27 Scale qualification | PARTIAL | 30k release scale probes; `tools/catalog-scale`. | No 100k/250k app-level measurements. |
 | M28 AI failure matrix | PARTIAL | Missing/offline model and cancellation tests exist. | No matrix; see M13 inference-failure case. |
-| M29 macOS lifecycle | MISSING | — | No sleep/wake or window-event handling; guard/session leak on webview reload. |
+| M29 macOS lifecycle | PARTIAL | Reload releases the old page's playback (page epochs; in-flight opens undo themselves); quit writes progress and stops remuxes/transcription; sleep pauses, wake reconnects a playing live channel (`lifecycle.rs`). | Not verified on device; AirPlay across sleep unhandled; no window-state/reopen handling beyond the window-state plugin; no display-sleep or App Nap handling. |
 | M30 Accessibility / signing | PARTIAL / MISSING | 46 `aria-label`s over 78 components. | Keyboard handling minimal; no signing, notarization or entitlements. |
 | M31 Final convergence review | NOT STARTED | — | — |
 
@@ -511,11 +511,46 @@ never refreshed its guide, and a guide URL added in Settings stayed empty.
 - **Validation:** `just lint`, `just typecheck`, `just test` (583 Rust, 0 failed, 5 opt-in ignored; 70
   frontend), `cargo fmt --check`, `git diff --check` pass. **Not verified on device.**
 
+### macOS lifecycle (M29) — 2026-09-29
+
+Branch `feat/macos-lifecycle`. Before: every playback resource was released only by a frontend
+call, so a webview reload left native video playing behind a fresh page (and background work
+suspended until restart), quitting could leave ffmpeg remuxes and transcription running without a
+final progress write, and nothing handled sleep/wake.
+
+- **Page epochs** (`AppState::page_epoch`): each playback resource (native session, proxy stream,
+  AirPlay) records the page it was opened for. When the webview starts loading a page the epoch
+  moves on at once; `lifecycle::release_for_page` releases older pages' resources — the native
+  session after its final progress write (bounded to 2 s), AirPlay, proxy sessions and remuxes,
+  caption transcription — and their guards; the new page's stay. An open still in flight when the
+  page changed undoes itself ("the page reloaded").
+- **Quit** (`RunEvent::Exit`, main thread): `release_for_exit` writes progress and stops remuxes and
+  transcription; mpv and AirPlay end with the process. The render context is freed inline when
+  already on the main thread (never `dispatch_sync` onto the main queue from it).
+- **Sleep/wake** (`NSWorkspace` notifications, queued synchronously onto the playback coordinator in
+  order): sleep pauses the native session (the pause writes progress); wake, after 3 s for the
+  network, reconnects a live channel that was playing via `playback:recover { reason: 'wake' }`
+  with a fresh recovery budget, unless the Mac slept again; VOD and a paused channel stay paused.
+- **Tests (3 new):** a reload releases the old page's playback and keeps the new page's; quitting
+  releases everything; the coordinator reconnects only a playing live channel, once, not after a
+  replacement or a newer sleep, with a fresh budget. Mutation checks: dropping the epoch filter,
+  the sleep sequence or the budget reset each fails a test.
+- **Independent review:** no Critical. **High, confirmed and fixed:** quitting with native video on
+  screen would `dispatch_sync` onto the main queue from the main thread (crash or hang). **Medium,
+  fixed:** a reload released whatever existed at that instant — an old page's open landing later
+  kept playing, and a new page's quick open could be killed. **Low, fixed:** sleep and wake could be
+  applied out of order (each was spawned); the wake reconnect fired before the network was up and
+  spent the recovery budget; an unused recovery marked the user's next open as one. Low, recorded:
+  an in-flight proxy request keeps its remux alive until it completes.
+- **Validation:** `just lint`, `just typecheck`, `just test` (586 Rust, 0 failed, 5 opt-in ignored; 70
+  frontend), `cargo fmt --check`, `git diff --check` pass. **Not verified on device:** reload during
+  playback (`just dev`, Cmd+R), quit during playback, sleep/wake with a live channel.
+
 ### Next dependency
 
-**macOS lifecycle (M29):** there is no sleep/wake or window-event handling, and playback guards and
-sessions leak when the webview reloads. Release sessions on reload and close, and pause or resume
-around sleep. Confirm the playback slices and the live guide on device first.
+**Security / privacy (M25):** the webview runs with `csp: null`; the local `/proxy` route has no
+session token and its locator carries the upstream URL; provider logo/poster URLs are passed
+through. Confirm the playback, live guide and lifecycle slices on device first.
 
 ---
 
