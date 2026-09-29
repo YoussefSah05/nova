@@ -35,17 +35,13 @@ async fn source_with_feed(pool: &SqlitePool, name: &str) -> (i64, i64) {
     (source, feed)
 }
 
-/// What a feed refresh does: replace the feed's programmes in one transaction.
+/// What a feed refresh does: stage the programmes, then publish them.
 async fn refresh(pool: &SqlitePool, feed: i64, programs: &[Program]) {
+    let repo = ProgramsRepository::new(pool);
+    repo.clear_staged(feed).await.unwrap();
+    repo.stage_batch(feed, programs).await.unwrap();
     let mut tx = pool.begin().await.unwrap();
-    ProgramsRepository::clear_feed_tx(&mut tx, feed)
-        .await
-        .unwrap();
-    ProgramsRepository::insert_batch_tx(&mut tx, feed, programs)
-        .await
-        .unwrap();
-    let covered: Vec<String> = programs.iter().map(|p| p.channel_tvg_id.clone()).collect();
-    ProgramsRepository::clear_unowned_tx(&mut tx, &covered)
+    ProgramsRepository::publish_staged_tx(&mut tx, feed)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -129,4 +125,60 @@ async fn programmes_written_before_feeds_owned_them_are_replaced_per_channel() {
         ["new cnn", "old bbc"],
         "a channel the feed doesn't cover keeps its legacy guide"
     );
+}
+
+#[tokio::test]
+async fn a_channel_shows_one_feeds_guide_even_within_a_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_profile_db(dir.path().join("p.db").to_str().unwrap())
+        .await
+        .unwrap();
+    let (a, provider) = source_with_feed(&pool, "a").await;
+    let feeds = EpgSourcesRepository::new(&pool);
+    feeds
+        .upsert(a, "http://community/guide.xml", "community")
+        .await
+        .unwrap();
+    let community = feeds.list_for_source(a).await.unwrap()[1].id;
+    // The community feed covers the channel with shifted slots.
+    refresh(
+        &pool,
+        community,
+        &[
+            program("cnn.us", "C 20:15", 75, 135),
+            program("cnn.us", "C 21:15", 135, 200),
+        ],
+    )
+    .await;
+    refresh(
+        &pool,
+        provider,
+        &[
+            program("cnn.us", "P 20:00", 60, 120),
+            program("cnn.us", "P 21:00", 120, 180),
+        ],
+    )
+    .await;
+
+    let programs = ProgramsRepository::new(&pool);
+    for prefer in [Some(a), None] {
+        let nn = programs.now_and_next("cnn.us", 70, prefer).await.unwrap();
+        assert_eq!(
+            (nn.now.unwrap().title, nn.next.unwrap().title),
+            ("P 20:00".to_string(), "P 21:00".to_string()),
+            "now and next come from the same feed ({prefer:?})"
+        );
+        let grid: Vec<String> = programs
+            .range(&["cnn.us".into()], 0, 300, prefer)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.title)
+            .collect();
+        assert_eq!(
+            grid,
+            ["P 20:00", "P 21:00"],
+            "no other feed's rows ({prefer:?})"
+        );
+    }
 }

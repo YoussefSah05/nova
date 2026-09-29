@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO programs (channel_tvg_id, title, sub_title, description, start_utc, stop_utc, category, icon_url, epg_source_id)\n             SELECT channel_tvg_id, title, sub_title, description, start_utc, stop_utc, category, icon_url, epg_source_id\n             FROM program_staging WHERE epg_source_id = ? ORDER BY id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "487fe54e3f9ffe94310b54690d0ce1000a080b3e6db9eb5657493ce937f7c8ab"
+}

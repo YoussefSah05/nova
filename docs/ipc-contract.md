@@ -37,10 +37,10 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `list_series_episodes` | `{ profileId, seriesId }` | `SeriesEpisode[]` | 3 |
 | `resolve_stream` | `{ profileId, mediaKind: 'live'\|'vod'\|'episode', mediaId, routeOverride?: 'remux_hls'\|'transcode_hls' }` | `ResolvedStream` | 5 |
 | `stop_playback` | `{ token: string }` | `void` | 5 |
-| `epg_now_and_next` | `{ profileId, tvgIds: string[], sourceId?: number }` | `NowAndNext[]` (one per requested id; with `sourceId`, that source's feeds win where several feeds cover a channel) | 4, M24 |
-| `epg_range` | `{ profileId, tvgIds, fromUtc, toUtc, sourceId?: number }` | `Program[]` (with `sourceId`, a channel its feeds cover shows only their programmes) | 4, M24 |
+| `epg_now_and_next` | `{ profileId, tvgIds: string[], sourceId?: number }` | `NowAndNext[]` (one per requested id; a channel shows one feed's guide — with `sourceId`, that source's first feed covering it, else the first covering feed — so now and next never mix feeds) | 4, M24 |
+| `epg_range` | `{ profileId, tvgIds, fromUtc, toUtc, sourceId?: number }` | `Program[]` (each channel from the same single guide feed as `epg_now_and_next`; no duplicates across feeds) | 4, M24 |
 | `add_epg_url` | `{ profileId, sourceId, url }` | `void` | 4 |
-| `epg_refresh` | `{ profileId, sourceId }` | `void` (durable job: each feed is downloaded to a temp file capped at 512 MiB, parsed in bounded batches, and replaces only its own programmes in one transaction) | 4, M24 |
+| `epg_refresh` | `{ profileId, sourceId }` | `void` (durable job: each feed is downloaded to a temp file capped at 512 MiB, parsed into bounded staged batches, then replaces only its own programmes in one short transaction; a feed that parses to no programmes fails and keeps its previous guide) | 4, M24 |
 | `mpv_open_stream` | `{ profileId, mediaKind, mediaId, title }` | `{ token, engine: 'mpv', embedded }` | 5 |
 | `mpv_close` | `{ token }` | `void` | 5 |
 | `playback_caption_mode` | `{ token, captionMode }` | `void` | M14 — the caption selection, persisted with the native session's progress by the playback coordinator |

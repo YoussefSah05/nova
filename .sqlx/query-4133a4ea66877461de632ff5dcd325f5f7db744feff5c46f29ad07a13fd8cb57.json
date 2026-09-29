@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT f.feed AS \"feed?: i64\"\n               FROM (SELECT DISTINCT epg_source_id AS feed FROM programs WHERE channel_tvg_id = ?1) f\n               LEFT JOIN epg_sources e ON e.id = f.feed\n               ORDER BY (?2 IS NOT NULL AND e.source_id = ?2) DESC, f.feed IS NULL, f.feed\n               LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "feed?: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "4133a4ea66877461de632ff5dcd325f5f7db744feff5c46f29ad07a13fd8cb57"
+}

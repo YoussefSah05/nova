@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM program_staging WHERE epg_source_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9c665aa00d508a61d0e25fadac3cb57b116fcbfd9904383bc525627af7389e24"
+}

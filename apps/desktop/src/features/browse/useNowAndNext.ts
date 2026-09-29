@@ -35,7 +35,7 @@ export function useNowAndNext(
 
   // Memoize the key the effect should re-run on — joining ids is cheap
   // compared to firing the IPC on every parent render.
-  const tvgKey = `${sourceId ?? ""}:${tvgIds.join(" ")}`;
+  const tvgKey = JSON.stringify([sourceId, tvgIds]);
 
   const [data, setData] = useState<Record<string, NowAndNext>>({});
 

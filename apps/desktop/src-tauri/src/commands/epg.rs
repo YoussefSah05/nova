@@ -6,9 +6,10 @@
 //!
 //! Refresh: a manual `epg_refresh` command per source. For each of the
 //! source's feeds the worker spools the XMLTV body to a temp file (refusing
-//! feeds over [`MAX_EPG_BYTES`]), parses it on a blocking thread and hands
-//! bounded batches to one transaction that replaces *that feed's* programmes
-//! — feeds covering the same channel never overwrite each other — then prunes
+//! feeds over [`MAX_EPG_BYTES`]), parses it on a blocking thread into bounded
+//! staged batches, then replaces *that feed's* programmes in one short
+//! transaction — feeds covering the same channel never overwrite each other,
+//! and a feed that parses to nothing keeps its previous guide — then prunes
 //! anything older than one day. Memory stays flat whatever the feed size.
 //! Progress is emitted on the `epg:refresh:progress` event channel.
 
@@ -306,12 +307,13 @@ pub(crate) async fn spool_capped(
     mut response: reqwest::Response,
     cap: u64,
 ) -> Result<std::fs::File, String> {
-    use std::io::{Seek, Write};
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
     let too_large = || format!("EPG feed is larger than {} MB", cap / (1024 * 1024));
     if response.content_length().is_some_and(|len| len > cap) {
         return Err(too_large());
     }
-    let mut file = tempfile::tempfile().map_err(|e| format!("EPG spool: {e}"))?;
+    let mut file =
+        tokio::fs::File::from_std(tempfile::tempfile().map_err(|e| format!("EPG spool: {e}"))?);
     let mut written: u64 = 0;
     loop {
         match response.chunk().await {
@@ -321,14 +323,16 @@ pub(crate) async fn spool_capped(
                     return Err(too_large());
                 }
                 file.write_all(&chunk)
+                    .await
                     .map_err(|e| format!("EPG spool: {e}"))?;
             }
             Ok(None) => break,
             Err(e) => return Err(e.without_url().to_string()),
         }
     }
-    file.rewind().map_err(|e| format!("EPG spool: {e}"))?;
-    Ok(file)
+    file.flush().await.map_err(|e| format!("EPG spool: {e}"))?;
+    file.rewind().await.map_err(|e| format!("EPG spool: {e}"))?;
+    Ok(file.into_std().await)
 }
 
 enum ParsedChunk {
@@ -337,9 +341,10 @@ enum ParsedChunk {
     Done(Vec<nova_epg::ChannelIcon>),
 }
 
-/// Parse a spooled XMLTV feed on a blocking thread and replace the feed's
-/// programmes (and logos) in one transaction, batch by batch: at most
-/// [`BATCHES_IN_FLIGHT`] batches are ever held in memory.
+/// Parse a spooled XMLTV feed on a blocking thread, stage its programmes
+/// batch by batch (at most [`BATCHES_IN_FLIGHT`] batches are ever held in
+/// memory), then replace the feed's programmes and logos in one short
+/// transaction. A feed that parses to no programmes is refused.
 pub(crate) async fn ingest_feed(
     pool: &SqlitePool,
     source_id: i64,
@@ -379,22 +384,20 @@ pub(crate) async fn ingest_feed(
         let _ = tx_batches.blocking_send(ParsedChunk::Done(programs.take_channel_icons()));
     });
 
+    let programs = ProgramsRepository::new(pool);
     let result: Result<u64, String> = async {
-        let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-        ProgramsRepository::clear_feed_tx(&mut tx, epg_source_id)
+        programs
+            .clear_staged(epg_source_id)
             .await
             .map_err(|e| e.to_string())?;
-        let mut covered = std::collections::HashSet::new();
-        let mut total: u64 = 0;
+        // Batches are staged in short writes while the feed is still being
+        // parsed; the database write lock is only held to publish them.
+        let mut staged: u64 = 0;
         let icons = loop {
             match rx_batches.recv().await {
                 Some(ParsedChunk::Programs(batch)) => {
-                    for p in &batch {
-                        if !covered.contains(&p.channel_tvg_id) {
-                            covered.insert(p.channel_tvg_id.clone());
-                        }
-                    }
-                    total += ProgramsRepository::insert_batch_tx(&mut tx, epg_source_id, &batch)
+                    staged += programs
+                        .stage_batch(epg_source_id, &batch)
                         .await
                         .map_err(|e| e.to_string())?;
                 }
@@ -402,10 +405,13 @@ pub(crate) async fn ingest_feed(
                 None => return Err("EPG parser stopped unexpectedly".to_string()),
             }
         };
-        // Programmes written before feeds owned them, for the channels this
-        // feed now covers.
-        let covered: Vec<String> = covered.into_iter().collect();
-        ProgramsRepository::clear_unowned_tx(&mut tx, &covered)
+        // An empty body, an HTML error page or a compressed feed parses to
+        // nothing: keep the guide the feed had.
+        if staged == 0 {
+            return Err("EPG feed contained no programmes".to_string());
+        }
+        let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+        let published = ProgramsRepository::publish_staged_tx(&mut tx, epg_source_id)
             .await
             .map_err(|e| e.to_string())?;
         let logos = nova_epg::match_channel_icons(&source_tvg_ids, &icons);
@@ -413,9 +419,14 @@ pub(crate) async fn ingest_feed(
             .await
             .map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())?;
-        Ok(total)
+        Ok(published)
     }
     .await;
+    if result.is_err() {
+        if let Err(e) = programs.clear_staged(epg_source_id).await {
+            tracing::warn!(error = %e, "epg_refresh: clearing staged programmes failed");
+        }
+    }
     // On failure the receiver is dropped: the parser stops at its next send.
     drop(rx_batches);
     let _ = parser.await;
@@ -508,23 +519,27 @@ mod tests {
             .unwrap()[1]
             .id;
         // Another feed's programme for the same channel.
+        let programs = ProgramsRepository::new(&pool);
+        programs
+            .stage_batch(
+                other,
+                &[Program {
+                    channel_tvg_id: "cnn.us".into(),
+                    title: "community".into(),
+                    sub_title: None,
+                    description: None,
+                    start_utc: 0,
+                    stop_utc: 10,
+                    category: None,
+                    icon_url: None,
+                }],
+            )
+            .await
+            .unwrap();
         let mut tx = pool.begin().await.unwrap();
-        ProgramsRepository::insert_batch_tx(
-            &mut tx,
-            other,
-            &[Program {
-                channel_tvg_id: "cnn.us".into(),
-                title: "community".into(),
-                sub_title: None,
-                description: None,
-                start_utc: 0,
-                stop_utc: 10,
-                category: None,
-                icon_url: None,
-            }],
-        )
-        .await
-        .unwrap();
+        ProgramsRepository::publish_staged_tx(&mut tx, other)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
 
         let tvg_ids = vec!["cnn.us".to_string()];
@@ -553,6 +568,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(logos, 1, "the feed's channel icon is kept");
+    }
+
+    #[tokio::test]
+    async fn a_feed_that_parses_to_nothing_keeps_its_guide() {
+        let (_dir, pool, source, feed) = profile_with_feed().await;
+        let tvg_ids = vec!["cnn.us".to_string()];
+        ingest_feed(&pool, source, feed, xmltv(4), tvg_ids.clone())
+            .await
+            .unwrap();
+        for body in ["<tv></tv>", "<html><body>Please log in</body></html>", ""] {
+            let mut file = tempfile::tempfile().unwrap();
+            file.write_all(body.as_bytes()).unwrap();
+            std::io::Seek::rewind(&mut file).unwrap();
+            let refused = ingest_feed(&pool, source, feed, file, tvg_ids.clone())
+                .await
+                .unwrap_err();
+            assert!(refused.contains("no programmes"), "{refused}");
+        }
+        let (kept, staged): (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM programs), (SELECT COUNT(*) FROM program_staging)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (kept, staged),
+            (4, 0),
+            "the previous guide stays, staging is clean"
+        );
     }
 
     /// A one-shot loopback HTTP server answering with `head` then `body`.
