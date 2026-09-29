@@ -48,7 +48,7 @@
 | M21 Smart discovery / personalization | PARTIAL | TMDB related/collections/trending intersected with the library. | No embedding similarity or history-based personalization. |
 | M22 Frontend canonicalization | PARTIAL | Movies and series address canonical entities (series by `seriesId`: detail, episodes, resume, favourites, art/facts/related). | Live, player, transcripts and episode/live Continue Watching play by row ID; client `seriesGroupKey`/`prettyBrand` grouping remains. |
 | M23 Series / autoplay | PARTIAL | Episode progress owned by the series entity per durable episode key (0037); resume, Up next and series Continue Watching read it; autoplay uses the normal play path. | In-player next episode chosen in React; episodes aren't canonical entities; no cross-source episodes. |
-| M24 Live / EPG boundary | MISSING, RISKY | XMLTV parser streams. | Programs keyed by `channel_tvg_id` profile-wide; feed downloaded whole with no size cap (`commands/epg.rs:203`). |
+| M24 Live / EPG boundary | PARTIAL | Programmes owned per feed (0040); feed spooled to disk with a 512 MiB cap, streamed parse into staged batches (0041), one short publish transaction; empty feeds refused; one guide feed per channel, preferring the viewing source's. | Channels still matched by `tvg_id` (no canonical channel/ChannelMatcher); no gzip feeds; no refresh scheduling; no grid guide UI. |
 | M25 Security / privacy | PARTIAL | TMDB credential write-only; proxy/EPG errors drop URLs; source and stream URLs no longer cross IPC. | `csp: null`; `/proxy` has no session token and its locator carries the upstream URL; provider logo/poster URLs are passed through. |
 | M26 Migration-chain qualification | PARTIAL | Upgrade-chain tests; `real_profile_upgrade` (opt-in). | Never run against a real profile copy. |
 | M27 Scale qualification | PARTIAL | 30k release scale probes; `tools/catalog-scale`. | No 100k/250k app-level measurements. |
@@ -443,12 +443,46 @@ Branch `feat/variant-selection`.
   frontend), `cargo fmt --check`, `git diff --check` pass. **Not verified on device** (recovery needs a
   real failing stream).
 
+### Live / EPG boundary (M24) — 2026-09-29
+
+Branch `feat/epg-boundary`.
+
+- **Feed ownership:** migration 0040 gives `programs` an `epg_source_id` (cascades from
+  `epg_sources`, so deleting a source removes its guide). A feed's refresh replaces only its own
+  rows; programmes written before ownership (no feed) go only for the channels the new feed covers.
+  Two feeds covering a channel (a provider feed and a community one, or two sources) no longer
+  overwrite each other.
+- **Bounded ingest** (`commands/epg.rs`): the body is spooled to an anonymous temp file, refused past
+  512 MiB (declared `Content-Length` or while streaming). A blocking thread parses it (streaming
+  `quick_xml`) into 500-programme batches through a channel of 4. Batches are staged in short
+  writes (0041 `program_staging`), then published with the feed's logos in one short transaction.
+  The write lock is never held while parsing. A feed that parses to no programmes (an HTML error
+  page, `<tv></tv>`, a compressed body) fails and keeps its previous guide.
+- **Source-aware reads:** `epg_now_and_next` / `epg_range` take an optional `sourceId` (the Live tab
+  passes it when every channel on screen shares one source). A channel shows one feed's guide: the
+  preferred source's first feed covering it, else the first covering feed, legacy rows last. So now,
+  next and the grid never mix feeds, and lookups keep their index-ordered `LIMIT 1`.
+- **Tests (7 new):** storage (feeds never overwrite each other, the source is preferred, the grid has
+  no duplicates, the source cascade, legacy rows replaced per channel, one feed per channel within a
+  source); desktop (a multi-batch ingest replaces only its feed and keeps logos, an empty or HTML
+  feed keeps its guide and leaves staging clean, the size cap is enforced by a loopback HTTP server
+  for declared, chunked and under-cap bodies).
+- **Independent review:** no Critical or High. **Medium, confirmed and fixed:** the write lock was
+  held for the whole parse (other writers could hit the 5 s busy timeout); an empty or non-XMLTV
+  response wiped the feed's guide; the grid duplicated programmes when two feeds of one source
+  covered a channel. **Low, fixed:** now and next could come from different feeds; the preference
+  ordering disabled the index-ordered lookup; legacy rows won ties with no preference; spooling
+  wrote with blocking I/O on the async runtime; the refresh key could collide on ids with spaces.
+  Mutation check: removing the empty-feed guard fails its test.
+- **Validation:** `just lint`, `just typecheck`, `just test` (581 Rust, 0 failed, 5 opt-in ignored; 64
+  frontend), `cargo fmt --check`, `git diff --check` pass. **Not verified on device:** a real provider
+  feed refresh (`just dev`, Live tab → refresh the guide).
+
 ### Next dependency
 
-**Live / EPG boundary (M24):** programmes are keyed by `channel_tvg_id` profile-wide (overlapping feeds
-overwrite each other) and the XMLTV feed is downloaded whole with no size cap. Bind programmes to
-source channels, bound the download and parse, then the macOS lifecycle (M29: sleep/wake, playback
-guards released when the webview reloads). Confirm the playback slices on device first.
+**macOS lifecycle (M29):** there is no sleep/wake or window-event handling, and playback guards and
+sessions leak when the webview reloads. Release sessions on reload and close, and pause or resume
+around sleep. Confirm the playback slices and an EPG refresh on device first.
 
 ---
 
