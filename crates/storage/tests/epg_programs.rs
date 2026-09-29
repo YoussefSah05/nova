@@ -257,3 +257,81 @@ async fn channels_read_their_own_sources_guide_and_feeds_report_status() {
         "feed URLs never leave storage: {json}"
     );
 }
+
+#[tokio::test]
+async fn the_guide_window_reads_each_channels_feed_and_the_overview_counts_coverage() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_profile_db(dir.path().join("p.db").to_str().unwrap())
+        .await
+        .unwrap();
+    let (a, feed_a) = source_with_feed(&pool, "a").await;
+    let (_b, feed_b) = source_with_feed(&pool, "b").await;
+    refresh(
+        &pool,
+        feed_a,
+        &[
+            program("cnn.us", "Early", 0, 100),
+            program("cnn.us", "Evening", 100, 200),
+            program("cnn.us", "Night", 200, 300),
+        ],
+    )
+    .await;
+    // Another source's feed covers a channel source A lists too.
+    refresh(&pool, feed_b, &[program("bbc.uk", "B only", 0, 400)]).await;
+    let channel = |tvg: Option<&'static str>, category: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO channels (source_id, tvg_id, name, category, stream_url)
+                 VALUES (?, ?, 'Ch', ?, 'http://s/1')",
+            )
+            .bind(a)
+            .bind(tvg)
+            .bind(category)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_rowid()
+        }
+    };
+    let cnn = channel(Some("cnn.us"), "News").await;
+    let bbc = channel(Some("bbc.uk"), "News").await;
+    let bare = channel(None, "Sports").await;
+
+    let guide = ProgramsRepository::new(&pool)
+        .guide_for_channels(&[bbc, cnn, bare], 150, 250)
+        .await
+        .unwrap();
+    let titles: Vec<(i64, Vec<String>)> = guide
+        .into_iter()
+        .map(|g| {
+            (
+                g.channel_id,
+                g.programs.into_iter().map(|p| p.title).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            (bbc, vec!["B only".to_string()]),
+            (cnn, vec!["Evening".to_string(), "Night".to_string()]),
+            (bare, vec![]),
+        ],
+        "overlapping programmes, in request order, any feed when the source has none"
+    );
+
+    let overview = nova_storage::ChannelRepository::new(&pool)
+        .live_overview(a)
+        .await
+        .unwrap();
+    assert_eq!((overview.channels, overview.with_guide), (3, 2));
+    assert_eq!(
+        overview
+            .categories
+            .iter()
+            .map(|c| (c.name.as_str(), c.count))
+            .collect::<Vec<_>>(),
+        [("News", 2), ("Sports", 1)]
+    );
+}

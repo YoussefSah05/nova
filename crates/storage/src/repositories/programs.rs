@@ -32,6 +32,14 @@ pub struct ChannelNowAndNext {
     pub next: Option<Program>,
 }
 
+/// One channel row's programmes in a guide window.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelGuide {
+    pub channel_id: i64,
+    pub programs: Vec<Program>,
+}
+
 pub struct ProgramsRepository<'a> {
     pool: &'a SqlitePool,
 }
@@ -238,38 +246,156 @@ impl<'a> ProgramsRepository<'a> {
 
     /// Now-and-next for channel rows, each read from its guide feed with its
     /// own source preferred. One entry per requested id, in order; channels
-    /// that don't exist or have no `tvg_id` come back empty.
+    /// that don't exist or have no `tvg_id` come back empty. One query for
+    /// the whole list: each channel's feed, then its first few programmes
+    /// still airing at `now_utc`.
     pub async fn now_and_next_for_channels(
         &self,
         channel_ids: &[i64],
         now_utc: i64,
     ) -> Result<Vec<ChannelNowAndNext>, StorageError> {
-        let mut out = Vec::with_capacity(channel_ids.len());
-        for &channel_id in channel_ids {
-            let channel = sqlx::query!(
-                "SELECT tvg_id, source_id FROM channels WHERE id = ?",
-                channel_id
-            )
-            .fetch_optional(self.pool)
-            .await?;
-            let guide = match channel {
-                Some(c) => match c.tvg_id.filter(|t| !t.is_empty()) {
-                    Some(tvg_id) => Some(
-                        self.now_and_next(&tvg_id, now_utc, Some(c.source_id))
-                            .await?,
-                    ),
-                    None => None,
-                },
-                None => None,
-            };
-            let (now, next) = guide.map(|g| (g.now, g.next)).unwrap_or_default();
-            out.push(ChannelNowAndNext {
-                channel_id,
-                now,
-                next,
+        if channel_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = serde_json::to_string(channel_ids)?;
+        let rows = sqlx::query!(
+            r#"WITH req AS (SELECT DISTINCT CAST(value AS INTEGER) AS channel_id FROM json_each(?1)),
+               ch AS (
+                 SELECT r.channel_id AS channel_id, c.tvg_id AS tvg_id,
+                        -- The channel's own source's first feed, else any feed; NULL
+                        -- (programmes from before feeds owned them) last.
+                        COALESCE(
+                          (SELECT MIN(p.epg_source_id)
+                           FROM programs p JOIN epg_sources e ON e.id = p.epg_source_id
+                           WHERE p.channel_tvg_id = c.tvg_id AND e.source_id = c.source_id),
+                          (SELECT MIN(p.epg_source_id) FROM programs p
+                           WHERE p.channel_tvg_id = c.tvg_id)) AS feed
+                 FROM req r JOIN channels c ON c.id = r.channel_id
+                 WHERE c.tvg_id IS NOT NULL AND c.tvg_id <> ''
+               ),
+               upcoming AS (
+                 SELECT ch.channel_id AS channel_id, p.channel_tvg_id AS channel_tvg_id,
+                        p.title AS title, p.sub_title AS sub_title, p.description AS description,
+                        p.start_utc AS start_utc, p.stop_utc AS stop_utc,
+                        p.category AS category, p.icon_url AS icon_url,
+                        ROW_NUMBER() OVER (PARTITION BY ch.channel_id ORDER BY p.start_utc, p.id) AS rn
+                 FROM ch JOIN programs p
+                   ON p.channel_tvg_id = ch.tvg_id AND p.epg_source_id IS ch.feed
+                  AND p.stop_utc > ?2
+               )
+               SELECT channel_id as "channel_id!: i64", channel_tvg_id as "channel_tvg_id!: String",
+                      title as "title!: String", sub_title, description,
+                      start_utc as "start_utc!: i64", stop_utc as "stop_utc!: i64",
+                      category, icon_url
+               FROM upcoming WHERE rn <= 3
+               ORDER BY channel_id, rn"#,
+            ids,
+            now_utc,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        let mut by_channel: std::collections::HashMap<i64, Vec<Program>> =
+            std::collections::HashMap::new();
+        for r in rows {
+            by_channel.entry(r.channel_id).or_default().push(Program {
+                channel_tvg_id: r.channel_tvg_id,
+                title: r.title,
+                sub_title: r.sub_title,
+                description: r.description,
+                start_utc: r.start_utc,
+                stop_utc: r.stop_utc,
+                category: r.category,
+                icon_url: r.icon_url,
             });
         }
-        Ok(out)
+        Ok(channel_ids
+            .iter()
+            .map(|&channel_id| {
+                let upcoming = by_channel
+                    .get(&channel_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                // Airing now: the latest-starting programme already on; next:
+                // the first one after now.
+                let now = upcoming
+                    .iter()
+                    .rev()
+                    .find(|p| p.start_utc <= now_utc)
+                    .cloned();
+                let next = upcoming.iter().find(|p| p.start_utc > now_utc).cloned();
+                ChannelNowAndNext {
+                    channel_id,
+                    now,
+                    next,
+                }
+            })
+            .collect())
+    }
+
+    /// The guide grid for channel rows: each channel's programmes from its
+    /// guide feed (own source preferred) overlapping `[from_utc, to_utc)`, in
+    /// one query. One entry per requested id, in order; channels without a
+    /// guide come back with no programmes.
+    pub async fn guide_for_channels(
+        &self,
+        channel_ids: &[i64],
+        from_utc: i64,
+        to_utc: i64,
+    ) -> Result<Vec<ChannelGuide>, StorageError> {
+        if channel_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = serde_json::to_string(channel_ids)?;
+        let rows = sqlx::query!(
+            r#"WITH req AS (SELECT DISTINCT CAST(value AS INTEGER) AS channel_id FROM json_each(?1)),
+               ch AS (
+                 SELECT r.channel_id AS channel_id, c.tvg_id AS tvg_id,
+                        -- The channel's own source's first feed, else any feed; NULL
+                        -- (programmes from before feeds owned them) last.
+                        COALESCE(
+                          (SELECT MIN(p.epg_source_id)
+                           FROM programs p JOIN epg_sources e ON e.id = p.epg_source_id
+                           WHERE p.channel_tvg_id = c.tvg_id AND e.source_id = c.source_id),
+                          (SELECT MIN(p.epg_source_id) FROM programs p
+                           WHERE p.channel_tvg_id = c.tvg_id)) AS feed
+                 FROM req r JOIN channels c ON c.id = r.channel_id
+                 WHERE c.tvg_id IS NOT NULL AND c.tvg_id <> ''
+               )
+               SELECT ch.channel_id as "channel_id!: i64", p.channel_tvg_id as "channel_tvg_id!: String",
+                      p.title as "title!: String", p.sub_title, p.description,
+                      p.start_utc as "start_utc!: i64", p.stop_utc as "stop_utc!: i64",
+                      p.category, p.icon_url
+               FROM ch JOIN programs p
+                 ON p.channel_tvg_id = ch.tvg_id AND p.epg_source_id IS ch.feed
+                AND p.stop_utc > ?2 AND p.start_utc < ?3
+               ORDER BY ch.channel_id, p.start_utc, p.id"#,
+            ids,
+            from_utc,
+            to_utc,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        let mut by_channel: std::collections::HashMap<i64, Vec<Program>> =
+            std::collections::HashMap::new();
+        for r in rows {
+            by_channel.entry(r.channel_id).or_default().push(Program {
+                channel_tvg_id: r.channel_tvg_id,
+                title: r.title,
+                sub_title: r.sub_title,
+                description: r.description,
+                start_utc: r.start_utc,
+                stop_utc: r.stop_utc,
+                category: r.category,
+                icon_url: r.icon_url,
+            });
+        }
+        Ok(channel_ids
+            .iter()
+            .map(|&channel_id| ChannelGuide {
+                channel_id,
+                programs: by_channel.remove(&channel_id).unwrap_or_default(),
+            })
+            .collect())
     }
 
     /// Range query for the full guide grid: each channel's programmes from

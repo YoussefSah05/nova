@@ -2987,6 +2987,7 @@ version = "0.2.0-alpha.0"
 dependencies = [
  "block2",
  "dirs 5.0.1",
+ "flate2",
  "nova-artwork",
  "nova-core",
  "nova-enrich",

@@ -223,6 +223,37 @@ function setupInvoke(
         return Promise.resolve([]);
       case "count_channels":
         return Promise.resolve(250);
+      case "list_live_overview":
+        return Promise.resolve({
+          channels: 250,
+          withGuide: 180,
+          categories: [{ name: "News", count: 250 }],
+        });
+      case "epg_refresh_if_stale":
+        return Promise.resolve(false);
+      case "epg_guide": {
+        const now = Math.floor(Date.now() / 1000);
+        return Promise.resolve(
+          (args?.channelIds as number[]).map((channelId) => ({
+            channelId,
+            programs:
+              channelId === 1
+                ? [
+                    {
+                      channelTvgId: "c1",
+                      title: "Evening Bulletin",
+                      subTitle: null,
+                      description: "The day's news.",
+                      startUtc: now - 600,
+                      stopUtc: now + 1200,
+                      category: null,
+                      iconUrl: null,
+                    },
+                  ]
+                : [],
+          }))
+        );
+      }
       case "count_movies":
         return Promise.resolve(12);
       case "count_series":
@@ -307,7 +338,7 @@ function setupInvoke(
       case "list_series":
         return Promise.resolve(showsFixture ? [breakingBad] : []);
       case "list_channels":
-        return Promise.resolve([]);
+        return Promise.resolve(channelsFor(args));
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -368,27 +399,35 @@ describe("AppShell", () => {
 
     // Sections live in the top bar; each section's header carries its count.
     await userEvent.click(await screen.findByRole("button", { name: "Live" }));
-    expect(await screen.findByText("250 channels")).toBeInTheDocument();
+    expect(await screen.findByText("250 channels · guide data for 180")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Movies" }));
     expect(await screen.findByText("12 films")).toBeInTheDocument();
     expect(screen.getByLabelText("Playlist")).toBeInTheDocument();
   });
 
-  it("switches to the search grid and queries with the typed text", async () => {
+  it("searches the live guide and shows the chosen channel's programme", async () => {
     setupInvoke((args) => {
       const filters = args?.filters as Record<string, unknown> | undefined;
-      // Only the grid query carries a `query`; rails pass sort/favorites/etc.
-      return filters?.query ? [channel(1)] : [];
+      return filters?.query ? [channel(1)] : [channel(2)];
     });
 
     renderShell();
     await userEvent.click(await screen.findByRole("button", { name: "Live" }));
+    await userEvent.type(screen.getByPlaceholderText("Search channels"), "news");
 
-    // Type a term distinct from the result title so the active-filter chip
-    // (which echoes the query) doesn't collide with the card's title text.
-    await userEvent.type(screen.getByPlaceholderText("Search live"), "news");
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith(
+        "list_channels",
+        expect.objectContaining({ filters: expect.objectContaining({ query: "news" }) })
+      )
+    );
+    // The first channel is chosen: its current programme shows beside the guide.
+    expect(await screen.findByRole("heading", { name: "Evening Bulletin" })).toBeInTheDocument();
+    expect(screen.getByText("The day's news.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Watch" })).toBeInTheDocument();
 
-    expect(await screen.findByText("Channel 1")).toBeInTheDocument();
+    // The wall shows the same slice as brand bundles.
+    await userEvent.click(screen.getByRole("button", { name: "Wall" }));
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith(
         "semantic_search_channels",
@@ -396,6 +435,7 @@ describe("AppShell", () => {
       )
     );
   });
+
   it("updates favorite and watchlist controls in an open movie page", async () => {
     setupInvoke(() => [], [reviewMovie]);
     renderShell();

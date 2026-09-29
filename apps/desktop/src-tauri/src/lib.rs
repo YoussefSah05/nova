@@ -195,6 +195,9 @@ pub fn run() {
             // Phase 4 — EPG
             commands::epg::epg_now_and_next,
             commands::epg::epg_range,
+            commands::epg::epg_guide,
+            commands::epg::list_live_overview,
+            commands::epg::epg_refresh_if_stale,
             commands::epg::add_epg_url,
             commands::epg::epg_refresh,
             commands::epg::epg_channels_now_and_next,

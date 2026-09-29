@@ -18,6 +18,8 @@ export function GuideProvider({ profileId, children }: { profileId: string; chil
     let unlisten: (() => void) | undefined;
     void listen("epg:refresh:done", () => {
       void qc.invalidateQueries({ queryKey: guideKeys.all });
+      // Guide coverage in the Live header.
+      void qc.invalidateQueries({ predicate: (q) => q.queryKey.includes("liveOverview") });
     })
       .then((stop) => {
         if (cancelled) stop();
@@ -67,7 +69,7 @@ export function GuideLine({
   if (!guide?.now) return null;
   return (
     <span className={cn("flex min-w-0 flex-col gap-1", className)}>
-      <span className="block truncate text-[11px] text-muted-foreground" title={guide.now.title}>
+      <span className="block truncate text-xs text-muted-foreground" title={guide.now.title}>
         <span className="text-foreground/80">Now</span> · {guide.now.title}
       </span>
       <ProgressBar programme={guide.now} />

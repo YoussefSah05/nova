@@ -355,6 +355,20 @@ export interface ChannelNowAndNext {
   next: Program | null;
 }
 
+/** One channel row's programmes in a guide window (`epg_guide`). */
+export interface ChannelGuide {
+  channelId: number;
+  programs: Program[];
+}
+
+/** The Live section's overview of a playlist (`list_live_overview`). */
+export interface LiveOverview {
+  channels: number;
+  /** Channels whose `tvg_id` some guide feed has programmes for. */
+  withGuide: number;
+  categories: FacetCount[];
+}
+
 /// A source's guide feed (`list_epg_feeds`) — never its URL.
 export interface EpgFeedStatus {
   id: number;

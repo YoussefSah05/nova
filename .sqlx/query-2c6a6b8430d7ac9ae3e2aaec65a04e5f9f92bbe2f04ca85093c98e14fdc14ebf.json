@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT category as \"name!: String\", COUNT(*) as \"count!: i64\"\n               FROM channels\n               WHERE source_id = ? AND category IS NOT NULL AND category <> ''\n               GROUP BY category\n               ORDER BY COUNT(*) DESC, category ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "name!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "2c6a6b8430d7ac9ae3e2aaec65a04e5f9f92bbe2f04ca85093c98e14fdc14ebf"
+}

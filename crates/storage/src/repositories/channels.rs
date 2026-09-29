@@ -604,6 +604,54 @@ impl<'a> ChannelRepository<'a> {
     }
 }
 
+/// The Live section's overview of a playlist: how many channels, how many
+/// have guide data (a `tvg_id` some feed has programmes for), and the
+/// channel count per category.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveOverview {
+    pub channels: i64,
+    pub with_guide: i64,
+    pub categories: Vec<crate::repositories::FacetCount>,
+}
+
+impl ChannelRepository<'_> {
+    pub async fn live_overview(&self, source_id: i64) -> Result<LiveOverview, StorageError> {
+        let totals = sqlx::query!(
+            r#"SELECT COUNT(*) as "channels!: i64",
+                      COALESCE(SUM(CASE WHEN c.tvg_id IS NOT NULL AND c.tvg_id <> ''
+                                         AND EXISTS (SELECT 1 FROM programs p
+                                                     WHERE p.channel_tvg_id = c.tvg_id)
+                                    THEN 1 ELSE 0 END), 0) as "with_guide!: i64"
+               FROM channels c WHERE c.source_id = ?"#,
+            source_id,
+        )
+        .fetch_one(self.pool)
+        .await?;
+        let categories = sqlx::query!(
+            r#"SELECT category as "name!: String", COUNT(*) as "count!: i64"
+               FROM channels
+               WHERE source_id = ? AND category IS NOT NULL AND category <> ''
+               GROUP BY category
+               ORDER BY COUNT(*) DESC, category ASC"#,
+            source_id,
+        )
+        .fetch_all(self.pool)
+        .await?
+        .into_iter()
+        .map(|r| crate::repositories::FacetCount {
+            name: r.name,
+            count: r.count,
+        })
+        .collect();
+        Ok(LiveOverview {
+            channels: totals.channels,
+            with_guide: totals.with_guide,
+            categories,
+        })
+    }
+}
+
 fn like_query(query: Option<&str>) -> Option<String> {
     query.map(|q| format!("%{q}%"))
 }

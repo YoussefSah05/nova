@@ -743,6 +743,26 @@ export function patchItemEverywhere(
     { queryKey: browseKeys.source(profileId, sourceId), predicate: gridPredicate },
     (data) => (data ? { ...data, items: data.items.map(mapItem) } : data)
   );
+  // The live guide's channel rows (pages of channels).
+  qc.setQueriesData<{ pages: Channel[][]; pageParams: unknown[] }>(
+    { queryKey: browseKeys.source(profileId, sourceId), predicate: guideChannelsPredicate },
+    (data) =>
+      data
+        ? {
+            ...data,
+            pages: data.pages.map((page) =>
+              page.map((c) => {
+                if (`live-${c.id}` !== key) return c;
+                if (patch.isFavorite !== undefined && inverse.isFavorite === undefined)
+                  inverse.isFavorite = c.isFavorite;
+                if (patch.isInWatchlist !== undefined && inverse.isInWatchlist === undefined)
+                  inverse.isInWatchlist = c.isInWatchlist;
+                return { ...c, ...patch };
+              })
+            ),
+          }
+        : data
+  );
   // Show cards read as summaries (Continue cards, the week, series pages).
   qc.setQueriesData<SeriesSummary[]>(
     { queryKey: browseKeys.source(profileId, sourceId), predicate: seriesSummariesPredicate },
@@ -770,6 +790,9 @@ function railPredicate(query: { queryKey: readonly unknown[] }): boolean {
 }
 function gridPredicate(query: { queryKey: readonly unknown[] }): boolean {
   return query.queryKey.includes("grid");
+}
+function guideChannelsPredicate(query: { queryKey: readonly unknown[] }): boolean {
+  return query.queryKey.includes("guideChannels");
 }
 function seriesSummariesPredicate(query: { queryKey: readonly unknown[] }): boolean {
   return query.queryKey.includes("seriesCards") || query.queryKey.includes("seriesSchedule");

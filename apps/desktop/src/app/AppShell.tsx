@@ -11,11 +11,11 @@ import { AlertCircleIcon, XIcon } from "lucide-react";
 import type { Profile } from "@/types";
 import { BrowseBoundary } from "@/features/browse/BrowseBoundary";
 import { CommandPalette } from "@/features/browse/CommandPalette";
-import { BrowseSection } from "@/sections/browse/BrowseSection";
 import { HomeSection } from "@/sections/home/HomeSection";
 import { LibrarySection } from "@/sections/library/LibrarySection";
 import { MoviesSection } from "@/sections/movies/MoviesSection";
 import { SeriesSection } from "@/sections/series/SeriesSection";
+import { LiveSection } from "@/sections/live/LiveSection";
 import { SeriesPage } from "@/pages/SeriesPage";
 import { TitlePage } from "@/pages/TitlePage";
 import { SECTIONS, SECTION_LABELS, type Entry, type SectionId } from "./navigation/nav";
@@ -150,8 +150,8 @@ function ScreenContent({ section, entry }: { section: SectionId; entry: Entry })
           return <MoviesSection />;
         case "series":
           return <SeriesSection />;
-        default:
-          return <BrowseSection tab={section} />;
+        case "live":
+          return <LiveSection />;
       }
   }
 }

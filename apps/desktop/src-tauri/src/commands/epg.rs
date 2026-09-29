@@ -19,7 +19,8 @@ use std::time::Duration;
 use nova_core::now_ts;
 use nova_epg::Program;
 use nova_storage::{
-    ChannelNowAndNext, EpgFeedStatus, EpgSourcesRepository, NowAndNext, ProgramsRepository,
+    ChannelGuide, ChannelNowAndNext, ChannelRepository, EpgFeedStatus, EpgSourcesRepository,
+    LiveOverview, NowAndNext, ProgramsRepository,
 };
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -36,6 +37,27 @@ const BATCHES_IN_FLIGHT: usize = 4;
 /// XMLTV feeds larger than this are refused (full multi-country guides run to
 /// a few hundred MB; anything bigger is a mistake or hostile).
 pub(crate) const MAX_EPG_BYTES: u64 = 512 * 1024 * 1024;
+/// A gzip feed may inflate to at most this much XML (a bomb stops here).
+const MAX_EPG_INFLATED_BYTES: u64 = 4 * MAX_EPG_BYTES;
+/// Most channels one guide request reads.
+const MAX_GUIDE_CHANNELS: usize = 200;
+/// The widest guide window one request reads (13 hours).
+const MAX_GUIDE_WINDOW_SECS: i64 = 13 * 3600;
+
+/// Refuse oversized guide requests; a window is `[from, to)` with `from < to`.
+fn check_guide_request(ids: usize, from_utc: i64, to_utc: i64) -> Result<(), ApiError> {
+    if ids > MAX_GUIDE_CHANNELS {
+        return Err(ApiError::InvalidInput(format!(
+            "at most {MAX_GUIDE_CHANNELS} channels per guide request"
+        )));
+    }
+    if to_utc <= from_utc || to_utc - from_utc > MAX_GUIDE_WINDOW_SECS {
+        return Err(ApiError::InvalidInput(
+            "a guide window is at most 13 hours".into(),
+        ));
+    }
+    Ok(())
+}
 
 // ── Event payload ─────────────────────────────────────────────────────────────
 
@@ -96,9 +118,45 @@ pub async fn epg_range(
     source_id: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<Program>, ApiError> {
+    check_guide_request(tvg_ids.len(), from_utc, to_utc)?;
     let pool = require_profile_pool(&profile_id, &state).await?;
     ProgramsRepository::new(&pool)
         .range(&tvg_ids, from_utc, to_utc, source_id)
+        .await
+        .map_err(Into::into)
+}
+
+/// The guide grid for channel rows: each channel's programmes overlapping
+/// `[from_utc, to_utc)`, from its own source's feed where it has one. One
+/// entry per requested id, in order (empty without a guide). At most
+/// [`MAX_GUIDE_CHANNELS`] channels and a 13-hour window per request.
+#[tauri::command]
+pub async fn epg_guide(
+    profile_id: String,
+    channel_ids: Vec<i64>,
+    from_utc: i64,
+    to_utc: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<ChannelGuide>, ApiError> {
+    check_guide_request(channel_ids.len(), from_utc, to_utc)?;
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    ProgramsRepository::new(&pool)
+        .guide_for_channels(&channel_ids, from_utc, to_utc)
+        .await
+        .map_err(Into::into)
+}
+
+/// The Live section's overview of a playlist: channel count, how many have
+/// guide data, and channels per category.
+#[tauri::command]
+pub async fn list_live_overview(
+    profile_id: String,
+    source_id: i64,
+    state: State<'_, AppState>,
+) -> Result<LiveOverview, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    ChannelRepository::new(&pool)
+        .live_overview(source_id)
         .await
         .map_err(Into::into)
 }
@@ -179,6 +237,45 @@ pub async fn epg_refresh(
         .epg_refresh(source_id)
         .await
         .map_err(ApiError::Internal)
+}
+
+/// How old a feed's last refresh (success or failure) may be before the
+/// guide is refreshed on its own: feeds cover a day or more ahead, and a
+/// failing feed is retried at most twice a day.
+const GUIDE_STALE_SECS: i64 = 12 * 3600;
+
+/// Whether any of a source's feeds is due: never refreshed, or not within
+/// [`GUIDE_STALE_SECS`].
+fn guide_due(feeds: &[nova_storage::EpgSource], now: i64) -> bool {
+    feeds.iter().any(|f| {
+        f.last_refresh_utc
+            .is_none_or(|at| now - at >= GUIDE_STALE_SECS)
+    })
+}
+
+/// Refresh the source's guide when it is due (the Live section asks when it
+/// opens). Returns whether a refresh was queued.
+#[tauri::command]
+pub async fn epg_refresh_if_stale(
+    profile_id: String,
+    source_id: i64,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<bool, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let feeds = EpgSourcesRepository::new(&pool)
+        .list_for_source(source_id)
+        .await?;
+    if !guide_due(&feeds, now_ts()) {
+        return Ok(false);
+    }
+    state
+        .jobs_for_profile(&profile_id, pool, app)
+        .await
+        .epg_refresh(source_id)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(true)
 }
 
 // ── Refresh worker ────────────────────────────────────────────────────────────
@@ -379,6 +476,22 @@ pub(crate) async fn spool_capped(
     Ok(file.into_std().await)
 }
 
+/// The feed's XML: gzip feeds (`.xml.gz`, served as-is by many community
+/// guides) are inflated as they are parsed, up to [`MAX_EPG_INFLATED_BYTES`].
+fn xml_reader(mut feed: std::fs::File) -> std::io::Result<Box<dyn std::io::Read + Send>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut magic = [0u8; 2];
+    let read = feed.read(&mut magic)?;
+    feed.seek(SeekFrom::Start(0))?;
+    if read == 2 && magic == [0x1f, 0x8b] {
+        Ok(Box::new(
+            flate2::read::MultiGzDecoder::new(feed).take(MAX_EPG_INFLATED_BYTES),
+        ))
+    } else {
+        Ok(Box::new(feed))
+    }
+}
+
 enum ParsedChunk {
     Programs(Vec<Program>),
     /// The feed ended; its `<channel>` icons.
@@ -398,7 +511,14 @@ pub(crate) async fn ingest_feed(
 ) -> Result<u64, String> {
     let (tx_batches, mut rx_batches) = tokio::sync::mpsc::channel(BATCHES_IN_FLIGHT);
     let parser = tokio::task::spawn_blocking(move || {
-        let mut programs = nova_epg::parse(std::io::BufReader::new(feed));
+        let reader = match xml_reader(feed) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "EPG feed unreadable");
+                return;
+            }
+        };
+        let mut programs = nova_epg::parse(std::io::BufReader::new(reader));
         let mut batch = Vec::with_capacity(REFRESH_BATCH);
         for p in programs.by_ref() {
             match p {
@@ -449,8 +569,8 @@ pub(crate) async fn ingest_feed(
                 None => return Err("EPG parser stopped unexpectedly".to_string()),
             }
         };
-        // An empty body, an HTML error page or a compressed feed parses to
-        // nothing: keep the guide the feed had.
+        // An empty body or an HTML error page parses to nothing: keep the
+        // guide the feed had.
         if staged == 0 {
             return Err("EPG feed contained no programmes".to_string());
         }
@@ -641,6 +761,48 @@ mod tests {
             (4, 0),
             "the previous guide stays, staging is clean"
         );
+    }
+
+    #[tokio::test]
+    async fn gzip_feeds_are_inflated_while_parsing() {
+        use std::io::Read;
+        let (_dir, pool, source, feed) = profile_with_feed().await;
+        let mut xml = Vec::new();
+        xmltv(6).read_to_end(&mut xml).unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&xml).unwrap();
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(&gz.finish().unwrap()).unwrap();
+        std::io::Seek::rewind(&mut file).unwrap();
+        let inserted = ingest_feed(&pool, source, feed, file, vec!["cnn.us".into()])
+            .await
+            .unwrap();
+        assert_eq!(inserted, 6);
+    }
+
+    #[test]
+    fn a_guide_is_due_when_a_feed_is_old_or_never_refreshed() {
+        let feed = |at: Option<i64>| nova_storage::EpgSource {
+            id: 1,
+            source_id: 1,
+            url: "http://h/x".into(),
+            kind: "xtream".into(),
+            last_refresh_utc: at,
+            last_error: None,
+        };
+        let now = 100_000;
+        assert!(!guide_due(&[], now), "no feeds, nothing to refresh");
+        assert!(!guide_due(&[feed(Some(now - 3600))], now));
+        assert!(guide_due(&[feed(Some(now - GUIDE_STALE_SECS))], now));
+        assert!(guide_due(&[feed(Some(now)), feed(None)], now));
+    }
+
+    #[test]
+    fn guide_requests_are_bounded() {
+        assert!(check_guide_request(30, 0, 4 * 3600).is_ok());
+        assert!(check_guide_request(MAX_GUIDE_CHANNELS + 1, 0, 3600).is_err());
+        assert!(check_guide_request(1, 0, 14 * 3600).is_err());
+        assert!(check_guide_request(1, 100, 100).is_err());
     }
 
     /// A one-shot loopback HTTP server answering with `head` then `body`.
