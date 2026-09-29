@@ -148,23 +148,12 @@ export function AddSourceModal({ profileId, onDone, onCancel }: AddSourceModalPr
           clearWatchdog();
           unlisten?.();
           unlistenRef.current = null;
-          const completedSourceId = activeSourceIdRef.current;
           activeSourceIdRef.current = null;
           if (event.payload.error) {
             setError(event.payload.error);
             setPhase("form");
           } else {
-            // Kick off EPG refresh for the source we just imported. Runs in
-            // the background — no need to await before closing the modal. The
-            // worker is a no-op when no EPG URLs are registered.
-            if (completedSourceId !== null) {
-              void invoke("epg_refresh", {
-                profileId,
-                sourceId: completedSourceId,
-              }).catch(() => {
-                // Silent — EPG is decorative; the import itself succeeded.
-              });
-            }
+            // The import job queues the source's guide refresh itself.
             setPhase("ready");
           }
         }

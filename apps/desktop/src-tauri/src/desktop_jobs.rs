@@ -130,15 +130,6 @@ impl DesktopJobs {
     pub fn new(pool: Arc<SqlitePool>, app: AppHandle, runtime: Arc<ModelRuntimeManager>) -> Self {
         let admission = runtime.resource_admission();
         let control = Arc::new(JobControl::default());
-        let imports = Arc::new(JobQueue::new(
-            Arc::clone(&pool),
-            IMPORT_KIND,
-            Arc::new(ImportHandler {
-                pool: Arc::clone(&pool),
-                app: app.clone(),
-                admission: Arc::clone(&admission),
-            }),
-        ));
         let epg = Arc::new(JobQueue::new(
             Arc::clone(&pool),
             EPG_KIND,
@@ -147,6 +138,16 @@ impl DesktopJobs {
                 app: app.clone(),
                 admission: Arc::clone(&admission),
                 control: Arc::clone(&control),
+            }),
+        ));
+        let imports = Arc::new(JobQueue::new(
+            Arc::clone(&pool),
+            IMPORT_KIND,
+            Arc::new(ImportHandler {
+                pool: Arc::clone(&pool),
+                app: app.clone(),
+                admission: Arc::clone(&admission),
+                epg: Arc::clone(&epg),
             }),
         ));
         let enrichment = Arc::new(JobQueue::new(
@@ -250,6 +251,9 @@ struct ImportHandler {
     pool: Arc<SqlitePool>,
     app: AppHandle,
     admission: Arc<AdmissionController>,
+    /// A successful import refreshes the source's guide: its feeds may be
+    /// new (an M3U `url-tvg`), and its channels' tvg-ids may have changed.
+    epg: Arc<JobQueue>,
 }
 
 impl JobHandler for ImportHandler {
@@ -260,6 +264,7 @@ impl JobHandler for ImportHandler {
     fn handle(&self, job: Job, permit: JobPermit) -> JobFuture {
         let pool = Arc::clone(&self.pool);
         let app = self.app.clone();
+        let epg = Arc::clone(&self.epg);
         Box::pin(async move {
             let _slot = take_slot(permit)?;
             let (id, mode) = job
@@ -285,6 +290,13 @@ impl JobHandler for ImportHandler {
             }
             emit_import_stage(&app, source_id, ImportStage::Connecting);
             if run_source_import(pool, app, source, mode).await {
+                match epg
+                    .enqueue_unique(&source_id.to_string(), EXPLICIT_PRIORITY)
+                    .await
+                {
+                    Ok(_) => epg.kick(),
+                    Err(error) => tracing::warn!(%error, source_id, "could not queue EPG refresh"),
+                }
                 Ok(())
             } else {
                 Err("import failed".into())

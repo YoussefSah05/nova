@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.id as \"id!: i64\", e.kind, e.last_refresh_utc, e.last_error,\n                      (SELECT COUNT(*) FROM programs p WHERE p.epg_source_id = e.id) as \"programme_count!: i64\"\n               FROM epg_sources e WHERE e.source_id = ? ORDER BY e.id ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "kind",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_refresh_utc",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "last_error",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "programme_count!: i64",
+        "ordinal": 4,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "db89ac379622d080f8e77dcee941f7d2bb12aba7fe905f6782f30fe77f756120"
+}

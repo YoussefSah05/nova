@@ -22,6 +22,18 @@ pub struct EpgSource {
     pub last_error: Option<String>,
 }
 
+/// What the UI may know about a guide feed: never its URL (an Xtream feed URL
+/// carries the account's credentials).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpgFeedStatus {
+    pub id: i64,
+    pub kind: String,
+    pub last_refresh_utc: Option<i64>,
+    pub last_error: Option<String>,
+    pub programme_count: i64,
+}
+
 pub struct EpgSourcesRepository<'a> {
     pool: &'a SqlitePool,
 }
@@ -64,6 +76,28 @@ impl<'a> EpgSourcesRepository<'a> {
                 kind: r.kind,
                 last_refresh_utc: r.last_refresh_utc,
                 last_error: r.last_error,
+            })
+            .collect())
+    }
+
+    /// A source's feeds with their refresh state and programme counts.
+    pub async fn feed_status(&self, source_id: i64) -> Result<Vec<EpgFeedStatus>, StorageError> {
+        let rows = sqlx::query!(
+            r#"SELECT e.id as "id!: i64", e.kind, e.last_refresh_utc, e.last_error,
+                      (SELECT COUNT(*) FROM programs p WHERE p.epg_source_id = e.id) as "programme_count!: i64"
+               FROM epg_sources e WHERE e.source_id = ? ORDER BY e.id ASC"#,
+            source_id,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| EpgFeedStatus {
+                id: r.id,
+                kind: r.kind,
+                last_refresh_utc: r.last_refresh_utc,
+                last_error: r.last_error,
+                programme_count: r.programme_count,
             })
             .collect())
     }

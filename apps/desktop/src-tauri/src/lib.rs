@@ -171,6 +171,8 @@ pub fn run() {
             commands::epg::epg_range,
             commands::epg::add_epg_url,
             commands::epg::epg_refresh,
+            commands::epg::epg_channels_now_and_next,
+            commands::epg::list_epg_feeds,
             // Phase 5 — Playback
             commands::playback::get_proxy_port,
             commands::playback::resolve_stream,

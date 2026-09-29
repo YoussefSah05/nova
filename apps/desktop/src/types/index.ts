@@ -275,6 +275,23 @@ export interface NowAndNext {
   next: Program | null;
 }
 
+/// Now-and-next for one channel row (`epg_channels_now_and_next`), from the
+/// guide of the channel's own source.
+export interface ChannelNowAndNext {
+  channelId: number;
+  now: Program | null;
+  next: Program | null;
+}
+
+/// A source's guide feed (`list_epg_feeds`) — never its URL.
+export interface EpgFeedStatus {
+  id: number;
+  kind: "xtream" | "m3u_url_tvg" | "community" | string;
+  lastRefreshUtc: number | null;
+  lastError: string | null;
+  programmeCount: number;
+}
+
 export type EpgRefreshStage = "downloading" | "parsing" | "complete" | "failed";
 
 export interface EpgRefreshProgress {

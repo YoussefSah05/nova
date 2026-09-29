@@ -22,6 +22,16 @@ pub struct NowAndNext {
     pub next: Option<Program>,
 }
 
+/// Now-and-next for one channel row (`channels.id`), from the guide of the
+/// channel's own source where it has one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelNowAndNext {
+    pub channel_id: i64,
+    pub now: Option<Program>,
+    pub next: Option<Program>,
+}
+
 pub struct ProgramsRepository<'a> {
     pool: &'a SqlitePool,
 }
@@ -222,6 +232,42 @@ impl<'a> ProgramsRepository<'a> {
         let mut out = Vec::with_capacity(tvg_ids.len());
         for id in tvg_ids {
             out.push(self.now_and_next(id, now_utc, prefer_source).await?);
+        }
+        Ok(out)
+    }
+
+    /// Now-and-next for channel rows, each read from its guide feed with its
+    /// own source preferred. One entry per requested id, in order; channels
+    /// that don't exist or have no `tvg_id` come back empty.
+    pub async fn now_and_next_for_channels(
+        &self,
+        channel_ids: &[i64],
+        now_utc: i64,
+    ) -> Result<Vec<ChannelNowAndNext>, StorageError> {
+        let mut out = Vec::with_capacity(channel_ids.len());
+        for &channel_id in channel_ids {
+            let channel = sqlx::query!(
+                "SELECT tvg_id, source_id FROM channels WHERE id = ?",
+                channel_id
+            )
+            .fetch_optional(self.pool)
+            .await?;
+            let guide = match channel {
+                Some(c) => match c.tvg_id.filter(|t| !t.is_empty()) {
+                    Some(tvg_id) => Some(
+                        self.now_and_next(&tvg_id, now_utc, Some(c.source_id))
+                            .await?,
+                    ),
+                    None => None,
+                },
+                None => None,
+            };
+            let (now, next) = guide.map(|g| (g.now, g.next)).unwrap_or_default();
+            out.push(ChannelNowAndNext {
+                channel_id,
+                now,
+                next,
+            });
         }
         Ok(out)
     }

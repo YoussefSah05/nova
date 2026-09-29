@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { Source } from "@/types";
 import { SettingRow, SettingsCard, SettingsButton, SelectInput, TextInput } from "../SettingsUI";
+import { GuideStatusRow } from "./GuideStatusRow";
 
 const REFRESH_OPTIONS = [
   { value: "0", label: "Manual" },
@@ -91,9 +92,10 @@ export function SourcesEpgSection({
               options={REFRESH_OPTIONS}
             />
           </SettingRow>
+          <GuideStatusRow profileId={profileId} sourceId={s.id} />
           <SettingRow
             title="EPG (XMLTV) URL"
-            description="Add a community guide feed for this source."
+            description="Add a community guide feed for this source; it is fetched right away."
           >
             <div className="flex w-72 items-center gap-2">
               <TextInput

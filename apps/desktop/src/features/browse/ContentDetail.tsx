@@ -26,6 +26,8 @@ import { ItemRail } from "./ItemRail";
 import type { CanonicalMediaDetail } from "@/types";
 import { titleArtSubject, useTitleArt } from "./titleArt";
 import { ChannelTile } from "./ChannelTile";
+import { useChannelGuide } from "./guide";
+import { GuideLine } from "./GuideViews";
 import { CastStrip } from "./detail/CastStrip";
 import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
@@ -115,20 +117,28 @@ function LiveBundleDetail({
       ) : (
         <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {channels.map((c) => (
-            <button
-              key={c.key}
-              onClick={() => onPlay(c)}
-              className="group flex flex-col gap-2 text-left focus:outline-none"
-            >
-              <div className="aspect-video w-full overflow-hidden rounded-xl shadow-lg shadow-black/30 transition-transform duration-200 group-hover:-translate-y-1 group-hover:ring-1 group-hover:ring-white/25 group-focus-visible:ring-2 group-focus-visible:ring-ring">
-                <ChannelTile logoUrl={c.posterUrl} title={c.title} />
-              </div>
-              <span className="line-clamp-2 text-xs font-medium text-white/85">{c.title}</span>
-            </button>
+            <BundleChannel key={c.key} item={c} onPlay={onPlay} />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+/// One channel of a brand bundle, with what it's showing now.
+function BundleChannel({ item, onPlay }: { item: BrowseItem; onPlay: (item: BrowseItem) => void }) {
+  const guide = useChannelGuide(item.id);
+  return (
+    <button
+      onClick={() => onPlay(item)}
+      className="group flex flex-col gap-2 text-left focus:outline-none"
+    >
+      <div className="aspect-video w-full overflow-hidden rounded-xl shadow-lg shadow-black/30 transition-transform duration-200 group-hover:-translate-y-1 group-hover:ring-1 group-hover:ring-white/25 group-focus-visible:ring-2 group-focus-visible:ring-ring">
+        <ChannelTile logoUrl={item.posterUrl} title={item.title} />
+      </div>
+      <span className="line-clamp-2 text-xs font-medium text-white/85">{item.title}</span>
+      <GuideLine guide={guide} />
+    </button>
   );
 }
 

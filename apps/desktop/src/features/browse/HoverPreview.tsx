@@ -18,6 +18,8 @@ import { PosterFallback } from "./PosterFallback";
 import type { BrowseItem } from "./queries";
 import { Artwork } from "@/components/Artwork";
 import { ChannelTile } from "./ChannelTile";
+import { useChannelGuide } from "./guide";
+import { GuideSummary } from "./GuideViews";
 
 /// Module-level scroll suppression: previews never open within this window of the
 /// last scroll, so fast scrolling past cards can't spawn (then immediately tear
@@ -87,6 +89,9 @@ export function HoverPreview({
     item.movie?.backdropUrl ?? item.vod?.backdropUrl ?? item.series?.backdropUrl ?? item.posterUrl;
   const overview = item.movie?.overview ?? item.vod?.overview ?? item.series?.overview ?? null;
   const meta = metaLine(item, live);
+  const guide = useChannelGuide(item.id, {
+    enabled: live && !(item.memberCount && item.memberCount > 1),
+  });
 
   return createPortal(
     <motion.div
@@ -148,6 +153,7 @@ export function HoverPreview({
           {item.title}
         </p>
         {meta && <p className="text-[11px] text-muted-foreground">{meta}</p>}
+        {live && <GuideSummary guide={guide} />}
         {overview && (
           <p className="line-clamp-3 text-[11px] leading-relaxed text-muted-foreground">
             {overview}

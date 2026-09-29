@@ -35,7 +35,7 @@ pub use channel_logos::{ChannelLogoRepository, DirectoryLogoWrite, LogoCandidate
 pub use channels::ChannelRepository;
 pub use embeddings::{from_blob, to_blob, EmbeddingRepository};
 pub use enrich::{EnrichUpdate, SeriesTmdbQuery, SeriesTmdbWrite, UnenrichedRow};
-pub use epg_sources::{EpgSource, EpgSourcesRepository};
+pub use epg_sources::{EpgFeedStatus, EpgSource, EpgSourcesRepository};
 pub use external_matches::{
     ExternalMatch, ExternalMatchRepository, ExternalMatchWrite, MatchMethod, MatchPriority,
     MatchedMetadata, MovieMatchWork, TMDB_MOVIE,
@@ -47,7 +47,7 @@ pub use models::{
 pub use playback::{PlaybackRepository, ResolvedStreamUrl};
 pub use profile_settings::ProfileSettingsRepository;
 pub use profiles::ProfileRepository;
-pub use programs::{NowAndNext, ProgramsRepository};
+pub use programs::{ChannelNowAndNext, NowAndNext, ProgramsRepository};
 pub use publication::{
     FailedAttempt, FailureStatus, Publication, PublicationMode, PublicationRepository,
 };

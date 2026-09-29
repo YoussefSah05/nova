@@ -16,12 +16,12 @@ pub use db::{init_app_db, init_profile_db};
 pub use error::StorageError;
 pub use repositories::{
     from_blob, to_blob, CanonicalRepository, CaptionStyleRepository, CatalogSearchRepository,
-    ChannelLogoRepository, ChannelRepository, CompileStats, DirectoryLogoWrite,
-    EmbeddingRepository, EnrichUpdate, EpgSource, EpgSourcesRepository, ExternalLibraryRecord,
-    ExternalMatch, ExternalMatchRepository, ExternalMatchWrite, ExternalRegisteredModel,
-    FailedAttempt, FailureStatus, Job, JobRepository, LineageEntry, LogoCandidate, MatchMethod,
-    MatchPriority, MatchedMetadata, ModelRepository, MovieFilters, MovieMatchWork,
-    MovieSearchCandidate, NowAndNext, PlaybackRepository, ProfileRepository,
+    ChannelLogoRepository, ChannelNowAndNext, ChannelRepository, CompileStats, DirectoryLogoWrite,
+    EmbeddingRepository, EnrichUpdate, EpgFeedStatus, EpgSource, EpgSourcesRepository,
+    ExternalLibraryRecord, ExternalMatch, ExternalMatchRepository, ExternalMatchWrite,
+    ExternalRegisteredModel, FailedAttempt, FailureStatus, Job, JobRepository, LineageEntry,
+    LogoCandidate, MatchMethod, MatchPriority, MatchedMetadata, ModelRepository, MovieFilters,
+    MovieMatchWork, MovieSearchCandidate, NowAndNext, PlaybackRepository, ProfileRepository,
     ProfileSettingsRepository, ProgramsRepository, Publication, PublicationMode,
     PublicationRepository, RegisteredModel, ResolutionReport, ResolvedStreamUrl, ResumePosition,
     SearchHit, SearchRepository, SeriesFlagSnapshot, SeriesRepository, SeriesTmdbQuery,

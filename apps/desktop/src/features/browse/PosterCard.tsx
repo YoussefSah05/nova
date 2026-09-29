@@ -21,6 +21,8 @@ import { PosterFallback } from "./PosterFallback";
 import type { BrowseItem } from "./queries";
 import { Artwork } from "@/components/Artwork";
 import { ChannelTile } from "./ChannelTile";
+import { useChannelGuide } from "./guide";
+import { GuideLine } from "./GuideViews";
 
 export interface PosterCardHandlers {
   onActivate: (item: BrowseItem) => void;
@@ -35,6 +37,10 @@ export const PosterCard = memo(function PosterCard({
   onToggleWatchlist,
 }: { item: BrowseItem } & PosterCardHandlers) {
   const live = item.kind === "live";
+  // A bundle card stands for several channels: no single guide.
+  const guide = useChannelGuide(item.id, {
+    enabled: live && !(item.memberCount && item.memberCount > 1),
+  });
   const cardRef = useRef<HTMLDivElement>(null);
   const preview = useHoverPreview();
   return (
@@ -116,8 +122,12 @@ export const PosterCard = memo(function PosterCard({
 
           <div className="min-w-0">
             <p className="line-clamp-1 text-xs font-medium text-foreground">{item.title}</p>
-            {item.subtitle && (
-              <p className="truncate text-[11px] text-muted-foreground">{item.subtitle}</p>
+            {guide?.now ? (
+              <GuideLine guide={guide} className="mt-0.5" />
+            ) : (
+              item.subtitle && (
+                <p className="truncate text-[11px] text-muted-foreground">{item.subtitle}</p>
+              )
             )}
           </div>
         </div>

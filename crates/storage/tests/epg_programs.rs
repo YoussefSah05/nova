@@ -182,3 +182,78 @@ async fn a_channel_shows_one_feeds_guide_even_within_a_source() {
         );
     }
 }
+
+#[tokio::test]
+async fn channels_read_their_own_sources_guide_and_feeds_report_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_profile_db(dir.path().join("p.db").to_str().unwrap())
+        .await
+        .unwrap();
+    let (a, feed_a) = source_with_feed(&pool, "a").await;
+    let (b, feed_b) = source_with_feed(&pool, "b").await;
+    refresh(&pool, feed_a, &[program("cnn.us", "A news", 0, 100)]).await;
+    refresh(
+        &pool,
+        feed_b,
+        &[
+            program("cnn.us", "B news", 0, 100),
+            program("cnn.us", "B late", 100, 200),
+        ],
+    )
+    .await;
+    let channel = |source: i64, tvg: Option<&'static str>| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("INSERT INTO channels (source_id, tvg_id, name, stream_url) VALUES (?, ?, 'CNN', 'http://s/1')")
+                .bind(source)
+                .bind(tvg)
+                .execute(&pool)
+                .await
+                .unwrap()
+                .last_insert_rowid()
+        }
+    };
+    let on_a = channel(a, Some("cnn.us")).await;
+    let on_b = channel(b, Some("cnn.us")).await;
+    let untagged = channel(a, None).await;
+
+    let guides = ProgramsRepository::new(&pool)
+        .now_and_next_for_channels(&[on_b, on_a, untagged, 9_999], 50)
+        .await
+        .unwrap();
+    let summary: Vec<(i64, Option<String>, Option<String>)> = guides
+        .into_iter()
+        .map(|g| {
+            (
+                g.channel_id,
+                g.now.map(|p| p.title),
+                g.next.map(|p| p.title),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (on_b, Some("B news".into()), Some("B late".into())),
+            (on_a, Some("A news".into()), None),
+            (untagged, None, None),
+            (9_999, None, None),
+        ],
+        "each channel reads its own source's guide, in request order"
+    );
+
+    let status = EpgSourcesRepository::new(&pool)
+        .feed_status(b)
+        .await
+        .unwrap();
+    assert_eq!(status.len(), 1);
+    assert_eq!(
+        (status[0].kind.as_str(), status[0].programme_count),
+        ("xtream", 2)
+    );
+    let json = serde_json::to_string(&status).unwrap();
+    assert!(
+        !json.contains("http"),
+        "feed URLs never leave storage: {json}"
+    );
+}

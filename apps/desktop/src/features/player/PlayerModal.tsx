@@ -58,6 +58,8 @@ import { useAirPlay } from "./useAirPlay";
 import { AirPlayButton, AirPlayOverlay } from "./AirPlay";
 import { Artwork } from "@/components/Artwork";
 import { ChannelTile as BrandTile } from "@/features/browse/ChannelTile";
+import { useChannelGuide } from "@/features/browse/guide";
+import { GuideLine, GuideSummary } from "@/features/browse/GuideViews";
 
 export type PlayMediaKind = "live" | "vod" | "episode";
 
@@ -214,6 +216,7 @@ export function PlayerModal({
   const hlsRef = useRef<Hls | null>(null);
 
   const isLive = media.kind === "live";
+  const guide = useChannelGuide(media.id, { profileId, enabled: isLive });
 
   // -- playback / stream state --------------------------------------------
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
@@ -1631,6 +1634,9 @@ export function PlayerModal({
                 {media.subtitle}
               </p>
             )}
+            {isLive && (
+              <GuideSummary guide={guide} tone="overlay" className="mt-2 max-w-md drop-shadow-md" />
+            )}
           </div>
           <button
             onClick={onClose}
@@ -1950,18 +1956,21 @@ function CinemaPanel({
   );
 }
 
-/// One tile in a cinema row.
+/// One tile in a cinema row. `channelId` shows what that channel is airing.
 function ChannelTile({
   title,
   logoUrl,
   active,
   onClick,
+  channelId,
 }: {
   title: string;
   logoUrl: string | null;
   active: boolean;
   onClick: () => void;
+  channelId?: number;
 }) {
+  const guide = useChannelGuide(channelId, { enabled: channelId != null });
   return (
     <button
       type="button"
@@ -1976,6 +1985,7 @@ function ChannelTile({
         <BrandTile logoUrl={logoUrl} title={title} />
       </div>
       <span className="line-clamp-2 text-[11px] font-medium text-white/85">{title}</span>
+      <GuideLine guide={guide} className="w-full text-left" />
     </button>
   );
 }
@@ -2057,6 +2067,7 @@ function CinemaChannelStrip({
                 key={c.key}
                 title={c.title}
                 logoUrl={c.posterUrl}
+                channelId={c.id}
                 active={c.id === currentChannelId}
                 onClick={() =>
                   onSelectChannel({

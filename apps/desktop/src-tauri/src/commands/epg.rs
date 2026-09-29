@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use nova_core::now_ts;
 use nova_epg::Program;
-use nova_storage::{EpgSourcesRepository, NowAndNext, ProgramsRepository};
+use nova_storage::{
+    ChannelNowAndNext, EpgFeedStatus, EpgSourcesRepository, NowAndNext, ProgramsRepository,
+};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, State};
@@ -104,16 +106,54 @@ pub async fn epg_range(
 /// Manually register an XMLTV URL for a source. Use this to wire up community
 /// EPG feeds (iptv-org, epg.pw, EPGTalk, etc.) for sources that don't ship
 /// their own EPG, or to supplement provider EPG with extra channel coverage.
+/// The feed is refreshed straight away (a queued EPG job).
 #[tauri::command]
 pub async fn add_epg_url(
     profile_id: String,
     source_id: i64,
     url: String,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     EpgSourcesRepository::new(&pool)
         .upsert(source_id, url.trim(), "community")
+        .await?;
+    state
+        .jobs_for_profile(&profile_id, pool, app)
+        .await
+        .epg_refresh(source_id)
+        .await
+        .map_err(ApiError::Internal)
+}
+
+/// Now-and-next for channel rows (what the browse cards and the live player
+/// hold): each channel reads the guide of its own source where it has one.
+/// One entry per requested id, empty when the channel has no guide.
+#[tauri::command]
+pub async fn epg_channels_now_and_next(
+    profile_id: String,
+    channel_ids: Vec<i64>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ChannelNowAndNext>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    ProgramsRepository::new(&pool)
+        .now_and_next_for_channels(&channel_ids, now_ts())
+        .await
+        .map_err(Into::into)
+}
+
+/// A source's guide feeds: kind, last refresh, last error and programme
+/// count. Never the feed URLs (an Xtream feed URL carries credentials).
+#[tauri::command]
+pub async fn list_epg_feeds(
+    profile_id: String,
+    source_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<EpgFeedStatus>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    EpgSourcesRepository::new(&pool)
+        .feed_status(source_id)
         .await
         .map_err(Into::into)
 }
