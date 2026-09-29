@@ -710,12 +710,55 @@ Branch `feat/ui-series`.
   frontend), `cargo fmt --check`, `git diff --check`, production build pass. **Not verified on
   device** (`just dev`).
 
+### Frontend redesign, UI-4: Live "Channels" and the guide (EPG repass) — 2026-09-29
+
+Branch `feat/ui-live`.
+
+- **Backend:** `epg_guide` reads a twelve-hour window for channel rows in one query (each channel's
+  own source's feed first, then any feed, then pre-feed programmes); `epg_channels_now_and_next`
+  is one query per call (was four per channel), ranking the programme on air (latest start) and
+  the next one separately; guide requests are bounded (200 channels, 13 hours; `epg_range` too).
+  `list_live_overview` (channels, channels with a programme on now or later, category counts).
+  `epg_refresh_if_stale` queues a refresh when a feed is 12 hours old or never refreshed and no
+  refresh is queued or running. Gzip XMLTV feeds are inflated while parsing (≤ 2 GiB); a stream
+  error (truncated/corrupt gzip, the cap) or 1,000 malformed programmes in a row fails the feed
+  and keeps its guide.
+- **Channels section** (`src/sections/live/`, `src/features/live/`): header with coverage and the
+  time, a rail (all, favourites, categories with counts, regions, countries), a virtualized guide
+  (pinned channel column and time header, amber now-line, rows read in blocks of 30 as they
+  scroll, arrow/Home/End/Enter), the chosen channel's now/time left/progress/description/later
+  with Watch and favourite, and a toggle to the logo wall. Search narrows the guide in place.
+  Opening Live re-checks guide freshness every 12 hours.
+- **Bundles** (`pages/ChannelBundlePage.tsx`) open on the same guide. The old shared browse
+  section and genre rails are retired (every section has its own screen); guide text is back on
+  the type scale.
+- **Tests:** storage (guide window by feed preference, overlapping now/next, repeated ids,
+  coverage now/later, category counts); gzip ingest (whole, truncated, trailer-less, trailing
+  bytes — none hang, the guide is kept), the inflate cap, request bounds, freshness rule;
+  timeline maths; the grid's rows, no-guide state and keys; programme blocks across window moves
+  and failures; shell test searching the guide and switching to the wall.
+- **Independent review:** **Critical, confirmed and fixed:** a gzip feed with a cut trailer or
+  trailing bytes spun the parser forever and blocked the EPG queue. **High, fixed:** a truncated,
+  corrupt or capped gzip published a partial guide as a success. **Medium, fixed:** guide
+  queries ignored the hidden-screen rule and blanked rows every half hour; keyboard scrolling
+  and the now-line were offset by the header; no tab stop once the chosen row scrolled away;
+  search remounted the guide; a duplicate full refresh after an import; region/country filters
+  lost with the old section; wrong now/next with overlapping programmes. **Low, fixed:** the
+  now-line over the channel column, endless "Loading the guide" on errors, coverage counting
+  ended guides, repeated ids, freshness checked once per session. Low, recorded: the red LIVE
+  dot is a broadcast status colour, as on Home; surfaces use literal hex like the other sections;
+  Live lost its "Recently watched"/"Trending" rails (Home keeps live Continue watching and On air).
+- **EPG repass, still open:** channels match guides by `tvg_id` only (no canonical channel
+  matcher); playlist `auto_refresh_hours` is still unused (guide freshness now works).
+- **Validation:** `just lint`, `just typecheck`, `just test` (615 Rust, 0 failed, 5 opt-in ignored; 104
+  frontend), `cargo fmt --check`, `git diff --check`, production build pass. **Not verified on
+  device** (`just dev`).
+
 ### Next dependency
 
-**UI-4: Live + guide** — the EPG repass: `ChannelGroup` gains `tvgId`, a server-clamped
-`epg_range`, a virtualized guide grid with the now-line, a focused-channel preview, the logo wall
-and the channel bundle page. Then UI-5 Search, UI-6 Library history, UI-7 Settings/Models. M26
-still needs a real profile copy.
+**UI-5: Search** — a Search page over movies, series and channels (lexical + semantic), the
+interpretation chips, the reserved Moments group and the semantic-search capability notice. Then
+UI-6 Library history, UI-7 Settings/Models. M26 still needs a real profile copy.
 
 ---
 
