@@ -3,7 +3,7 @@
 //! top bar is the only live blur, since each blurred layer is recomputed on
 //! every scroll frame.
 
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import { SearchIcon, XIcon } from "lucide-react";
 
 import { SimpleSelect } from "@/components/ui/select";
@@ -14,7 +14,8 @@ const ANY = "__any__";
 
 export interface FacetMenu {
   kind: Exclude<FacetKind, "query">;
-  options: string[];
+  /// Values, or `{ value, label }` when the value is a code (`1990` → `1990s`).
+  options: (string | { value: string; label: string })[];
   anyLabel: string;
 }
 
@@ -25,6 +26,7 @@ export const FacetBar = memo(function FacetBar({
   facets,
   onChange,
   onClear,
+  trailing,
 }: {
   searchLabel: string;
   values: FacetValues;
@@ -32,6 +34,8 @@ export const FacetBar = memo(function FacetBar({
   facets: Facet[];
   onChange: (kind: FacetKind, value: string) => void;
   onClear: () => void;
+  /// Controls on the right (a sort menu).
+  trailing?: ReactNode;
 }) {
   return (
     <div
@@ -58,7 +62,7 @@ export const FacetBar = memo(function FacetBar({
             value={values[m.kind] || ANY}
             options={[
               { value: ANY, label: m.anyLabel },
-              ...m.options.map((o) => ({ value: o, label: o })),
+              ...m.options.map((o) => (typeof o === "string" ? { value: o, label: o } : o)),
             ]}
             onChange={(v) => onChange(m.kind, v === ANY ? "" : v)}
             ariaLabel={FACET_LABELS[m.kind]}
@@ -78,7 +82,7 @@ export const FacetBar = memo(function FacetBar({
           )}
         >
           <span className="text-white/55">{FACET_LABELS[f.kind]}</span>
-          <span className="truncate">{f.value}</span>
+          <span className="truncate">{f.label ?? f.value}</span>
           <XIcon className="h-3 w-3 shrink-0" strokeWidth={1.5} aria-hidden />
         </button>
       ))}
@@ -90,6 +94,12 @@ export const FacetBar = memo(function FacetBar({
         >
           Clear all
         </button>
+      )}
+      {trailing && (
+        <>
+          <span className="flex-1" />
+          {trailing}
+        </>
       )}
     </div>
   );

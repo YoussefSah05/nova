@@ -45,6 +45,13 @@ export const PosterCard = memo(function PosterCard({
   const cardRef = useRef<HTMLDivElement>(null);
   const preview = useHoverPreview();
   const prefetch = usePrefetchTitle(item);
+  // Movies: the best picture quality on the poster, year and rating below.
+  const movie = item.movie;
+  const quality = movie?.badges?.find((b) => b === "4K" || b === "FHD" || b === "HD") ?? null;
+  const versions = movie?.versionCount ?? (item.variants ? item.variants.length + 1 : 1);
+  const movieMeta = movie
+    ? [movie.year, movie.rating ? `★ ${movie.rating.toFixed(1)}` : null].filter(Boolean).join(" · ")
+    : null;
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -107,13 +114,20 @@ export const PosterCard = memo(function PosterCard({
               />
             )}
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+            {/* Solid chips, never blurred: a grid of blurs is recomputed on
+                every scroll frame. */}
+            {quality && (
+              <span className="pointer-events-none absolute left-2 top-2 rounded-[5px] bg-black/75 px-1.5 py-px text-xs font-medium text-white/90">
+                {quality}
+              </span>
+            )}
             {item.memberCount && item.memberCount > 1 ? (
-              <span className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm">
+              <span className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/75 px-1.5 py-0.5 text-xs font-medium text-white">
                 {item.memberCount} channels
               </span>
-            ) : item.variants && item.variants.length > 0 ? (
-              <span className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm">
-                {item.variants.length + 1} versions
+            ) : versions > 1 ? (
+              <span className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/75 px-1.5 py-0.5 text-xs font-medium text-white">
+                {versions} versions
               </span>
             ) : null}
           </button>
@@ -138,6 +152,8 @@ export const PosterCard = memo(function PosterCard({
             <p className="line-clamp-1 text-xs font-medium text-foreground">{item.title}</p>
             {live && guide?.now ? (
               <GuideLine guide={guide} className="mt-0.5" />
+            ) : movieMeta ? (
+              <p className="truncate text-[11px] text-muted-foreground">{movieMeta}</p>
             ) : (
               item.subtitle && (
                 <p className="truncate text-[11px] text-muted-foreground">{item.subtitle}</p>

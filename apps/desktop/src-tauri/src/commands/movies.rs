@@ -6,7 +6,10 @@
 
 use nova_core::catalog::media::{CanonicalMediaDetail, CanonicalMediaSummary, MoviePlaybackTarget};
 use nova_core::catalog::{EntityId, VariantId};
-use nova_storage::{CanonicalRepository, MovieFilters, ProfileSettingsRepository};
+use nova_storage::{
+    CanonicalRepository, DecadeCount, FacetCount, LibraryCollection, MovieFilters,
+    ProfileSettingsRepository,
+};
 use tauri::State;
 
 use crate::ipc::ApiError;
@@ -35,21 +38,9 @@ pub async fn list_movies(
 ) -> Result<Vec<CanonicalMediaSummary>, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     let filters = filters.unwrap_or_default();
-    let category = normalize_filter(filters.category);
-    let query = normalize_filter(filters.query);
+    let owned = OwnedMovieFilters::from(filters);
     CanonicalRepository::new(&pool)
-        .list_movies(
-            source_id,
-            limit,
-            offset,
-            &MovieFilters {
-                category: category.as_deref(),
-                query: query.as_deref(),
-                favorites_only: filters.favorites_only,
-                watchlist_only: filters.watchlist_only,
-            },
-            filters.sort,
-        )
+        .list_movies(source_id, limit, offset, &owned.borrow(), owned.sort)
         .await
         .map_err(Into::into)
 }
@@ -62,19 +53,9 @@ pub async fn count_movies(
     state: State<'_, AppState>,
 ) -> Result<i64, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
-    let filters = filters.unwrap_or_default();
-    let category = normalize_filter(filters.category);
-    let query = normalize_filter(filters.query);
+    let owned = OwnedMovieFilters::from(filters.unwrap_or_default());
     CanonicalRepository::new(&pool)
-        .count_movies(
-            source_id,
-            &MovieFilters {
-                category: category.as_deref(),
-                query: query.as_deref(),
-                favorites_only: filters.favorites_only,
-                watchlist_only: filters.watchlist_only,
-            },
-        )
+        .count_movies(source_id, &owned.borrow())
         .await
         .map_err(Into::into)
 }
@@ -86,10 +67,102 @@ pub async fn get_movie(
     state: State<'_, AppState>,
 ) -> Result<CanonicalMediaDetail, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
+    // "Picked" follows the same ranking playback uses for this profile.
+    let preferred = ProfileSettingsRepository::new(&pool)
+        .get()
+        .await
+        .ok()
+        .and_then(|s| s.preferred_audio_lang);
     CanonicalRepository::new(&pool)
-        .movie_detail(&self::entity_id(entity_id)?)
+        .movie_detail_with(&self::entity_id(entity_id)?, preferred.as_deref())
         .await?
         .ok_or_else(|| ApiError::NotFound("movie not found".into()))
+}
+
+/// Nova's genres among the playlist's films, most common first.
+#[tauri::command]
+pub async fn list_movie_genres(
+    profile_id: String,
+    source_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<FacetCount>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    CanonicalRepository::new(&pool)
+        .movie_genres(source_id)
+        .await
+        .map_err(Into::into)
+}
+
+/// Films per release decade, newest first, with a few posters each.
+#[tauri::command]
+pub async fn list_movie_decades(
+    profile_id: String,
+    source_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<DecadeCount>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    CanonicalRepository::new(&pool)
+        .movie_decades(source_id)
+        .await
+        .map_err(Into::into)
+}
+
+/// TMDB collections with at least two films in the playlist.
+#[tauri::command]
+pub async fn list_library_collections(
+    profile_id: String,
+    source_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<LibraryCollection>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    CanonicalRepository::new(&pool)
+        .library_collections(source_id)
+        .await
+        .map_err(Into::into)
+}
+
+/// Normalized owned copies of the browse filters (the repository borrows).
+struct OwnedMovieFilters {
+    category: Option<String>,
+    query: Option<String>,
+    genre: Option<String>,
+    favorites_only: bool,
+    watchlist_only: bool,
+    year_from: Option<i64>,
+    year_to: Option<i64>,
+    collection_id: Option<i64>,
+    sort: nova_core::ContentSort,
+}
+
+impl From<ContentFilters> for OwnedMovieFilters {
+    fn from(f: ContentFilters) -> Self {
+        Self {
+            category: normalize_filter(f.category),
+            query: normalize_filter(f.query),
+            genre: normalize_filter(f.genre),
+            favorites_only: f.favorites_only,
+            watchlist_only: f.watchlist_only,
+            year_from: f.year_from,
+            year_to: f.year_to,
+            collection_id: f.collection_id,
+            sort: f.sort,
+        }
+    }
+}
+
+impl OwnedMovieFilters {
+    fn borrow(&self) -> MovieFilters<'_> {
+        MovieFilters {
+            category: self.category.as_deref(),
+            query: self.query.as_deref(),
+            favorites_only: self.favorites_only,
+            watchlist_only: self.watchlist_only,
+            genre: self.genre.as_deref(),
+            year_from: self.year_from,
+            year_to: self.year_to,
+            collection_id: self.collection_id,
+        }
+    }
 }
 
 #[tauri::command]

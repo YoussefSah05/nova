@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT v.genre as \"name!: String\", COUNT(*) as \"count!: i64\"\n               FROM stream_variants s\n               JOIN vod_items v ON v.id = s.vod_item_id\n               WHERE s.source_id = ?\n                 AND s.vod_item_id = (\n                   SELECT MIN(r.vod_item_id) FROM stream_variants r\n                   WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)\n                 AND v.genre IS NOT NULL AND v.genre <> ''\n               GROUP BY v.genre\n               ORDER BY COUNT(*) DESC, v.genre",
+  "describe": {
+    "columns": [
+      {
+        "name": "name!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "e21dbabbc6de95ea11add9632b7abc9b544e75e80ffcee310c9fa4f4d44b94a8"
+}

@@ -451,6 +451,12 @@ pub enum ContentSort {
     Default,
     /// Most recently imported first.
     RecentlyAdded,
+    /// A–Z by display title (movies; others keep the default order).
+    Title,
+    /// Newest release year first (movies).
+    Year,
+    /// Best rated first (movies).
+    Rating,
 }
 
 /// Which browse tab a Continue Watching rail belongs to. Each tab owns its

@@ -226,7 +226,8 @@ impl<'a> VodRepository<'a> {
                 evidence: SourceEvidence::default(),
             })
             .collect(),
-            ContentSort::Default => sqlx::query!(
+            // Title/year/rating orders are movie-only: natural order here.
+            ContentSort::Default | ContentSort::Title | ContentSort::Year | ContentSort::Rating => sqlx::query!(
                 r#"SELECT id as "id!: i64", source_id, name, clean_title, year, logo_url, stream_url, category, is_favorite, is_in_watchlist, added_at, dedup_group, canonical_title, poster_url, backdrop_url, overview
                  FROM vod_items
                  WHERE source_id = ?

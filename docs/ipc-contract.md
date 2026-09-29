@@ -25,9 +25,12 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `list_vod` | `{ profileId, sourceId, limit, offset, filters? }` | `VodItem[]` | 3 |
 | `count_vod` | `{ profileId, sourceId, filters? }` | `number` | 3 |
 | `list_vod_categories` | `{ profileId, sourceId }` | `string[]` | 3 |
-| `list_movies` | `{ profileId, sourceId, limit, offset, filters? }` | `CanonicalMediaSummary[]` (one per canonical entity with an available variant; secret-free) | P07 |
+| `list_movies` | `{ profileId, sourceId, limit, offset, filters? }` — filters add `genre` (Nova's primary genre), `yearFrom`/`yearTo` (inclusive), `collectionId` (TMDB); `sort`: `default`/`recentlyAdded`/`title`/`year`/`rating` | `CanonicalMediaSummary[]` (one per canonical entity with an available variant; secret-free; card facts `genres`, `runtimeMin`, `rating` + `ratingSource`, `badges` (best quality + audio versions across the title's sources), `versionCount`, all from stored evidence) | P07, UI-2 |
+| `list_movie_genres` | `{ profileId, sourceId }` | `{ name, count }[]` — Nova's genres, most common first | UI-2 |
+| `list_movie_decades` | `{ profileId, sourceId }` | `{ decade, count, posterUrls }[]` — newest first, up to 4 posters | UI-2 |
+| `list_library_collections` | `{ profileId, sourceId }` | `{ id, name, count, posterUrls }[]` — TMDB collections with 2+ films in the playlist, known from fetched facts | UI-2 |
 | `count_movies` | `{ profileId, sourceId, filters? }` | `number` | P07 |
-| `get_movie` | `{ profileId, entityId }` | `CanonicalMediaDetail` (summary + `variants[]` + entity `resume`) | P07 |
+| `get_movie` | `{ profileId, entityId }` | `CanonicalMediaDetail` (summary + `variants[]` with `badges`, `recentlyFailed` and `picked` — the variant selector's first choice for the profile's audio language — + entity `resume`, `originalTitle`, `releaseDate`, `voteCount`, `keywords`) | P07, UI-2 |
 | `set_movie_favorite` | `{ profileId, entityId, isFavorite }` | `void` | P07 |
 | `set_movie_in_watchlist` | `{ profileId, entityId, inWatchlist }` | `void` | P07 |
 | `resolve_movie_playback` | `{ profileId, entityId, variantId? }` | `MoviePlaybackTarget { entityId, variantId, mediaKind: 'vod', mediaId }` (Rust-selected variant: explicit choice, no recent failure, preferred audio language, picture quality; transient locator) | P07, M14 |

@@ -17,25 +17,38 @@ export function PlaybackProvider({ children }: { children: ReactNode }) {
   const { profile, activeSourceId, setError } = useSession();
   const [media, setMedia] = useState<PlayMedia | null>(null);
 
+  const resolveMovie = useCallback(
+    async (item: BrowseItem, variantId: string | null) => {
+      if (!item.entityId) return;
+      try {
+        const target = await invoke<MoviePlaybackTarget>("resolve_movie_playback", {
+          profileId: profile.id,
+          entityId: item.entityId,
+          variantId,
+        });
+        setMedia({
+          kind: target.mediaKind,
+          id: target.mediaId,
+          title: item.title,
+          subtitle: item.subtitle,
+          posterUrl: item.posterUrl,
+        });
+      } catch (e: unknown) {
+        setError(errorMessage(e));
+      }
+    },
+    [profile.id, setError]
+  );
+
+  const playVariant = useCallback(
+    (item: BrowseItem, variantId: string) => resolveMovie(item, variantId),
+    [resolveMovie]
+  );
+
   const playItem = useCallback(
     async (item: BrowseItem) => {
       if (item.kind === "movie" && item.entityId) {
-        try {
-          const target = await invoke<MoviePlaybackTarget>("resolve_movie_playback", {
-            profileId: profile.id,
-            entityId: item.entityId,
-            variantId: null,
-          });
-          setMedia({
-            kind: target.mediaKind,
-            id: target.mediaId,
-            title: item.title,
-            subtitle: item.subtitle,
-            posterUrl: item.posterUrl,
-          });
-        } catch (e: unknown) {
-          setError(errorMessage(e));
-        }
+        await resolveMovie(item, null);
         return;
       }
       setMedia({
@@ -49,7 +62,7 @@ export function PlaybackProvider({ children }: { children: ReactNode }) {
         region: item.channel?.region ?? null,
       });
     },
-    [profile.id, setError]
+    [resolveMovie]
   );
 
   const close = useCallback(() => {
@@ -58,7 +71,10 @@ export function PlaybackProvider({ children }: { children: ReactNode }) {
     invalidateDetailProgress(qc, profile.id);
   }, [qc, profile.id]);
 
-  const value = useMemo<Playback>(() => ({ playItem, playMedia: setMedia }), [playItem]);
+  const value = useMemo<Playback>(
+    () => ({ playItem, playVariant, playMedia: setMedia }),
+    [playItem, playVariant]
+  );
 
   return (
     <PlaybackContext.Provider value={value}>

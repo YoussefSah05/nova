@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT json_extract(f.facts, '$.collection.id') as \"id!: i64\",\n                      json_extract(f.facts, '$.collection.name') as \"name!: String\",\n                      COUNT(*) as \"count!: i64\",\n                      group_concat(COALESCE(v.poster_url, v.logo_url), char(31)) as \"posters?: String\"\n               FROM stream_variants s\n               JOIN vod_items v ON v.id = s.vod_item_id\n               JOIN entity_external_matches m\n                      ON m.entity_id = s.entity_id AND m.namespace = 'tmdb:movie' AND m.status = 'matched'\n               JOIN tmdb_title_facts f\n                      ON f.media_type = 'movie' AND f.tmdb_id = CAST(m.external_id AS INTEGER)\n               WHERE s.source_id = ?\n                 AND s.vod_item_id = (\n                   SELECT MIN(r.vod_item_id) FROM stream_variants r\n                   WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)\n                 AND json_extract(f.facts, '$.collection.id') IS NOT NULL\n               GROUP BY json_extract(f.facts, '$.collection.id')\n               HAVING COUNT(*) >= 2\n               ORDER BY COUNT(*) DESC, 2\n               LIMIT 24",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "name!: String",
+        "ordinal": 1,
+        "type_info": "Null"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 2,
+        "type_info": "Null"
+      },
+      {
+        "name": "posters?: String",
+        "ordinal": 3,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "dced3f467c53ac8eabcfc888b93af590fd6cd015e759936257c8a3d3bced8b82"
+}

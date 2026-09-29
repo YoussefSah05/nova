@@ -14,6 +14,7 @@ import { CommandPalette } from "@/features/browse/CommandPalette";
 import { BrowseSection } from "@/sections/browse/BrowseSection";
 import { HomeSection } from "@/sections/home/HomeSection";
 import { LibrarySection } from "@/sections/library/LibrarySection";
+import { MoviesSection } from "@/sections/movies/MoviesSection";
 import { SeriesPage } from "@/pages/SeriesPage";
 import { TitlePage } from "@/pages/TitlePage";
 import { SECTIONS, SECTION_LABELS, type Entry, type SectionId } from "./navigation/nav";
@@ -144,6 +145,8 @@ function ScreenContent({ section, entry }: { section: SectionId; entry: Entry })
           return <HomeSection />;
         case "library":
           return <LibrarySection />;
+        case "movies":
+          return <MoviesSection />;
         default:
           return <BrowseSection tab={section} />;
       }

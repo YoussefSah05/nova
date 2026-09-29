@@ -185,7 +185,8 @@ impl<'a> ChannelRepository<'a> {
                 evidence: SourceEvidence::default(),
             })
             .collect(),
-            ContentSort::Default => sqlx::query!(
+            // Title/year/rating orders are movie-only: natural order here.
+            ContentSort::Default | ContentSort::Title | ContentSort::Year | ContentSort::Rating => sqlx::query!(
                 r#"SELECT id as "id!: i64", source_id, tvg_id, name, country, category, raw_group,
                         COALESCE(NULLIF(logo_url, ''), (SELECT l.url FROM epg_channel_logos l
                             WHERE l.source_id = channels.source_id

@@ -119,7 +119,8 @@ export interface SeriesEpisode {
   numbering: "seasonEpisode" | "absolute" | "unknown";
 }
 
-export type ContentSort = "default" | "recentlyAdded";
+/** `title`, `year` and `rating` order movies; other lists keep their natural order. */
+export type ContentSort = "default" | "recentlyAdded" | "title" | "year" | "rating";
 
 export interface ChannelFilters {
   country?: string | null;
@@ -202,6 +203,16 @@ export interface CanonicalMediaSummary {
   addedAt: number | null;
   /** Enrichment similarity cluster; presentation grouping hint, not identity. */
   dedupGroup: string | null;
+  /** TMDB genres when matched, else Nova's genre. */
+  genres: string[];
+  runtimeMin: number | null;
+  /** Out of 10. */
+  rating: number | null;
+  ratingSource: "tmdb" | "provider" | null;
+  /** Best picture quality then audio versions across the title's sources (`4K`, `MULTI`). */
+  badges: string[];
+  /** How many sources of the title the playlist has. */
+  versionCount: number;
 }
 
 export interface VariantSummary {
@@ -211,6 +222,11 @@ export interface VariantSummary {
   label: string;
   /** False while the provider no longer lists this variant. */
   available: boolean;
+  badges: string[];
+  /** Failed more recently than it last played (ranked last). */
+  recentlyFailed: boolean;
+  /** The source Nova plays by default for this profile. */
+  picked: boolean;
 }
 
 export interface ResumeState {
@@ -222,6 +238,32 @@ export interface ResumeState {
 export interface CanonicalMediaDetail extends CanonicalMediaSummary {
   variants: VariantSummary[];
   resume: ResumeState | null;
+  originalTitle: string | null;
+  /** `YYYY-MM-DD` or a year, from the provider. */
+  releaseDate: string | null;
+  voteCount: number | null;
+  keywords: string[];
+}
+
+/** A facet value with how many films carry it (`list_movie_genres`). */
+export interface FacetCount {
+  name: string;
+  count: number;
+}
+
+/** Films of one decade (`1990`), with a few posters (`list_movie_decades`). */
+export interface DecadeCount {
+  decade: number;
+  count: number;
+  posterUrls: string[];
+}
+
+/** A TMDB collection with 2+ films in the library (`list_library_collections`). */
+export interface LibraryCollection {
+  id: number;
+  name: string;
+  count: number;
+  posterUrls: string[];
 }
 
 /** Transient player locator for the Rust-selected variant. */

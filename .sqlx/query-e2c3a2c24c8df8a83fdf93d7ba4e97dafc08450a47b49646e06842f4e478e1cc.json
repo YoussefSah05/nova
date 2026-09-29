@@ -1,0 +1,146 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.title as \"title!: String\",\n                      e.year as \"year?: i64\",\n                      e.is_favorite as \"is_favorite!: i64\",\n                      e.is_in_watchlist as \"is_in_watchlist!: i64\",\n                      COALESCE(v.canonical_title, e.title) as \"display_title?: String\",\n                      v.name as \"source_title?: String\",\n                      v.year as \"variant_year?: i64\",\n                      v.category as \"category?: String\",\n                      COALESCE(v.poster_url, v.logo_url) as \"poster_url?: String\",\n                      v.backdrop_url as \"backdrop_url?: String\",\n                      v.overview as \"overview?: String\",\n                      v.added_at as \"added_at?: i64\",\n                      v.dedup_group as \"dedup_group?: String\",\n                      COALESCE(m.genres, v.tmdb_genres) as \"genres?: String\",\n                      v.genre as \"genre?: String\",\n                      CAST(COALESCE(json_extract(f.facts, '$.runtimeMin'),\n                                    json_extract(v.provider_facts, '$.duration_sec') / 60)\n                           AS INTEGER) as \"runtime_min?: i64\",\n                      COALESCE(json_extract(f.facts, '$.rating'),\n                               json_extract(v.provider_facts, '$.rating')) as \"rating?: f64\",\n                      CASE WHEN json_extract(f.facts, '$.rating') IS NOT NULL THEN 'tmdb'\n                           WHEN json_extract(v.provider_facts, '$.rating') IS NOT NULL THEN 'provider'\n                      END as \"rating_source?: String\",\n                      m.original_title as \"original_title?: String\",\n                      m.keywords as \"keywords?: String\",\n                      json_extract(v.provider_facts, '$.release_date') as \"release_date?: String\",\n                      json_extract(f.facts, '$.voteCount') as \"vote_count?: i64\"\n               FROM canonical_entities e\n               LEFT JOIN vod_items v ON v.id = (\n                   SELECT MIN(s.vod_item_id) FROM stream_variants s\n                   WHERE s.entity_id = e.id AND s.vod_item_id IS NOT NULL)\n               LEFT JOIN entity_external_matches m\n                      ON m.entity_id = e.id AND m.namespace = 'tmdb:movie' AND m.status = 'matched'\n               LEFT JOIN tmdb_title_facts f\n                      ON f.media_type = 'movie' AND f.tmdb_id = CAST(m.external_id AS INTEGER)\n               WHERE e.id = ? AND e.kind = 'movie'",
+  "describe": {
+    "columns": [
+      {
+        "name": "title!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "year?: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_favorite!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_in_watchlist!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "display_title?: String",
+        "ordinal": 4,
+        "type_info": "Null"
+      },
+      {
+        "name": "source_title?: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "variant_year?: i64",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "category?: String",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster_url?: String",
+        "ordinal": 8,
+        "type_info": "Null"
+      },
+      {
+        "name": "backdrop_url?: String",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "overview?: String",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "added_at?: i64",
+        "ordinal": 11,
+        "type_info": "Integer"
+      },
+      {
+        "name": "dedup_group?: String",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "genres?: String",
+        "ordinal": 13,
+        "type_info": "Null"
+      },
+      {
+        "name": "genre?: String",
+        "ordinal": 14,
+        "type_info": "Text"
+      },
+      {
+        "name": "runtime_min?: i64",
+        "ordinal": 15,
+        "type_info": "Null"
+      },
+      {
+        "name": "rating?: f64",
+        "ordinal": 16,
+        "type_info": "Null"
+      },
+      {
+        "name": "rating_source?: String",
+        "ordinal": 17,
+        "type_info": "Null"
+      },
+      {
+        "name": "original_title?: String",
+        "ordinal": 18,
+        "type_info": "Text"
+      },
+      {
+        "name": "keywords?: String",
+        "ordinal": 19,
+        "type_info": "Text"
+      },
+      {
+        "name": "release_date?: String",
+        "ordinal": 20,
+        "type_info": "Null"
+      },
+      {
+        "name": "vote_count?: i64",
+        "ordinal": 21,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      null,
+      false,
+      true,
+      true,
+      null,
+      true,
+      true,
+      true,
+      true,
+      null,
+      true,
+      null,
+      null,
+      null,
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "e2c3a2c24c8df8a83fdf93d7ba4e97dafc08450a47b49646e06842f4e478e1cc"
+}

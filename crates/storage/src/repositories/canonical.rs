@@ -19,16 +19,18 @@ use nova_core::catalog::media::{
     binding_key, locator_binding_key, CanonicalMediaDetail, CanonicalMediaSummary,
     MoviePlaybackTarget, ResumeState, VariantSummary,
 };
-use nova_core::catalog::variants::{rank_variants, VariantCandidate};
+use nova_core::catalog::variants::{display_badges, rank_variants, VariantCandidate};
 use nova_core::catalog::{ContentKind, EntityId, VariantId};
-use nova_core::{now_ts, ContentSort};
+use nova_core::now_ts;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::error::StorageError;
 
+mod browse;
 mod identity;
 mod series_identity;
 
+pub use browse::{DecadeCount, FacetCount, LibraryCollection};
 pub use identity::{LineageEntry, ResolutionReport, MAX_REDIRECT_HOPS};
 
 /// A failure older than this no longer demotes a variant.
@@ -51,6 +53,13 @@ pub struct MovieFilters<'a> {
     pub query: Option<&'a str>,
     pub favorites_only: bool,
     pub watchlist_only: bool,
+    /// Nova's primary genre.
+    pub genre: Option<&'a str>,
+    /// Release years, inclusive.
+    pub year_from: Option<i64>,
+    pub year_to: Option<i64>,
+    /// A TMDB collection (known from fetched facts).
+    pub collection_id: Option<i64>,
 }
 
 pub struct CanonicalRepository<'a> {
@@ -355,197 +364,6 @@ impl<'a> CanonicalRepository<'a> {
 
     // ── Canonical reads ─────────────────────────────────────────────────────
 
-    /// One card per canonical movie with an available variant in `source_id`,
-    /// shown through its lowest bound row (a merged entity can hold several
-    /// variants of one source). Filters apply to that representative row.
-    pub async fn list_movies(
-        &self,
-        source_id: i64,
-        limit: i64,
-        offset: i64,
-        filters: &MovieFilters<'_>,
-        sort: ContentSort,
-    ) -> Result<Vec<CanonicalMediaSummary>, StorageError> {
-        let search = like_query(filters.query);
-        let search = search.as_deref();
-        let category = filters.category;
-        let fav: i64 = filters.favorites_only.into();
-        let wl: i64 = filters.watchlist_only.into();
-        let recent: i64 = matches!(sort, ContentSort::RecentlyAdded).into();
-        let rows = sqlx::query!(
-            r#"SELECT e.id as "entity_id!: String",
-                      COALESCE(v.canonical_title, e.title, v.name) as "title!: String",
-                      v.name as "source_title!: String",
-                      v.year as "year?: i64",
-                      v.category as "category?: String",
-                      COALESCE(v.poster_url, v.logo_url) as "poster_url?: String",
-                      v.backdrop_url as "backdrop_url?: String",
-                      v.overview as "overview?: String",
-                      e.is_favorite as "is_favorite!: i64",
-                      e.is_in_watchlist as "is_in_watchlist!: i64",
-                      v.added_at as "added_at?: i64",
-                      v.dedup_group as "dedup_group?: String"
-               FROM stream_variants s
-               JOIN canonical_entities e ON e.id = s.entity_id
-               JOIN vod_items v ON v.id = s.vod_item_id
-               WHERE s.source_id = ?
-                 AND s.vod_item_id = (
-                   SELECT MIN(r.vod_item_id) FROM stream_variants r
-                   WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)
-                 AND (? IS NULL OR v.category = ?)
-                 AND (? IS NULL OR v.name LIKE ? OR v.clean_title LIKE ?
-                      OR v.canonical_title LIKE ? OR v.category LIKE ?)
-                 AND (? = 0 OR e.is_favorite = 1)
-                 AND (? = 0 OR e.is_in_watchlist = 1)
-               ORDER BY CASE WHEN ? = 1 THEN v.added_at END DESC,
-                        CASE WHEN ? = 1 THEN v.id END DESC,
-                        v.id ASC
-               LIMIT ? OFFSET ?"#,
-            source_id,
-            category,
-            category,
-            search,
-            search,
-            search,
-            search,
-            search,
-            fav,
-            wl,
-            recent,
-            recent,
-            limit,
-            offset,
-        )
-        .fetch_all(self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|r| {
-                Ok(CanonicalMediaSummary {
-                    entity_id: parse_entity(r.entity_id)?,
-                    kind: ContentKind::Movie,
-                    title: r.title,
-                    source_title: r.source_title,
-                    year: r.year,
-                    category: r.category,
-                    poster_url: r.poster_url,
-                    backdrop_url: r.backdrop_url,
-                    overview: r.overview,
-                    is_favorite: r.is_favorite != 0,
-                    is_in_watchlist: r.is_in_watchlist != 0,
-                    added_at: r.added_at,
-                    dedup_group: r.dedup_group,
-                })
-            })
-            .collect()
-    }
-
-    /// Cards for specific entities in `source_id`, in the order given
-    /// (search results). Entities without an available variant there are
-    /// skipped.
-    pub async fn movies_by_ids(
-        &self,
-        source_id: i64,
-        ids: &[EntityId],
-    ) -> Result<Vec<CanonicalMediaSummary>, StorageError> {
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let json = serde_json::to_string(&ids.iter().map(EntityId::as_str).collect::<Vec<_>>())?;
-        let rows = sqlx::query!(
-            r#"SELECT e.id as "entity_id!: String",
-                      COALESCE(v.canonical_title, e.title, v.name) as "title!: String",
-                      v.name as "source_title!: String",
-                      v.year as "year?: i64",
-                      v.category as "category?: String",
-                      COALESCE(v.poster_url, v.logo_url) as "poster_url?: String",
-                      v.backdrop_url as "backdrop_url?: String",
-                      v.overview as "overview?: String",
-                      e.is_favorite as "is_favorite!: i64",
-                      e.is_in_watchlist as "is_in_watchlist!: i64",
-                      v.added_at as "added_at?: i64",
-                      v.dedup_group as "dedup_group?: String"
-               FROM stream_variants s
-               JOIN canonical_entities e ON e.id = s.entity_id
-               JOIN vod_items v ON v.id = s.vod_item_id
-               WHERE s.source_id = ?
-                 AND s.entity_id IN (SELECT value FROM json_each(?))
-                 AND s.vod_item_id = (
-                   SELECT MIN(r.vod_item_id) FROM stream_variants r
-                   WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)"#,
-            source_id,
-            json,
-        )
-        .fetch_all(self.pool)
-        .await?;
-        let mut by_id: std::collections::HashMap<String, CanonicalMediaSummary> =
-            std::collections::HashMap::new();
-        for r in rows {
-            let entity_id = parse_entity(r.entity_id.clone())?;
-            by_id.insert(
-                r.entity_id,
-                CanonicalMediaSummary {
-                    entity_id,
-                    kind: ContentKind::Movie,
-                    title: r.title,
-                    source_title: r.source_title,
-                    year: r.year,
-                    category: r.category,
-                    poster_url: r.poster_url,
-                    backdrop_url: r.backdrop_url,
-                    overview: r.overview,
-                    is_favorite: r.is_favorite != 0,
-                    is_in_watchlist: r.is_in_watchlist != 0,
-                    added_at: r.added_at,
-                    dedup_group: r.dedup_group,
-                },
-            );
-        }
-        Ok(ids
-            .iter()
-            .filter_map(|id| by_id.remove(id.as_str()))
-            .collect())
-    }
-
-    pub async fn count_movies(
-        &self,
-        source_id: i64,
-        filters: &MovieFilters<'_>,
-    ) -> Result<i64, StorageError> {
-        let search = like_query(filters.query);
-        let search = search.as_deref();
-        let category = filters.category;
-        let fav: i64 = filters.favorites_only.into();
-        let wl: i64 = filters.watchlist_only.into();
-        let n = sqlx::query_scalar!(
-            r#"SELECT COUNT(*) as "n!: i64"
-               FROM stream_variants s
-               JOIN canonical_entities e ON e.id = s.entity_id
-               JOIN vod_items v ON v.id = s.vod_item_id
-               WHERE s.source_id = ?
-                 AND s.vod_item_id = (
-                   SELECT MIN(r.vod_item_id) FROM stream_variants r
-                   WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)
-                 AND (? IS NULL OR v.category = ?)
-                 AND (? IS NULL OR v.name LIKE ? OR v.clean_title LIKE ?
-                      OR v.canonical_title LIKE ? OR v.category LIKE ?)
-                 AND (? = 0 OR e.is_favorite = 1)
-                 AND (? = 0 OR e.is_in_watchlist = 1)"#,
-            source_id,
-            category,
-            category,
-            search,
-            search,
-            search,
-            search,
-            search,
-            fav,
-            wl,
-        )
-        .fetch_one(self.pool)
-        .await?;
-        Ok(n)
-    }
-
     /// Detail for one entity: display fields from its first available
     /// variant (or the retained entity title when none is available), every
     /// variant, and resume state.
@@ -554,6 +372,16 @@ impl<'a> CanonicalRepository<'a> {
     pub async fn movie_detail(
         &self,
         entity_id: &EntityId,
+    ) -> Result<Option<CanonicalMediaDetail>, StorageError> {
+        self.movie_detail_with(entity_id, None).await
+    }
+
+    /// [`Self::movie_detail`], marking the variant Nova plays for a profile
+    /// preferring `preferred_lang` (the same ranking as playback).
+    pub async fn movie_detail_with(
+        &self,
+        entity_id: &EntityId,
+        preferred_lang: Option<&str>,
     ) -> Result<Option<CanonicalMediaDetail>, StorageError> {
         let Some(entity_id) = self.canonical_entity_id(entity_id).await? else {
             return Ok(None);
@@ -573,11 +401,29 @@ impl<'a> CanonicalRepository<'a> {
                       v.backdrop_url as "backdrop_url?: String",
                       v.overview as "overview?: String",
                       v.added_at as "added_at?: i64",
-                      v.dedup_group as "dedup_group?: String"
+                      v.dedup_group as "dedup_group?: String",
+                      COALESCE(m.genres, v.tmdb_genres) as "genres?: String",
+                      v.genre as "genre?: String",
+                      CAST(COALESCE(json_extract(f.facts, '$.runtimeMin'),
+                                    json_extract(v.provider_facts, '$.duration_sec') / 60)
+                           AS INTEGER) as "runtime_min?: i64",
+                      COALESCE(json_extract(f.facts, '$.rating'),
+                               json_extract(v.provider_facts, '$.rating')) as "rating?: f64",
+                      CASE WHEN json_extract(f.facts, '$.rating') IS NOT NULL THEN 'tmdb'
+                           WHEN json_extract(v.provider_facts, '$.rating') IS NOT NULL THEN 'provider'
+                      END as "rating_source?: String",
+                      m.original_title as "original_title?: String",
+                      m.keywords as "keywords?: String",
+                      json_extract(v.provider_facts, '$.release_date') as "release_date?: String",
+                      json_extract(f.facts, '$.voteCount') as "vote_count?: i64"
                FROM canonical_entities e
                LEFT JOIN vod_items v ON v.id = (
                    SELECT MIN(s.vod_item_id) FROM stream_variants s
                    WHERE s.entity_id = e.id AND s.vod_item_id IS NOT NULL)
+               LEFT JOIN entity_external_matches m
+                      ON m.entity_id = e.id AND m.namespace = 'tmdb:movie' AND m.status = 'matched'
+               LEFT JOIN tmdb_title_facts f
+                      ON f.media_type = 'movie' AND f.tmdb_id = CAST(m.external_id AS INTEGER)
                WHERE e.id = ? AND e.kind = 'movie'"#,
             id,
         )
@@ -586,6 +432,11 @@ impl<'a> CanonicalRepository<'a> {
         else {
             return Ok(None);
         };
+        // Nova's pick: the variant selector over the available variants.
+        let candidates = self.playback_candidates(entity_id).await?;
+        let picked = rank_variants(&candidates, None, preferred_lang)
+            .first()
+            .map(|c| c.variant_id.clone());
         let variants = sqlx::query!(
             r#"SELECT s.id as "variant_id!: String",
                       s.source_id as "source_id!: i64",
@@ -603,21 +454,46 @@ impl<'a> CanonicalRepository<'a> {
         .await?
         .into_iter()
         .map(|r| {
+            let evidence = candidates.iter().find(|c| c.variant_id == r.variant_id);
+            let badges = evidence
+                .map(|c| {
+                    display_badges(
+                        c.quality_hints.iter().map(String::as_str),
+                        c.language_hints.iter().map(String::as_str),
+                    )
+                })
+                .unwrap_or_default();
             Ok(VariantSummary {
+                picked: picked.as_deref() == Some(r.variant_id.as_str()),
                 variant_id: parse_variant(r.variant_id)?,
                 source_id: r.source_id,
                 source_name: r.source_name,
                 label: r.label.unwrap_or_default(),
                 available: r.vod_item_id.is_some(),
+                badges,
+                recently_failed: evidence.is_some_and(|c| c.recently_failed),
             })
         })
         .collect::<Result<Vec<_>, StorageError>>()?;
+        let version_count = variants.iter().filter(|v| v.available).count() as i64;
+        let all_quality: Vec<String> = candidates
+            .iter()
+            .flat_map(|c| c.quality_hints.clone())
+            .collect();
+        let all_languages: Vec<String> = candidates
+            .iter()
+            .flat_map(|c| c.language_hints.clone())
+            .collect();
         let resume = self.resume(entity_id).await?;
+        let display_title = entity
+            .display_title
+            .clone()
+            .unwrap_or_else(|| entity.title.clone());
         Ok(Some(CanonicalMediaDetail {
             summary: CanonicalMediaSummary {
                 entity_id: entity_id.clone(),
                 kind: ContentKind::Movie,
-                title: entity.display_title.unwrap_or(entity.title.clone()),
+                title: display_title.clone(),
                 source_title: entity.source_title.unwrap_or(entity.title),
                 year: entity.variant_year.or(entity.year),
                 category: entity.category,
@@ -628,9 +504,34 @@ impl<'a> CanonicalRepository<'a> {
                 is_in_watchlist: entity.is_in_watchlist != 0,
                 added_at: entity.added_at,
                 dedup_group: entity.dedup_group,
+                facts: browse::card_facts(
+                    entity.genres,
+                    entity.genre,
+                    entity.runtime_min,
+                    entity.rating,
+                    entity.rating_source,
+                    Some(all_quality.join(",")),
+                    Some(all_languages.join(",")),
+                    version_count,
+                ),
             },
             variants,
             resume,
+            original_title: entity
+                .original_title
+                .filter(|o| !o.trim().is_empty() && *o != display_title),
+            release_date: entity.release_date.filter(|d| !d.trim().is_empty()),
+            vote_count: entity.vote_count.filter(|n| *n > 0),
+            keywords: entity
+                .keywords
+                .map(|k| {
+                    k.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .take(12)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }))
     }
 

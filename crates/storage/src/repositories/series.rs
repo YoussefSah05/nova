@@ -461,7 +461,8 @@ impl<'a> SeriesRepository<'a> {
                 .with_display_title()
             })
             .collect(),
-            ContentSort::Default => sqlx::query!(
+            // Title/year/rating orders are movie-only: natural order here.
+            ContentSort::Default | ContentSort::Title | ContentSort::Year | ContentSort::Rating => sqlx::query!(
                 r#"SELECT se.series_title as "series_title!: String",
                         MIN(se.category) as "category?: String",
                         SUM(CASE WHEN se.season > 0 THEN 1 ELSE 0 END) as "episode_count!: i64",

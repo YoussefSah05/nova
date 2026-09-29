@@ -27,6 +27,12 @@ function movie(id: number): CanonicalMediaSummary {
     isInWatchlist: false,
     addedAt: null,
     dedupGroup: null,
+    genres: [],
+    runtimeMin: null,
+    rating: null,
+    ratingSource: null,
+    badges: [],
+    versionCount: 1,
   };
 }
 beforeEach(() => mocks.invoke.mockReset());

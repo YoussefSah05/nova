@@ -98,6 +98,27 @@ pub struct CanonicalMediaSummary {
     /// Enrichment similarity cluster of the representative variant: a
     /// presentation grouping hint only, never identity (not entity resolution).
     pub dedup_group: Option<String>,
+    /// What a card shows beyond the title (genres, runtime, rating, badges).
+    #[serde(flatten, default)]
+    pub facts: CardFacts,
+}
+
+/// Card-level facts, all derived from stored evidence (no network).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CardFacts {
+    /// TMDB genres when matched, else Nova's genre.
+    pub genres: Vec<String>,
+    pub runtime_min: Option<i64>,
+    /// Out of 10.
+    pub rating: Option<f32>,
+    /// Where the rating comes from: `tmdb` or `provider`.
+    pub rating_source: Option<String>,
+    /// The best picture quality and the audio versions across the title's
+    /// sources in this playlist (`4K`, `FHD`, `MULTI`, `VF`).
+    pub badges: Vec<String>,
+    /// How many sources of the title this playlist has.
+    pub version_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,6 +130,15 @@ pub struct VariantSummary {
     pub label: String,
     /// False while the provider no longer lists this variant.
     pub available: bool,
+    /// Picture quality and audio version tags (`FHD`, `MULTI`).
+    #[serde(default)]
+    pub badges: Vec<String>,
+    /// Failed more recently than it last played (ranked last).
+    #[serde(default)]
+    pub recently_failed: bool,
+    /// The source Nova plays by default (the variant selector's first pick).
+    #[serde(default)]
+    pub picked: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -126,6 +156,16 @@ pub struct CanonicalMediaDetail {
     pub summary: CanonicalMediaSummary,
     pub variants: Vec<VariantSummary>,
     pub resume: Option<ResumeState>,
+    /// TMDB's original-language title, when it differs from the display one.
+    #[serde(default)]
+    pub original_title: Option<String>,
+    /// `YYYY-MM-DD` (or a year) from the provider.
+    #[serde(default)]
+    pub release_date: Option<String>,
+    #[serde(default)]
+    pub vote_count: Option<i64>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 /// Rust-selected playback target. `media_kind`/`media_id` are a transient
@@ -230,6 +270,10 @@ mod tests {
             is_in_watchlist: false,
             added_at: None,
             dedup_group: None,
+            facts: CardFacts {
+                badges: vec!["FHD".into()],
+                ..CardFacts::default()
+            },
         };
         let detail = CanonicalMediaDetail {
             summary,
@@ -239,12 +283,20 @@ mod tests {
                 source_name: "Provider".into(),
                 label: "EN - Heat (1995) FHD".into(),
                 available: true,
+                badges: vec!["FHD".into()],
+                recently_failed: false,
+                picked: true,
             }],
             resume: None,
+            original_title: None,
+            release_date: None,
+            vote_count: None,
+            keywords: vec![],
         };
         let json = serde_json::to_string(&detail).unwrap();
         assert!(json.contains("\"entityId\":\"mov-1\""));
         assert!(json.contains("\"kind\":\"movie\""));
+        assert!(json.contains("\"badges\":[\"FHD\"]") && json.contains("\"versionCount\":0"));
         for forbidden in ["streamUrl", "url\"", "http"] {
             assert!(!json.contains(forbidden), "{forbidden} in {json}");
         }

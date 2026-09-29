@@ -26,8 +26,8 @@ pub mod vod;
 pub mod watch_history;
 
 pub use canonical::{
-    CanonicalRepository, CompileStats, LineageEntry, MovieFilters, ResolutionReport,
-    MAX_REDIRECT_HOPS,
+    CanonicalRepository, CompileStats, DecadeCount, FacetCount, LibraryCollection, LineageEntry,
+    MovieFilters, ResolutionReport, MAX_REDIRECT_HOPS,
 };
 pub use caption_style::CaptionStyleRepository;
 pub use catalog_search::{CatalogSearchRepository, MovieSearchCandidate, MOVIE_SEARCH_VERSION};

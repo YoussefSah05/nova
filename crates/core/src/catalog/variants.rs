@@ -124,6 +124,51 @@ fn quality_rank(c: &VariantCandidate) -> u8 {
     }
 }
 
+/// The badges a card or a source shows: the best picture quality (`4K`,
+/// `FHD`, `HD`, `SD`), `HDR` when present, then the audio versions (`MULTI`,
+/// `VF`, `VOSTFR`, `VO`) — normalized from provider tags, at most three.
+pub fn display_badges<'a>(
+    quality_hints: impl IntoIterator<Item = &'a str>,
+    language_hints: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let quality: Vec<String> = quality_hints
+        .into_iter()
+        .map(|t| t.trim().to_ascii_uppercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let has = |tags: &[&str]| quality.iter().any(|q| tags.contains(&q.as_str()));
+    let mut badges: Vec<String> = Vec::new();
+    let best = if has(&["4K", "UHD", "2160P", "8K"]) {
+        Some("4K")
+    } else if has(&["FHD", "1080P", "1080I"]) {
+        Some("FHD")
+    } else if has(&["HD", "720P"]) {
+        Some("HD")
+    } else if has(&["SD", "480P", "576P", "360P"]) {
+        Some("SD")
+    } else {
+        None
+    };
+    badges.extend(best.map(str::to_string));
+    if has(&["HDR", "HDR10", "HDR10+", "DV", "DOLBYVISION"]) {
+        badges.push("HDR".into());
+    }
+    for tag in language_hints {
+        let label = match tag.trim().to_ascii_uppercase().as_str() {
+            "MULTI" | "DUAL" => "MULTI",
+            "VF" | "VFF" | "VFQ" | "TRUEFRENCH" => "VF",
+            "VOSTFR" | "VOST" => "VOSTFR",
+            "VO" => "VO",
+            _ => continue,
+        };
+        if !badges.iter().any(|b| b == label) {
+            badges.push(label.to_string());
+        }
+    }
+    badges.truncate(3);
+    badges
+}
+
 /// The candidates in play order (best first). `requested` is honoured first
 /// when it is one of them.
 pub fn rank_variants<'a>(
@@ -238,5 +283,22 @@ mod tests {
             ["de", "uk", "be"],
             "a Ukrainian preference is not a British source"
         );
+    }
+
+    #[test]
+    fn badges_show_the_best_quality_then_audio_versions() {
+        assert_eq!(
+            display_badges(["1080P", "4K", "HEVC"], ["VF", "MULTI", "VFF"]),
+            ["4K", "VF", "MULTI"]
+        );
+        assert_eq!(
+            display_badges(["hd", "HDR10"], ["vostfr"]),
+            ["HD", "HDR", "VOSTFR"]
+        );
+        assert_eq!(
+            display_badges(["HEVC", ""], ["FRENCH"]),
+            Vec::<String>::new()
+        );
+        assert_eq!(display_badges([], ["DUAL", "MULTI"]), ["MULTI"]);
     }
 }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::{init_profile_db, SourceRepository, VodRepository, WatchHistoryRepository};
-use nova_core::VodItem;
+use nova_core::{ContentSort, VodItem};
 
 struct Db {
     _dir: tempfile::TempDir,
@@ -1527,4 +1527,260 @@ async fn open_time_resolution_runs_once_per_ruleset() {
     let report = repo.ensure_movies_resolved().await.unwrap().unwrap();
     assert_eq!(report.applied, 1);
     assert!(repo.ensure_movies_resolved().await.unwrap().is_none());
+}
+
+// ── Movies browse (UI-2): card facts, facets, filters, sorts, page ─────────
+
+/// Three films; "Heat" has two sources of its own in the playlist (merged),
+/// a TMDB match with facts, and provider facts on its rows.
+async fn browse_fixture() -> (Db, EntityId) {
+    let db = db().await;
+    let mut heat_4k = movie(
+        db.source_id,
+        "EN - Heat 4K",
+        "http://host/movie/u/p/1.mkv",
+        Some("xtream:vod:1"),
+    );
+    heat_4k.year = Some(1995);
+    let mut heat_vf = movie(
+        db.source_id,
+        "FR - Heat VF",
+        "http://host/movie/u/p/2.mkv",
+        Some("xtream:vod:2"),
+    );
+    heat_vf.year = Some(1995);
+    let mut arrival = movie(
+        db.source_id,
+        "Arrival",
+        "http://host/movie/u/p/3.mkv",
+        Some("xtream:vod:3"),
+    );
+    arrival.year = Some(2016);
+    let mut amelie = movie(
+        db.source_id,
+        "Amélie",
+        "http://host/movie/u/p/4.mkv",
+        Some("xtream:vod:4"),
+    );
+    amelie.year = Some(2001);
+    import(&db, &[heat_4k, heat_vf, arrival, amelie], false).await;
+
+    let exec = |sql: &'static str| {
+        let pool = db.pool.clone();
+        async move { sqlx::query(sql).execute(&pool).await.unwrap() }
+    };
+    exec("UPDATE vod_items SET quality_hints = '4K,HEVC', genre = 'Crime', canonical_title = 'Heat', provider_facts = '{\"rating\":7.1,\"duration_sec\":10200,\"release_date\":\"1995-12-15\"}' WHERE name = 'EN - Heat 4K'").await;
+    exec("UPDATE vod_items SET quality_hints = '1080P', language_hints = 'VF', genre = 'Crime', canonical_title = 'Heat' WHERE name = 'FR - Heat VF'").await;
+    exec("UPDATE vod_items SET genre = 'Science Fiction', provider_facts = '{\"rating\":7.9}' WHERE name = 'Arrival'").await;
+    exec("UPDATE vod_items SET genre = 'Comedy' WHERE name = 'Amélie'").await;
+    // One film, two sources: merge Heat's second variant into the first.
+    exec("UPDATE stream_variants SET entity_id = (SELECT s.entity_id FROM stream_variants s JOIN vod_items v ON v.id = s.vod_item_id WHERE v.name = 'EN - Heat 4K') WHERE vod_item_id = (SELECT id FROM vod_items WHERE name = 'FR - Heat VF')").await;
+    let heat: String = sqlx::query_scalar(
+        "SELECT s.entity_id FROM stream_variants s JOIN vod_items v ON v.id = s.vod_item_id WHERE v.name = 'EN - Heat 4K'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    for (entity, tmdb, title) in [(heat.clone(), 949, "Heat")] {
+        sqlx::query(
+            "INSERT INTO entity_external_matches (entity_id, namespace, status, external_id, method, confidence_bp, matcher_version, evidence_json, canonical_title, genres, primary_genre, checked_at, original_title, keywords)
+             VALUES (?, 'tmdb:movie', 'matched', ?, 'trusted_id', 10000, 1, '{}', ?, 'Crime, Thriller, Drama', 'Crime', 0, 'Heat (Original)', 'bank robbery, los angeles')",
+        )
+        .bind(&entity)
+        .bind(tmdb.to_string())
+        .bind(title)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO tmdb_title_facts (media_type, tmdb_id, language, facts, facts_version, fetched_at)
+         VALUES ('movie', 949, 'en', '{\"rating\":8.3,\"voteCount\":7000,\"runtimeMin\":170,\"collection\":{\"id\":5,\"name\":\"Heat Collection\"}}', 1, 0)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    (db, EntityId::new(heat).unwrap())
+}
+
+#[tokio::test]
+async fn cards_carry_facts_from_stored_evidence() {
+    let (db, heat) = browse_fixture().await;
+    let cards = movies(&db).await;
+    assert_eq!(cards.len(), 3, "one card per film, however many sources");
+    let heat_card = cards.iter().find(|c| c.entity_id == heat).unwrap();
+    let f = &heat_card.facts;
+    assert_eq!(f.genres, ["Crime", "Thriller", "Drama"], "TMDB genres win");
+    assert_eq!(
+        (f.rating, f.rating_source.as_deref()),
+        (Some(8.3), Some("tmdb"))
+    );
+    assert_eq!(f.runtime_min, Some(170), "TMDB runtime over the provider's");
+    assert_eq!(
+        f.badges,
+        ["4K", "VF"],
+        "best quality and audio across the film's sources"
+    );
+    assert_eq!(f.version_count, 2);
+    let arrival = cards.iter().find(|c| c.title == "Arrival").unwrap();
+    assert_eq!(
+        (arrival.facts.rating, arrival.facts.rating_source.as_deref()),
+        (Some(7.9), Some("provider"))
+    );
+    assert_eq!(
+        arrival.facts.genres,
+        ["Science Fiction"],
+        "Nova's genre without a match"
+    );
+    assert!(arrival.facts.badges.is_empty());
+}
+
+#[tokio::test]
+async fn films_filter_by_genre_years_and_collection_and_sort() {
+    let (db, heat) = browse_fixture().await;
+    let repo = CanonicalRepository::new(&db.pool);
+    let titles = |sort: ContentSort, filters: MovieFilters<'static>| {
+        let repo = CanonicalRepository::new(&db.pool);
+        async move {
+            repo.list_movies(db.source_id, 50, 0, &filters, sort)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|c| c.title)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        titles(ContentSort::Title, MovieFilters::default()).await,
+        ["Amélie", "Arrival", "Heat"]
+    );
+    assert_eq!(
+        titles(ContentSort::Year, MovieFilters::default()).await,
+        ["Arrival", "Amélie", "Heat"]
+    );
+    assert_eq!(
+        titles(ContentSort::Rating, MovieFilters::default()).await,
+        ["Heat", "Arrival", "Amélie"],
+        "unrated last"
+    );
+    let crime = MovieFilters {
+        genre: Some("Crime"),
+        ..MovieFilters::default()
+    };
+    assert_eq!(titles(ContentSort::Default, crime.clone()).await, ["Heat"]);
+    assert_eq!(repo.count_movies(db.source_id, &crime).await.unwrap(), 1);
+    let two_thousands = MovieFilters {
+        year_from: Some(2000),
+        year_to: Some(2009),
+        ..MovieFilters::default()
+    };
+    assert_eq!(
+        titles(ContentSort::Default, two_thousands).await,
+        ["Amélie"]
+    );
+    let saga = MovieFilters {
+        collection_id: Some(5),
+        ..MovieFilters::default()
+    };
+    let in_saga = repo
+        .list_movies(db.source_id, 50, 0, &saga, ContentSort::Default)
+        .await
+        .unwrap();
+    assert_eq!(
+        in_saga.iter().map(|c| &c.entity_id).collect::<Vec<_>>(),
+        [&heat]
+    );
+}
+
+#[tokio::test]
+async fn facets_count_the_playlists_films() {
+    let (db, _) = browse_fixture().await;
+    let repo = CanonicalRepository::new(&db.pool);
+    let genres = repo.movie_genres(db.source_id).await.unwrap();
+    let pairs: Vec<(&str, i64)> = genres.iter().map(|g| (g.name.as_str(), g.count)).collect();
+    assert_eq!(pairs, [("Comedy", 1), ("Crime", 1), ("Science Fiction", 1)]);
+    let decades: Vec<(i64, i64)> = repo
+        .movie_decades(db.source_id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|d| (d.decade, d.count))
+        .collect();
+    assert_eq!(decades, [(2010, 1), (2000, 1), (1990, 1)]);
+    // One film of the collection is not a collection yet.
+    assert!(repo
+        .library_collections(db.source_id)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // A second film of the saga, known from its fetched facts.
+    let arrival: String = sqlx::query_scalar(
+        "SELECT s.entity_id FROM stream_variants s JOIN vod_items v ON v.id = s.vod_item_id WHERE v.name = 'Arrival'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO entity_external_matches (entity_id, namespace, status, external_id, method, confidence_bp, matcher_version, evidence_json, checked_at)
+         VALUES (?, 'tmdb:movie', 'matched', '329865', 'trusted_id', 10000, 1, '{}', 0)",
+    )
+    .bind(&arrival)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tmdb_title_facts (media_type, tmdb_id, language, facts, facts_version, fetched_at)
+         VALUES ('movie', 329865, 'en', '{\"collection\":{\"id\":5,\"name\":\"Heat Collection\"}}', 1, 0)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let collections = repo.library_collections(db.source_id).await.unwrap();
+    assert_eq!(collections.len(), 1);
+    assert_eq!(
+        (
+            collections[0].id,
+            collections[0].name.as_str(),
+            collections[0].count
+        ),
+        (5, "Heat Collection", 2)
+    );
+}
+
+#[tokio::test]
+async fn the_page_marks_each_sources_badges_and_novas_pick() {
+    let (db, heat) = browse_fixture().await;
+    let repo = CanonicalRepository::new(&db.pool);
+    let detail = repo
+        .movie_detail_with(&heat, Some("fr"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.original_title.as_deref(), Some("Heat (Original)"));
+    assert_eq!(detail.release_date.as_deref(), Some("1995-12-15"));
+    assert_eq!(detail.vote_count, Some(7000));
+    assert_eq!(detail.keywords, ["bank robbery", "los angeles"]);
+    let by_label = |label: &str| detail.variants.iter().find(|v| v.label == label).unwrap();
+    assert_eq!(by_label("EN - Heat 4K").badges, ["4K"]);
+    assert_eq!(by_label("FR - Heat VF").badges, ["FHD", "VF"]);
+    assert!(
+        by_label("FR - Heat VF").picked,
+        "French audio first for a French profile"
+    );
+    assert!(!by_label("EN - Heat 4K").picked);
+    let english = repo
+        .movie_detail_with(&heat, Some("en"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        english
+            .variants
+            .iter()
+            .find(|v| v.label == "EN - Heat 4K")
+            .unwrap()
+            .picked
+    );
+    assert_eq!(english.variants.iter().filter(|v| v.picked).count(), 1);
 }

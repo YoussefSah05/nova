@@ -157,6 +157,12 @@ function setupInvoke(
         return Promise.resolve(null);
       case "epg_channels_now_and_next":
         return Promise.resolve([]);
+      case "list_movie_genres":
+        return Promise.resolve([{ name: "Drama", count: 12 }]);
+      case "list_movie_decades":
+        return Promise.resolve([{ decade: 2020, count: 5, posterUrls: [] }]);
+      case "list_library_collections":
+        return Promise.resolve([]);
       case "count_channels":
         return Promise.resolve(250);
       case "count_movies":
@@ -189,9 +195,43 @@ function setupInvoke(
       case "get_movie": {
         const found = movies.find((m) => m.entityId === args?.entityId);
         return found
-          ? Promise.resolve({ ...found, variants: [], resume: null })
+          ? Promise.resolve({
+              ...found,
+              variants: [
+                {
+                  variantId: "var-fhd",
+                  sourceId: 1,
+                  sourceName: "Primary",
+                  label: "Review Movie FHD",
+                  available: true,
+                  badges: ["FHD"],
+                  recentlyFailed: false,
+                  picked: true,
+                },
+                {
+                  variantId: "var-4k",
+                  sourceId: 1,
+                  sourceName: "Backup",
+                  label: "Review Movie 4K",
+                  available: true,
+                  badges: ["4K"],
+                  recentlyFailed: false,
+                  picked: false,
+                },
+              ],
+              resume: null,
+              originalTitle: null,
+              releaseDate: null,
+              voteCount: null,
+              keywords: [],
+            })
           : Promise.reject(new Error("movie not found"));
       }
+      case "resolve_movie_playback":
+        // The player itself is out of scope here: stop at the resolution.
+        return Promise.reject(new Error("no stream in tests"));
+      case "get_profile_settings":
+        return Promise.resolve({});
       case "set_movie_favorite":
         return favoriteFails ? Promise.reject(new Error("database is locked")) : Promise.resolve();
       case "set_movie_in_watchlist":
@@ -228,6 +268,12 @@ const reviewMovie: CanonicalMediaSummary = {
   isInWatchlist: false,
   addedAt: null,
   dedupGroup: null,
+  genres: [],
+  runtimeMin: null,
+  rating: null,
+  ratingSource: null,
+  badges: [],
+  versionCount: 1,
 };
 
 /// Open Movies, then the movie's page (the first card on the visible screen).
@@ -373,5 +419,37 @@ describe("AppShell", () => {
     expect(
       await screen.findByRole("button", { name: "Add Review Movie to favourites" })
     ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("narrows the wall by decade and plays the source chosen on a film's page", async () => {
+    setupInvoke(() => [], [reviewMovie]);
+    renderShell();
+    await userEvent.click(await screen.findByRole("button", { name: "Movies" }));
+    await userEvent.click(await screen.findByRole("button", { name: /2020s/ }));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith(
+        "list_movies",
+        expect.objectContaining({
+          filters: expect.objectContaining({ yearFrom: 2020, yearTo: 2029 }),
+        })
+      )
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Clear Decade filter" }));
+    expect(await screen.findByRole("heading", { name: "Every film" })).toBeInTheDocument();
+
+    const cards = await screen.findAllByRole("button", { name: "Review Movie" });
+    await userEvent.click(cards[0]);
+    const backup = await screen.findByRole("button", { name: /^Play Backup 4K/ });
+    expect(
+      screen.getByRole("button", { name: /^Play Primary FHD \(Nova's pick\)/ })
+    ).toBeInTheDocument();
+    await userEvent.click(backup);
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("resolve_movie_playback", {
+        profileId: profile.id,
+        entityId: "mov-7",
+        variantId: "var-4k",
+      })
+    );
   });
 });

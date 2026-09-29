@@ -377,6 +377,17 @@ pub struct ContentFilters {
     watchlist_only: bool,
     #[serde(default)]
     sort: ContentSort,
+    /// Movies: Nova's primary genre.
+    #[serde(default)]
+    genre: Option<String>,
+    /// Movies: release years, inclusive.
+    #[serde(default)]
+    year_from: Option<i64>,
+    #[serde(default)]
+    year_to: Option<i64>,
+    /// Movies: a TMDB collection.
+    #[serde(default)]
+    collection_id: Option<i64>,
 }
 
 #[tauri::command]

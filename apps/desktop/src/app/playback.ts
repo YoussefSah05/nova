@@ -9,6 +9,8 @@ import type { BrowseItem } from "@/features/browse/queries";
 export interface Playback {
   /// Play a catalog card: Rust picks a canonical movie's source.
   playItem: (item: BrowseItem) => Promise<void>;
+  /// Play one chosen source of a canonical movie (Rust checks it belongs).
+  playVariant: (item: BrowseItem, variantId: string) => Promise<void>;
   /// Play resolved media (an episode, a channel, a Continue Watching card).
   playMedia: (media: PlayMedia) => void;
 }

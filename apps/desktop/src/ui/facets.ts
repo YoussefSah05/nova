@@ -5,11 +5,20 @@
 
 import type { BrowseFilters } from "@/features/browse/queries";
 
-export type FacetKind = "query" | "category" | "region" | "country";
+export type FacetKind =
+  | "query"
+  | "category"
+  | "region"
+  | "country"
+  | "genre"
+  | "decade"
+  | "collection";
 
 export interface Facet {
   kind: FacetKind;
   value: string;
+  /// What the chip shows when the value is an id or a code (`1990` → `1990s`).
+  label?: string;
   /// Who applied it: the user in a filter bar, or an interpreted request.
   origin: "user" | "intent";
 }
@@ -19,6 +28,9 @@ export const FACET_LABELS: Record<FacetKind, string> = {
   category: "Genre",
   region: "Region",
   country: "Country",
+  genre: "Genre",
+  decade: "Decade",
+  collection: "Collection",
 };
 
 export type FacetValues = Partial<Record<FacetKind, string>>;

@@ -11,6 +11,9 @@ import type {
   ChannelGroup,
   ContentSort,
   ContinueWatchingItem,
+  DecadeCount,
+  FacetCount,
+  LibraryCollection,
   SeriesSummary,
   VodItem,
 } from "@/types";
@@ -62,6 +65,13 @@ export interface BrowseFilters {
   favoritesOnly?: boolean;
   watchlistOnly?: boolean;
   sort?: ContentSort;
+  /** Movies: Nova's primary genre. */
+  genre?: string | null;
+  /** Movies: release years, inclusive. */
+  yearFrom?: number | null;
+  yearTo?: number | null;
+  /** Movies: a TMDB collection. */
+  collectionId?: number | null;
 }
 
 export const GRID_PAGE_SIZE = 200;
@@ -185,9 +195,34 @@ const CATEGORIES_COMMAND: Record<BrowseTab, string> = {
 
 /// Build the per-tab filter payload. Movies/series accept no `country`/`region`.
 function filterPayload(tab: BrowseTab, filters: BrowseFilters): BrowseFilters {
-  if (tab === "live") return filters;
-  const { country: _country, region: _region, ...rest } = filters;
+  // Each list only receives the filters it understands.
+  const {
+    genre: _genre,
+    yearFrom: _yearFrom,
+    yearTo: _yearTo,
+    collectionId: _collectionId,
+    ...shared
+  } = filters;
+  if (tab === "movies") {
+    const { country: _country, region: _region, ...movie } = filters;
+    return movie;
+  }
+  if (tab === "live") return shared;
+  const { country: _country, region: _region, ...rest } = shared;
   return rest;
+}
+
+/// A movie filter beyond search is applied (search then stays on the list).
+function movieFacetApplied(filters: BrowseFilters): boolean {
+  return Boolean(
+    filters.category ||
+    filters.favoritesOnly ||
+    filters.watchlistOnly ||
+    filters.genre ||
+    filters.yearFrom != null ||
+    filters.yearTo != null ||
+    filters.collectionId != null
+  );
 }
 
 async function fetchItems(
@@ -235,8 +270,7 @@ async function fetchItems(
     // canonical search; category / favourites / watchlist searches stay on the
     // filtered list path.
     const q = filters.query?.trim();
-    const plainSearch =
-      !!q && !filters.category && !filters.favoritesOnly && !filters.watchlistOnly;
+    const plainSearch = !!q && !movieFacetApplied(filters);
     if (plainSearch) {
       // Canonical search: one card per entity, exact titles first, then
       // aliases and metadata (genres, keywords, people); the semantic leg is
@@ -493,6 +527,44 @@ export function useRail(
     queryKey: browseKeys.rail(profileId, sourceId ?? -1, tab, spec.id),
     queryFn: () => fetchItems(tab, profileId, sourceId!, spec.filters, RAIL_SIZE, 0),
     enabled: enabled && sourceId !== null,
+  });
+}
+
+// ── Movie facets (Cinémathèque) ──────────────────────────────────────────────
+
+export const movieFacetKeys = {
+  genres: (profileId: string, sourceId: number) =>
+    [...browseKeys.source(profileId, sourceId), "movieGenres"] as const,
+  decades: (profileId: string, sourceId: number) =>
+    [...browseKeys.source(profileId, sourceId), "movieDecades"] as const,
+  collections: (profileId: string, sourceId: number) =>
+    [...browseKeys.source(profileId, sourceId), "movieCollections"] as const,
+};
+
+export function useMovieGenres(profileId: string, sourceId: number | null) {
+  return useQuery({
+    subscribed: useScreenActive(),
+    queryKey: movieFacetKeys.genres(profileId, sourceId ?? -1),
+    queryFn: () => invoke<FacetCount[]>("list_movie_genres", { profileId, sourceId }),
+    enabled: sourceId !== null,
+  });
+}
+
+export function useMovieDecades(profileId: string, sourceId: number | null) {
+  return useQuery({
+    subscribed: useScreenActive(),
+    queryKey: movieFacetKeys.decades(profileId, sourceId ?? -1),
+    queryFn: () => invoke<DecadeCount[]>("list_movie_decades", { profileId, sourceId }),
+    enabled: sourceId !== null,
+  });
+}
+
+export function useLibraryCollections(profileId: string, sourceId: number | null) {
+  return useQuery({
+    subscribed: useScreenActive(),
+    queryKey: movieFacetKeys.collections(profileId, sourceId ?? -1),
+    queryFn: () => invoke<LibraryCollection[]>("list_library_collections", { profileId, sourceId }),
+    enabled: sourceId !== null,
   });
 }
 
