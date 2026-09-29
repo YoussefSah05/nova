@@ -37,6 +37,14 @@ pub enum EpgError {
     Io(#[from] std::io::Error),
 }
 
+impl EpgError {
+    /// The byte stream failed (a truncated or corrupt download, a gzip error,
+    /// a size cap): the parser repeats it forever, so parsing must stop.
+    pub fn is_io(&self) -> bool {
+        matches!(self, Self::Io(_) | Self::Xml(quick_xml::Error::Io(_)))
+    }
+}
+
 /// Case-insensitive match between an M3U `tvg_id` and an XMLTV `channel.id`.
 /// Used by the refresh job when stitching programmes to channels.
 pub fn channel_id_matches(m3u: &str, xmltv: &str) -> bool {

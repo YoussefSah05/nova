@@ -16,6 +16,7 @@ import { nowAndLater, timeLeft } from "./timeline";
 export const ChannelPreview = memo(function ChannelPreview({
   channel,
   programs,
+  failed = false,
   nowSec,
   onPlay,
   onToggleFavorite,
@@ -23,6 +24,8 @@ export const ChannelPreview = memo(function ChannelPreview({
   channel: Channel;
   /// The channel's programmes in the guide window; undefined while loading.
   programs: Program[] | undefined;
+  /// The guide could not be read.
+  failed?: boolean;
   nowSec: number;
   onPlay: (c: Channel) => void;
   onToggleFavorite: (c: Channel, next: boolean) => void;
@@ -77,9 +80,11 @@ export const ChannelPreview = memo(function ChannelPreview({
         <div className="flex flex-col gap-1.5">
           <h2 className="font-display text-[22px] font-medium leading-tight">{channel.name}</h2>
           <span className="text-sm text-white/60">
-            {programs === undefined
-              ? "Loading the guide…"
-              : "No guide for this channel. It plays all the same."}
+            {failed
+              ? "Couldn't load the guide. The channel plays all the same."
+              : programs === undefined
+                ? "Loading the guide…"
+                : "No guide for this channel. It plays all the same."}
           </span>
         </div>
       )}

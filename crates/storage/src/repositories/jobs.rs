@@ -90,6 +90,19 @@ impl<'a> JobRepository<'a> {
         Ok(count > 0)
     }
 
+    /// Whether a job of `kind` for `payload` is queued or running.
+    pub async fn has_active(&self, kind: &str, payload: &str) -> Result<bool, StorageError> {
+        let count = sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM jobs
+             WHERE state IN ('queued', 'running') AND kind = ? AND payload = ?",
+            kind,
+            payload,
+        )
+        .fetch_one(self.pool)
+        .await?;
+        Ok(count > 0)
+    }
+
     /// Enqueue unless an identical job is already queued (bounded backpressure:
     /// repeated requests for the same work coalesce). Returns the queued job's
     /// id and whether a new row was inserted. A running job does not suppress

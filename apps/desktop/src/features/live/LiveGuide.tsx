@@ -5,6 +5,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { TvIcon } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import type { Channel } from "@/types";
 import { channelToItem } from "@/features/browse/queries";
 import { useMinute } from "@/features/browse/guide";
@@ -41,7 +42,7 @@ export function LiveGuide({ scope, emptyLabel }: { scope: GuideScope; emptyLabel
     channels.findIndex((c) => c.id === selectedId)
   );
   const selected = channels[selectedIndex] ?? null;
-  const programs = useGuidePrograms(
+  const { programs, failed } = useGuidePrograms(
     profile.id,
     channels,
     range[0],
@@ -68,6 +69,16 @@ export function LiveGuide({ scope, emptyLabel }: { scope: GuideScope; emptyLabel
       </div>
     );
   }
+  if (query.isError && channels.length === 0) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+        <p className="text-sm text-white/60">Couldn't load the channels.</p>
+        <Button variant="secondary" size="sm" onClick={() => void query.refetch()}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
   if (channels.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
@@ -85,6 +96,7 @@ export function LiveGuide({ scope, emptyLabel }: { scope: GuideScope; emptyLabel
         <GuideGrid
           channels={channels}
           programs={programs}
+          failed={failed}
           window={window}
           nowSec={nowSec}
           selectedId={selected?.id ?? null}
@@ -100,6 +112,7 @@ export function LiveGuide({ scope, emptyLabel }: { scope: GuideScope; emptyLabel
           <ChannelPreview
             channel={selected}
             programs={programs.get(selected.id)}
+            failed={failed.has(selected.id)}
             nowSec={nowSec}
             onPlay={onPlay}
             onToggleFavorite={onToggleFavorite}

@@ -25,7 +25,7 @@ const EXPLICIT_PRIORITY: i64 = 400;
 const METADATA_PRIORITY: i64 = 300;
 
 const IMPORT_KIND: &str = "desktop_import";
-const EPG_KIND: &str = "desktop_epg_refresh";
+pub(crate) const EPG_KIND: &str = "desktop_epg_refresh";
 const ENRICH_KIND: &str = "desktop_enrichment";
 
 fn emit_import_stage(app: &AppHandle, source_id: i64, stage: ImportStage) {

@@ -4,14 +4,14 @@
 //! section fits the window; the guide scrolls on its own. Opening it asks
 //! Rust to refresh a playlist's guide that has gone stale (once a session).
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { SearchIcon } from "lucide-react";
 
 import { BrowseBoundary } from "@/features/browse/BrowseBoundary";
 import { BrowseGrid } from "@/features/browse/BrowseGrid";
 import { formatGuideTime, useMinute } from "@/features/browse/guide";
-import type { BrowseFilters } from "@/features/browse/queries";
+import { useCountries, useRegions, type BrowseFilters } from "@/features/browse/queries";
 import { useLiveOverview, type GuideScope } from "@/features/live/data";
 import { LiveGuide } from "@/features/live/LiveGuide";
 import { cn } from "@/lib/utils";
@@ -22,9 +22,28 @@ import { NoPlaylist } from "@/sections/shared/NoPlaylist";
 
 type Mode = "guide" | "wall";
 /// A rail entry: every channel, favourites, or one category.
-type Slice = { kind: "all" } | { kind: "favourites" } | { kind: "category"; name: string };
+type Slice =
+  | { kind: "all" }
+  | { kind: "favourites" }
+  | { kind: "category"; name: string }
+  | { kind: "region"; name: string }
+  | { kind: "country"; name: string };
 
-/// Playlists whose guide freshness was checked this session.
+/// Search waits this long after the last keystroke.
+const SEARCH_DEBOUNCE_MS = 200;
+/// How often an open Live section re-checks its guide's freshness.
+const FRESHNESS_BUCKET_MS = 12 * 3600 * 1000;
+
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return debounced;
+}
+
+/// Playlists whose guide freshness was checked, per twelve-hour bucket.
 const checked = new Set<string>();
 
 export function LiveSection() {
@@ -35,7 +54,9 @@ export function LiveSection() {
   const [mode, setMode] = useState<Mode>("guide");
   const [slice, setSlice] = useState<Slice>({ kind: "all" });
   const [search, setSearch] = useState("");
-  const query = useDeferredValue(search.trim()) || null;
+  const query = useDebounced(search.trim(), SEARCH_DEBOUNCE_MS) || null;
+  const regions = useRegions(profile.id, activeSourceId).data;
+  const countries = useCountries(profile.id, activeSourceId).data;
   const wallRef = useRef<HTMLDivElement>(null);
   const minute = useMinute();
 
@@ -45,20 +66,23 @@ export function LiveSection() {
     setSearch("");
   }, [activeSourceId]);
 
+  const bucket = Math.floor((minute * 60_000) / FRESHNESS_BUCKET_MS);
   useEffect(() => {
     if (activeSourceId === null) return;
-    const key = `${profile.id}:${activeSourceId}`;
+    const key = `${profile.id}:${activeSourceId}:${bucket}`;
     if (checked.has(key)) return;
     checked.add(key);
     void invoke("epg_refresh_if_stale", { profileId: profile.id, sourceId: activeSourceId }).catch(
-      () => undefined
+      () => checked.delete(key)
     );
-  }, [profile.id, activeSourceId]);
+  }, [profile.id, activeSourceId, bucket]);
 
   const scope = useMemo<GuideScope>(
     () => ({
       kind: "playlist",
       category: slice.kind === "category" ? slice.name : null,
+      region: slice.kind === "region" ? slice.name : null,
+      country: slice.kind === "country" ? slice.name : null,
       favoritesOnly: slice.kind === "favourites",
       query,
     }),
@@ -67,11 +91,17 @@ export function LiveSection() {
   const wallFilters = useMemo<BrowseFilters>(
     () => ({
       category: scope.kind === "playlist" ? scope.category : null,
+      region: scope.kind === "playlist" ? scope.region : null,
+      country: scope.kind === "playlist" ? scope.country : null,
       favoritesOnly: scope.kind === "playlist" && scope.favoritesOnly,
       query,
     }),
     [scope, query]
   );
+
+  // The guide keeps its selection and scroll while a search narrows it; a
+  // new rail entry starts it afresh.
+  const sliceKey = JSON.stringify(slice);
 
   if (sourcesLoaded && sources.length === 0) return <NoPlaylist />;
 
@@ -156,13 +186,25 @@ export function LiveSection() {
               onPick={() => setSlice({ kind: "category", name: c.name })}
             />
           ))}
+          <RailGroup
+            title="Regions"
+            names={regions}
+            picked={slice.kind === "region" ? slice.name : null}
+            onPick={(name) => setSlice({ kind: "region", name })}
+          />
+          <RailGroup
+            title="Countries"
+            names={countries}
+            picked={slice.kind === "country" ? slice.name : null}
+            onPick={(name) => setSlice({ kind: "country", name })}
+          />
         </nav>
 
         {activeSourceId !== null && (
-          <BrowseBoundary resetKey={`live-${activeSourceId}-${mode}-${JSON.stringify(scope)}`}>
+          <BrowseBoundary resetKey={`live-${activeSourceId}-${mode}-${sliceKey}`}>
             {mode === "guide" ? (
               <LiveGuide
-                key={JSON.stringify(scope)}
+                key={sliceKey}
                 scope={scope}
                 emptyLabel={
                   query
@@ -191,6 +233,31 @@ export function LiveSection() {
         )}
       </div>
     </div>
+  );
+}
+
+function RailGroup({
+  title,
+  names,
+  picked,
+  onPick,
+}: {
+  title: string;
+  names: string[] | undefined;
+  picked: string | null;
+  onPick: (name: string) => void;
+}) {
+  // One value says nothing about the playlist: no group.
+  if (!names || names.length < 2) return null;
+  return (
+    <>
+      <span className="mx-3 mb-1 mt-4 text-xs uppercase tracking-[0.1em] text-white/45">
+        {title}
+      </span>
+      {names.map((name) => (
+        <RailItem key={name} label={name} on={picked === name} onPick={() => onPick(name)} />
+      ))}
+    </>
   );
 }
 

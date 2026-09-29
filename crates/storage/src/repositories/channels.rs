@@ -605,8 +605,8 @@ impl<'a> ChannelRepository<'a> {
 }
 
 /// The Live section's overview of a playlist: how many channels, how many
-/// have guide data (a `tvg_id` some feed has programmes for), and the
-/// channel count per category.
+/// have guide data (a `tvg_id` some feed has a programme on now or later
+/// for), and the channel count per category.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveOverview {
@@ -616,15 +616,21 @@ pub struct LiveOverview {
 }
 
 impl ChannelRepository<'_> {
-    pub async fn live_overview(&self, source_id: i64) -> Result<LiveOverview, StorageError> {
+    pub async fn live_overview(
+        &self,
+        source_id: i64,
+        now_utc: i64,
+    ) -> Result<LiveOverview, StorageError> {
         let totals = sqlx::query!(
             r#"SELECT COUNT(*) as "channels!: i64",
                       COALESCE(SUM(CASE WHEN c.tvg_id IS NOT NULL AND c.tvg_id <> ''
                                          AND EXISTS (SELECT 1 FROM programs p
-                                                     WHERE p.channel_tvg_id = c.tvg_id)
+                                                     WHERE p.channel_tvg_id = c.tvg_id
+                                                       AND p.stop_utc > ?2)
                                     THEN 1 ELSE 0 END), 0) as "with_guide!: i64"
-               FROM channels c WHERE c.source_id = ?"#,
+               FROM channels c WHERE c.source_id = ?1"#,
             source_id,
+            now_utc,
         )
         .fetch_one(self.pool)
         .await?;

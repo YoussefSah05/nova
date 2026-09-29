@@ -71,6 +71,7 @@ it("lists channels with what's on, says when there is no guide, and moves with t
           [2, []],
         ])
       }
+      failed={new Set()}
       window={guideWindow(now)}
       nowSec={now}
       selectedId={1}

@@ -2,9 +2,15 @@
 //! bundle's channels), and the programmes of the rows on screen, fetched in
 //! blocks so a scroll through thousands of channels reads only what shows.
 
-import { useInfiniteQuery, useQueries, useQuery, type InfiniteData } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQueries,
+  useQuery,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 
 import type { Channel, ChannelGuide, LiveOverview, Program } from "@/types";
 import { browseKeys } from "@/features/browse/queries";
@@ -22,6 +28,8 @@ export type GuideScope =
   | {
       kind: "playlist";
       category: string | null;
+      region: string | null;
+      country: string | null;
       favoritesOnly: boolean;
       query: string | null;
     }
@@ -54,6 +62,8 @@ export function useGuideChannels(profileId: string, sourceId: number | null, sco
             offset: pageParam,
             filters: {
               category: scope.category,
+              region: scope.region,
+              country: scope.country,
               favoritesOnly: scope.favoritesOnly,
               query: scope.query,
             },
@@ -62,20 +72,30 @@ export function useGuideChannels(profileId: string, sourceId: number | null, sco
     getNextPageParam: (last, _pages, offset) =>
       scope.kind === "playlist" && last.length === GUIDE_PAGE ? offset + GUIDE_PAGE : undefined,
     enabled: sourceId !== null,
+    // A new search keeps the rows on screen until its results arrive.
+    placeholderData: keepPreviousData,
   });
 }
 
-/// Programmes of the guide rows in `[first, last]`, by channel id. Rows are
-/// read in fixed blocks so scrolling reuses what's cached.
+export interface GuidePrograms {
+  /// Programmes by channel id; a missing entry is still loading.
+  programs: Map<number, Program[]>;
+  /// Channels whose programmes could not be read.
+  failed: Set<number>;
+}
+
+/// Programmes of the guide rows in `[first, last]` (and the selected row),
+/// by channel id. Rows are read in fixed blocks so scrolling reuses what's
+/// cached; while the window moves to the next half hour, rows keep their
+/// previous programmes (clipped to the new window) until the new ones land.
 export function useGuidePrograms(
   profileId: string,
   channels: Channel[],
   first: number,
   last: number,
   window: GuideWindow,
-  /// A row read even when scrolled away (the selected channel).
   alsoIndex: number = -1
-): Map<number, Program[]> {
+): GuidePrograms {
   const subscribed = useScreenActive();
   const blocks = useMemo(() => {
     if (channels.length === 0) return [];
@@ -91,8 +111,9 @@ export function useGuidePrograms(
       .map((b) => channels.slice(b * GUIDE_BLOCK, (b + 1) * GUIDE_BLOCK).map((c) => c.id));
   }, [channels, first, last, alsoIndex]);
   const results = useQueries({
+    // Per-query `subscribed` is ignored by useQueries: it goes here.
+    subscribed,
     queries: blocks.map((ids) => ({
-      subscribed,
       queryKey: [...guideKeys.all, profileId, "grid", window.from, ids] as const,
       queryFn: () =>
         invoke<ChannelGuide[]>("epg_guide", {
@@ -102,13 +123,29 @@ export function useGuidePrograms(
           toUtc: window.to,
         }),
       staleTime: 5 * 60_000,
-      placeholderData: (previous: ChannelGuide[] | undefined) => previous,
       retry: false,
     })),
   });
+  // What each channel last showed, across window moves.
+  const last_ = useRef(new Map<number, Program[]>());
   // Rebuilt each render (a few blocks); each channel's programme array keeps
   // its identity, so memoized rows don't re-render.
-  const map = new Map<number, Program[]>();
-  for (const r of results) for (const g of r.data ?? []) map.set(g.channelId, g.programs);
-  return map;
+  const programs = new Map<number, Program[]>();
+  const failed = new Set<number>();
+  blocks.forEach((ids, i) => {
+    const r = results[i];
+    if (r?.data) {
+      for (const g of r.data) {
+        programs.set(g.channelId, g.programs);
+        last_.current.set(g.channelId, g.programs);
+      }
+      return;
+    }
+    for (const id of ids) {
+      const previous = last_.current.get(id);
+      if (previous) programs.set(id, previous);
+      else if (r?.isError) failed.add(id);
+    }
+  });
+  return { programs, failed };
 }

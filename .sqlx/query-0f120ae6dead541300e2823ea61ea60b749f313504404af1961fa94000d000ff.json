@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH req AS (SELECT DISTINCT CAST(value AS INTEGER) AS channel_id FROM json_each(?1)),\n               ch AS (\n                 SELECT r.channel_id AS channel_id, c.tvg_id AS tvg_id,\n                        -- The channel's own source's first feed, else any feed; NULL\n                        -- (programmes from before feeds owned them) last.\n                        COALESCE(\n                          (SELECT MIN(p.epg_source_id)\n                           FROM programs p JOIN epg_sources e ON e.id = p.epg_source_id\n                           WHERE p.channel_tvg_id = c.tvg_id AND e.source_id = c.source_id),\n                          (SELECT MIN(p.epg_source_id) FROM programs p\n                           WHERE p.channel_tvg_id = c.tvg_id)) AS feed\n                 FROM req r JOIN channels c ON c.id = r.channel_id\n                 WHERE c.tvg_id IS NOT NULL AND c.tvg_id <> ''\n               ),\n               ranked AS (\n                 -- On now: the latest-starting programme already airing;\n                 -- next: the first one starting after now.\n                 SELECT ch.channel_id AS channel_id, p.channel_tvg_id AS channel_tvg_id,\n                        p.title AS title, p.sub_title AS sub_title, p.description AS description,\n                        p.start_utc AS start_utc, p.stop_utc AS stop_utc,\n                        p.category AS category, p.icon_url AS icon_url,\n                        p.start_utc <= ?2 AS is_now,\n                        ROW_NUMBER() OVER (\n                          PARTITION BY ch.channel_id, p.start_utc <= ?2\n                          ORDER BY CASE WHEN p.start_utc <= ?2 THEN -p.start_utc ELSE p.start_utc END,\n                                   p.id DESC\n                        ) AS rn\n                 FROM ch JOIN programs p\n                   ON p.channel_tvg_id = ch.tvg_id AND p.epg_source_id IS ch.feed\n                  AND p.stop_utc > ?2\n               )\n               SELECT channel_id as \"channel_id!: i64\", channel_tvg_id as \"channel_tvg_id!: String\",\n                      title as \"title!: String\", sub_title, description,\n                      start_utc as \"start_utc!: i64\", stop_utc as \"stop_utc!: i64\",\n                      category, icon_url, is_now as \"is_now!: bool\"\n               FROM ranked WHERE rn = 1\n               ORDER BY channel_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "channel_id!: i64",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "channel_tvg_id!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "sub_title",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "description",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "start_utc!: i64",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "stop_utc!: i64",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "category",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "icon_url",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_now!: bool",
+        "ordinal": 9,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "0f120ae6dead541300e2823ea61ea60b749f313504404af1961fa94000d000ff"
+}

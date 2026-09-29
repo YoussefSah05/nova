@@ -322,10 +322,18 @@ async fn the_guide_window_reads_each_channels_feed_and_the_overview_counts_cover
     );
 
     let overview = nova_storage::ChannelRepository::new(&pool)
-        .live_overview(a)
+        .live_overview(a, 150)
         .await
         .unwrap();
     assert_eq!((overview.channels, overview.with_guide), (3, 2));
+    let later = nova_storage::ChannelRepository::new(&pool)
+        .live_overview(a, 350)
+        .await
+        .unwrap();
+    assert_eq!(
+        later.with_guide, 1,
+        "a guide that has run out is not guide data"
+    );
     assert_eq!(
         overview
             .categories
@@ -334,4 +342,47 @@ async fn the_guide_window_reads_each_channels_feed_and_the_overview_counts_cover
             .collect::<Vec<_>>(),
         [("News", 2), ("Sports", 1)]
     );
+}
+
+#[tokio::test]
+async fn now_is_the_latest_starting_programme_on_air_even_when_programmes_overlap() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_profile_db(dir.path().join("p.db").to_str().unwrap())
+        .await
+        .unwrap();
+    let (a, feed) = source_with_feed(&pool, "a").await;
+    refresh(
+        &pool,
+        feed,
+        &[
+            program("cnn.us", "Filler", 0, 86_400),
+            program("cnn.us", "A", 500, 2000),
+            program("cnn.us", "B", 800, 1500),
+            program("cnn.us", "C", 900, 1100),
+            program("cnn.us", "Next", 1100, 1200),
+            program("cnn.us", "Later", 1200, 1300),
+        ],
+    )
+    .await;
+    let id = sqlx::query(
+        "INSERT INTO channels (source_id, tvg_id, name, stream_url) VALUES (?, 'cnn.us', 'CNN', 'http://s/1')",
+    )
+    .bind(a)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    let guide = ProgramsRepository::new(&pool)
+        .now_and_next_for_channels(&[id, id], 1000)
+        .await
+        .unwrap();
+    for g in &guide {
+        assert_eq!(
+            (
+                g.now.as_ref().map(|p| p.title.as_str()),
+                g.next.as_ref().map(|p| p.title.as_str())
+            ),
+            (Some("C"), Some("Next"))
+        );
+    }
 }

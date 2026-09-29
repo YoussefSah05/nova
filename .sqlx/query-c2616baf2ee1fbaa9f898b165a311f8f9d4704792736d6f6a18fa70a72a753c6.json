@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as \"channels!: i64\",\n                      COALESCE(SUM(CASE WHEN c.tvg_id IS NOT NULL AND c.tvg_id <> ''\n                                         AND EXISTS (SELECT 1 FROM programs p\n                                                     WHERE p.channel_tvg_id = c.tvg_id\n                                                       AND p.stop_utc > ?2)\n                                    THEN 1 ELSE 0 END), 0) as \"with_guide!: i64\"\n               FROM channels c WHERE c.source_id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "channels!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "with_guide!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c2616baf2ee1fbaa9f898b165a311f8f9d4704792736d6f6a18fa70a72a753c6"
+}

@@ -21,6 +21,8 @@ export interface GuideGridProps {
   channels: Channel[];
   /// Programmes by channel id; a missing entry is still loading.
   programs: Map<number, Program[]>;
+  /// Channels whose guide could not be read.
+  failed: Set<number>;
   window: GuideWindow;
   nowSec: number;
   selectedId: number | null;
@@ -35,6 +37,7 @@ export interface GuideGridProps {
 export function GuideGrid({
   channels,
   programs,
+  failed,
   window,
   nowSec,
   selectedId,
@@ -50,6 +53,9 @@ export function GuideGrid({
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_H,
     overscan: 8,
+    // Rows start below the pinned header: the virtualizer places them (and
+    // scrolls a row into view) with that offset.
+    paddingStart: HEADER_H,
     scrollPaddingStart: HEADER_H,
   });
   const items = virtualizer.getVirtualItems();
@@ -105,7 +111,10 @@ export function GuideGrid({
 
   const nowX = xFor(nowSec, window);
   const inWindow = nowSec >= window.from && nowSec < window.to;
-  const height = HEADER_H + virtualizer.getTotalSize();
+  // Includes the header (`paddingStart`).
+  const height = virtualizer.getTotalSize();
+  // Keep a tab stop when the chosen row is scrolled out of the mounted rows.
+  const selectedMounted = items.some((row) => channels[row.index]?.id === selectedId);
 
   return (
     <div
@@ -152,11 +161,14 @@ export function GuideGrid({
                 key={channel.id}
                 channel={channel}
                 programs={programs.get(channel.id)}
+                failed={failed.has(channel.id)}
                 window={window}
                 nowSec={nowSec}
                 selected={channel.id === selectedId}
-                focusable={channel.id === selectedId || (selectedIndex < 0 && row.index === 0)}
-                top={HEADER_H + row.start}
+                focusable={
+                  channel.id === selectedId || (!selectedMounted && row.index === items[0]?.index)
+                }
+                top={row.start}
                 onSelect={onSelect}
                 onPlay={onPlay}
               />
@@ -165,6 +177,7 @@ export function GuideGrid({
         </div>
 
         {inWindow && (
+          // Under the pinned channel column (z-15) and header (z-20).
           <div
             aria-hidden
             className="pointer-events-none absolute z-10 w-0.5 -translate-x-1/2 bg-primary/80"
@@ -179,6 +192,7 @@ export function GuideGrid({
 const GuideRow = memo(function GuideRow({
   channel,
   programs,
+  failed,
   window,
   nowSec,
   selected,
@@ -189,6 +203,7 @@ const GuideRow = memo(function GuideRow({
 }: {
   channel: Channel;
   programs: Program[] | undefined;
+  failed: boolean;
   window: GuideWindow;
   nowSec: number;
   selected: boolean;
@@ -223,7 +238,7 @@ const GuideRow = memo(function GuideRow({
       >
         <span
           className={cn(
-            "sticky left-0 z-[5] flex h-full shrink-0 items-center gap-2.5 border-b border-white/[0.05] px-3",
+            "sticky left-0 z-[15] flex h-full shrink-0 items-center gap-2.5 border-b border-white/[0.05] px-3",
             selected ? "bg-[#16161a] shadow-[inset_2px_0_0_var(--color-primary)]" : "bg-[#0e0e11]"
           )}
           style={{ width: NAME_W }}
@@ -237,7 +252,14 @@ const GuideRow = memo(function GuideRow({
           className="relative h-full shrink-0 border-b border-white/[0.05]"
           style={{ width: TIMELINE_WIDTH }}
         >
-          {cells === null ? (
+          {failed ? (
+            <span
+              className="absolute inset-y-0 flex items-center text-xs text-white/40"
+              style={{ left: Math.max(0, xFor(nowSec, window) + 12) }}
+            >
+              Guide unavailable
+            </span>
+          ) : cells === null ? (
             <span className="nova-shimmer absolute inset-y-3 left-0 right-0 rounded-md bg-white/[0.03]" />
           ) : cells.length === 0 ? (
             <span

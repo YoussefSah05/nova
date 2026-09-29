@@ -32,6 +32,8 @@ use crate::state::AppState;
 use super::require_profile_pool;
 
 const REFRESH_BATCH: usize = 500;
+/// Malformed programmes in a row after which a feed is not XMLTV at all.
+const MAX_CONSECUTIVE_PARSE_ERRORS: usize = 1_000;
 /// Parsed batches in flight between the parser thread and the inserter.
 const BATCHES_IN_FLIGHT: usize = 4;
 /// XMLTV feeds larger than this are refused (full multi-country guides run to
@@ -156,7 +158,7 @@ pub async fn list_live_overview(
 ) -> Result<LiveOverview, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
     ChannelRepository::new(&pool)
-        .live_overview(source_id)
+        .live_overview(source_id, now_ts())
         .await
         .map_err(Into::into)
 }
@@ -253,8 +255,9 @@ fn guide_due(feeds: &[nova_storage::EpgSource], now: i64) -> bool {
     })
 }
 
-/// Refresh the source's guide when it is due (the Live section asks when it
-/// opens). Returns whether a refresh was queued.
+/// Refresh the source's guide when it is due and no refresh is already
+/// queued or running (the Live section asks when it opens). Returns whether
+/// a refresh was queued.
 #[tauri::command]
 pub async fn epg_refresh_if_stale(
     profile_id: String,
@@ -267,6 +270,14 @@ pub async fn epg_refresh_if_stale(
         .list_for_source(source_id)
         .await?;
     if !guide_due(&feeds, now_ts()) {
+        return Ok(false);
+    }
+    // A refresh already queued or running (after an import) covers it; a
+    // second one would download every feed again.
+    if nova_storage::JobRepository::new(&pool)
+        .has_active(crate::desktop_jobs::EPG_KIND, &source_id.to_string())
+        .await?
+    {
         return Ok(false);
     }
     state
@@ -477,23 +488,47 @@ pub(crate) async fn spool_capped(
 }
 
 /// The feed's XML: gzip feeds (`.xml.gz`, served as-is by many community
-/// guides) are inflated as they are parsed, up to [`MAX_EPG_INFLATED_BYTES`].
+/// guides) are inflated as they are parsed; past [`MAX_EPG_INFLATED_BYTES`]
+/// the read fails and so does the feed.
 fn xml_reader(mut feed: std::fs::File) -> std::io::Result<Box<dyn std::io::Read + Send>> {
     use std::io::{Read, Seek, SeekFrom};
     let mut magic = [0u8; 2];
     let read = feed.read(&mut magic)?;
     feed.seek(SeekFrom::Start(0))?;
     if read == 2 && magic == [0x1f, 0x8b] {
-        Ok(Box::new(
-            flate2::read::MultiGzDecoder::new(feed).take(MAX_EPG_INFLATED_BYTES),
-        ))
+        Ok(Box::new(Capped {
+            inner: flate2::read::MultiGzDecoder::new(feed),
+            left: MAX_EPG_INFLATED_BYTES,
+        }))
     } else {
         Ok(Box::new(feed))
     }
 }
 
+/// A reader that fails (rather than ending quietly) once it has produced
+/// `left` bytes, so an oversized feed is refused instead of published cut.
+struct Capped<R> {
+    inner: R,
+    left: u64,
+}
+
+impl<R: std::io::Read> std::io::Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n as u64 > self.left {
+            return Err(std::io::Error::other(
+                "EPG feed inflates past the size limit",
+            ));
+        }
+        self.left -= n as u64;
+        Ok(n)
+    }
+}
+
 enum ParsedChunk {
     Programs(Vec<Program>),
+    /// The feed can't be read to its end; nothing is published.
+    Failed(String),
     /// The feed ended; its `<channel>` icons.
     Done(Vec<nova_epg::ChannelIcon>),
 }
@@ -520,9 +555,30 @@ pub(crate) async fn ingest_feed(
         };
         let mut programs = nova_epg::parse(std::io::BufReader::new(reader));
         let mut batch = Vec::with_capacity(REFRESH_BATCH);
+        let mut consecutive_errors = 0usize;
         for p in programs.by_ref() {
             match p {
+                // A stream that fails part-way would publish half a guide
+                // over the whole one: fail the feed and keep its guide.
+                Err(e) if e.is_io() => {
+                    let _ = tx_batches.blocking_send(ParsedChunk::Failed(format!(
+                        "EPG feed is truncated or corrupt: {e}"
+                    )));
+                    return;
+                }
+                Err(e) => {
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_PARSE_ERRORS {
+                        let _ = tx_batches.blocking_send(ParsedChunk::Failed(
+                            "EPG feed is not readable XMLTV".to_string(),
+                        ));
+                        return;
+                    }
+                    // A broken element shouldn't discard the entire feed.
+                    tracing::warn!(error = %e, "EPG parse: skipped malformed programme");
+                }
                 Ok(p) => {
+                    consecutive_errors = 0;
                     batch.push(p);
                     if batch.len() == REFRESH_BATCH {
                         let full = std::mem::replace(&mut batch, Vec::with_capacity(REFRESH_BATCH));
@@ -534,8 +590,6 @@ pub(crate) async fn ingest_feed(
                         }
                     }
                 }
-                // A broken element shouldn't discard the entire feed.
-                Err(e) => tracing::warn!(error = %e, "EPG parse: skipped malformed programme"),
             }
         }
         if !batch.is_empty()
@@ -566,6 +620,7 @@ pub(crate) async fn ingest_feed(
                         .map_err(|e| e.to_string())?;
                 }
                 Some(ParsedChunk::Done(icons)) => break icons,
+                Some(ParsedChunk::Failed(error)) => return Err(error),
                 None => return Err("EPG parser stopped unexpectedly".to_string()),
             }
         };
@@ -778,6 +833,65 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(inserted, 6);
+    }
+
+    fn gzip_of(programmes: usize) -> Vec<u8> {
+        use std::io::Read;
+        let mut xml = Vec::new();
+        xmltv(programmes).read_to_end(&mut xml).unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&xml).unwrap();
+        gz.finish().unwrap()
+    }
+
+    fn file_of(bytes: &[u8]) -> std::fs::File {
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(bytes).unwrap();
+        std::io::Seek::rewind(&mut file).unwrap();
+        file
+    }
+
+    #[tokio::test]
+    async fn a_damaged_gzip_feed_fails_and_keeps_the_guide_it_had() {
+        let (_dir, pool, source, feed) = profile_with_feed().await;
+        let tvg = vec!["cnn.us".to_string()];
+        ingest_feed(&pool, source, feed, xmltv(4), tvg.clone())
+            .await
+            .unwrap();
+        let whole = gzip_of(2_000);
+        let mut trailing = whole.clone();
+        trailing.extend_from_slice(b"garbage");
+        for damaged in [
+            whole[..whole.len() / 2].to_vec(),
+            whole[..whole.len() - 4].to_vec(),
+            trailing,
+        ] {
+            // Bounded: a stuck parser would hang here.
+            let result = tokio::time::timeout(
+                Duration::from_secs(20),
+                ingest_feed(&pool, source, feed, file_of(&damaged), tvg.clone()),
+            )
+            .await
+            .expect("a damaged feed must not hang the refresh");
+            let error = result.unwrap_err();
+            assert!(error.contains("truncated or corrupt"), "{error}");
+        }
+        let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM programs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(kept, 4, "the previous guide stays");
+    }
+
+    #[test]
+    fn inflating_past_the_cap_is_an_error_not_a_quiet_cut() {
+        use std::io::Read;
+        let mut capped = Capped {
+            inner: std::io::Cursor::new(vec![b'x'; 100]),
+            left: 50,
+        };
+        let mut out = Vec::new();
+        assert!(capped.read_to_end(&mut out).is_err());
     }
 
     #[test]
