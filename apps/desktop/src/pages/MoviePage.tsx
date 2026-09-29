@@ -80,7 +80,7 @@ export function MoviePage({ item }: { item: BrowseItem }) {
   const { playItem, playVariant } = usePlayback();
   const activate = useActivate();
   const { toggleFavorite, toggleWatchlist } = useLibraryActions();
-  const { settings, setSettings } = useProfileSettings(profile.id);
+  const { settings, saveSettings } = useProfileSettings(profile.id);
   const { data: detail } = useQuery({
     subscribed: useScreenActive(),
     ...canonicalMovieQuery(profile.id, item.entityId),
@@ -94,11 +94,12 @@ export function MoviePage({ item }: { item: BrowseItem }) {
   const { data: related } = useRelatedTitles(profile.id, activeSourceId, subject);
 
   const setAudio = (value: string | null) => {
-    setSettings({ preferredAudioLang: value });
-    // Nova's pick depends on the audio language.
-    void qc.invalidateQueries({
-      queryKey: canonicalMovieQuery(profile.id, item.entityId).queryKey,
-    });
+    // Nova's pick depends on the audio language: refetch once it is saved.
+    void saveSettings({ preferredAudioLang: value }).then(() =>
+      qc.invalidateQueries({
+        queryKey: canonicalMovieQuery(profile.id, item.entityId).queryKey,
+      })
+    );
   };
 
   return (

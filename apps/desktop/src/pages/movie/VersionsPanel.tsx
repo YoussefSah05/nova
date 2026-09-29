@@ -39,6 +39,7 @@ export const VersionsPanel = memo(function VersionsPanel({
           disabled={!v.available}
           onClick={() => onPlay(v.variantId)}
           aria-label={`Play ${v.sourceName}${v.badges.length ? ` ${v.badges.join(" ")}` : ""}${v.picked ? " (Nova's pick)" : ""}`}
+          aria-describedby={`version-why-${v.variantId}`}
           className={cn(
             "flex flex-col gap-1.5 rounded-xl border p-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
             v.picked
@@ -65,7 +66,10 @@ export const VersionsPanel = memo(function VersionsPanel({
               </span>
             ))}
           </span>
-          <span className="pl-4 text-xs leading-relaxed text-white/60">
+          <span
+            id={`version-why-${v.variantId}`}
+            className="pl-4 text-xs leading-relaxed text-white/60"
+          >
             {versionReason(v, preferredLang)}
           </span>
         </button>

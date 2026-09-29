@@ -153,7 +153,7 @@ export const PosterCard = memo(function PosterCard({
             {live && guide?.now ? (
               <GuideLine guide={guide} className="mt-0.5" />
             ) : movieMeta ? (
-              <p className="truncate text-[11px] text-muted-foreground">{movieMeta}</p>
+              <p className="truncate text-xs text-muted-foreground">{movieMeta}</p>
             ) : (
               item.subtitle && (
                 <p className="truncate text-[11px] text-muted-foreground">{item.subtitle}</p>

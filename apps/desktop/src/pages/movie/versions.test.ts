@@ -46,4 +46,16 @@ describe("film versions", () => {
       "No longer listed by the provider."
     );
   });
+
+  it("never claims a language a multi-audio source only probably has", () => {
+    expect(versionReason(v("m", { picked: true, badges: ["HD", "MULTI"] }), "fr")).toBe(
+      "Nova plays this one: HD with several audio tracks, likely including French."
+    );
+  });
+
+  it("says so when the pick is a fallback because every source failed", () => {
+    expect(
+      versionReason(v("p", { picked: true, recentlyFailed: true, badges: ["FHD"] }), "fr")
+    ).toBe("Every source failed recently — Nova tries this one first.");
+  });
 });

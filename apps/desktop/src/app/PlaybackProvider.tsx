@@ -8,7 +8,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { MoviePlaybackTarget } from "@/types";
 import { PlayerModal, type PlayMedia } from "@/features/player/PlayerModal";
 import { browseKeys, type BrowseItem } from "@/features/browse/queries";
-import { invalidateDetailProgress } from "@/features/browse/detail/data";
+import { canonicalMovieQuery, invalidateDetailProgress } from "@/features/browse/detail/data";
 import { errorMessage, useSession } from "./session";
 import { PlaybackContext, PlayingContext, type Playback } from "./playback";
 
@@ -35,9 +35,14 @@ export function PlaybackProvider({ children }: { children: ReactNode }) {
         });
       } catch (e: unknown) {
         setError(errorMessage(e));
+        // A chosen source that vanished: show the page's current sources.
+        if (variantId)
+          void qc.invalidateQueries({
+            queryKey: canonicalMovieQuery(profile.id, item.entityId).queryKey,
+          });
       }
     },
-    [profile.id, setError]
+    [profile.id, setError, qc]
   );
 
   const playVariant = useCallback(

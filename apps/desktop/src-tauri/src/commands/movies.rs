@@ -197,8 +197,8 @@ pub async fn set_movie_in_watchlist(
         .ok_or_else(|| ApiError::NotFound("movie not found".into()))
 }
 
-/// Rust selects the variant (the requested one when valid for this entity,
-/// otherwise the best by the variant selector: no recent failure, the
+/// Rust selects the variant (the requested one, or NotFound when it is no
+/// longer a playable variant of this entity; otherwise the best by the variant selector: no recent failure, the
 /// profile's preferred audio language, picture quality) and returns a
 /// transient player locator.
 #[tauri::command]
@@ -215,7 +215,7 @@ pub async fn resolve_movie_playback(
         .await
         .ok()
         .and_then(|s| s.preferred_audio_lang);
-    CanonicalRepository::new(&pool)
+    let target = CanonicalRepository::new(&pool)
         .resolve_playback_with(
             &self::entity_id(entity_id)?,
             variant.as_ref(),
@@ -223,5 +223,13 @@ pub async fn resolve_movie_playback(
             &[],
         )
         .await?
-        .ok_or_else(|| ApiError::NotFound("no playable version is available".into()))
+        .ok_or_else(|| ApiError::NotFound("no playable version is available".into()))?;
+    // A chosen source that is gone (re-import, stale page) must not silently
+    // play a different one: the ranking puts a valid requested variant first.
+    if variant.as_ref().is_some_and(|v| *v != target.variant_id) {
+        return Err(ApiError::NotFound(
+            "that version is no longer available".into(),
+        ));
+    }
+    Ok(target)
 }

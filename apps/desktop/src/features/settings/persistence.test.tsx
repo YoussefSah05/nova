@@ -119,3 +119,29 @@ describe("concurrent settings panels", () => {
     vi.useRealTimers();
   });
 });
+
+describe("saving now", () => {
+  it("writes without the debounce and settles only once the value is saved", async () => {
+    mockInvoke.mockReset();
+    let finishWrite!: () => void;
+    mockInvoke.mockImplementation((command) =>
+      command === "set_profile_settings"
+        ? new Promise((r) => (finishWrite = () => r(undefined)))
+        : Promise.resolve(DEFAULT_PROFILE_SETTINGS)
+    );
+    const { result } = renderHook(() => useProfileSettings("saver"));
+    await act(async () => {});
+    let saved = false;
+    act(() => {
+      void result.current.saveSettings({ preferredAudioLang: "fr" }).then(() => (saved = true));
+    });
+    await act(async () => {});
+    expect(mockInvoke).toHaveBeenCalledWith("set_profile_settings", {
+      profileId: "saver",
+      settings: { ...DEFAULT_PROFILE_SETTINGS, preferredAudioLang: "fr" },
+    });
+    expect(saved).toBe(false);
+    await act(async () => finishWrite());
+    expect(saved).toBe(true);
+  });
+});

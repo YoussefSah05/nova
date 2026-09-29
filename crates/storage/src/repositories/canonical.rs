@@ -404,17 +404,17 @@ impl<'a> CanonicalRepository<'a> {
                       v.dedup_group as "dedup_group?: String",
                       COALESCE(m.genres, v.tmdb_genres) as "genres?: String",
                       v.genre as "genre?: String",
-                      CAST(COALESCE(json_extract(f.facts, '$.runtimeMin'),
-                                    json_extract(v.provider_facts, '$.duration_sec') / 60)
+                      CAST(COALESCE(NULLIF(json_extract(f.facts, '$.runtimeMin'), 0),
+                                    json_extract(v.provider_facts, '$.durationSec') / 60)
                            AS INTEGER) as "runtime_min?: i64",
-                      COALESCE(json_extract(f.facts, '$.rating'),
-                               json_extract(v.provider_facts, '$.rating')) as "rating?: f64",
-                      CASE WHEN json_extract(f.facts, '$.rating') IS NOT NULL THEN 'tmdb'
-                           WHEN json_extract(v.provider_facts, '$.rating') IS NOT NULL THEN 'provider'
+                      COALESCE(NULLIF(json_extract(f.facts, '$.rating'), 0),
+                               NULLIF(json_extract(v.provider_facts, '$.rating'), 0)) as "rating?: f64",
+                      CASE WHEN NULLIF(json_extract(f.facts, '$.rating'), 0) IS NOT NULL THEN 'tmdb'
+                           WHEN NULLIF(json_extract(v.provider_facts, '$.rating'), 0) IS NOT NULL THEN 'provider'
                       END as "rating_source?: String",
                       m.original_title as "original_title?: String",
                       m.keywords as "keywords?: String",
-                      json_extract(v.provider_facts, '$.release_date') as "release_date?: String",
+                      json_extract(v.provider_facts, '$.releaseDate') as "release_date?: String",
                       json_extract(f.facts, '$.voteCount') as "vote_count?: i64"
                FROM canonical_entities e
                LEFT JOIN vod_items v ON v.id = (

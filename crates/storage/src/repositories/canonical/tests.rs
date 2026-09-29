@@ -1,6 +1,6 @@
 use super::*;
 use crate::{init_profile_db, SourceRepository, VodRepository, WatchHistoryRepository};
-use nova_core::{ContentSort, VodItem};
+use nova_core::{ContentSort, ProviderFacts, VodItem};
 
 struct Db {
     _dir: tempfile::TempDir,
@@ -1569,9 +1569,49 @@ async fn browse_fixture() -> (Db, EntityId) {
         let pool = db.pool.clone();
         async move { sqlx::query(sql).execute(&pool).await.unwrap() }
     };
-    exec("UPDATE vod_items SET quality_hints = '4K,HEVC', genre = 'Crime', canonical_title = 'Heat', provider_facts = '{\"rating\":7.1,\"duration_sec\":10200,\"release_date\":\"1995-12-15\"}' WHERE name = 'EN - Heat 4K'").await;
+    exec("UPDATE vod_items SET quality_hints = '4K,HEVC', genre = 'Crime', canonical_title = 'Heat' WHERE name = 'EN - Heat 4K'").await;
+    // Provider facts exactly as import stores them (the real serializer).
+    let set_facts = |name: &'static str, facts: ProviderFacts| {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query("UPDATE vod_items SET provider_facts = ? WHERE name = ?")
+                .bind(facts.to_json())
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    set_facts(
+        "EN - Heat 4K",
+        ProviderFacts {
+            rating: Some(7.1),
+            duration_sec: Some(10200),
+            release_date: Some("1995-12-15".into()),
+            ..Default::default()
+        },
+    )
+    .await;
     exec("UPDATE vod_items SET quality_hints = '1080P', language_hints = 'VF', genre = 'Crime', canonical_title = 'Heat' WHERE name = 'FR - Heat VF'").await;
-    exec("UPDATE vod_items SET genre = 'Science Fiction', provider_facts = '{\"rating\":7.9}' WHERE name = 'Arrival'").await;
+    exec("UPDATE vod_items SET genre = 'Science Fiction' WHERE name = 'Arrival'").await;
+    set_facts(
+        "Arrival",
+        ProviderFacts {
+            rating: Some(7.9),
+            duration_sec: Some(6960),
+            ..Default::default()
+        },
+    )
+    .await;
+    // A zero rating is a panel's "unrated", not a score.
+    set_facts(
+        "Amélie",
+        ProviderFacts {
+            rating: Some(0.0),
+            ..Default::default()
+        },
+    )
+    .await;
     exec("UPDATE vod_items SET genre = 'Comedy' WHERE name = 'Amélie'").await;
     // One film, two sources: merge Heat's second variant into the first.
     exec("UPDATE stream_variants SET entity_id = (SELECT s.entity_id FROM stream_variants s JOIN vod_items v ON v.id = s.vod_item_id WHERE v.name = 'EN - Heat 4K') WHERE vod_item_id = (SELECT id FROM vod_items WHERE name = 'FR - Heat VF')").await;
@@ -1633,6 +1673,16 @@ async fn cards_carry_facts_from_stored_evidence() {
         "Nova's genre without a match"
     );
     assert!(arrival.facts.badges.is_empty());
+    assert_eq!(
+        arrival.facts.runtime_min,
+        Some(116),
+        "the provider's duration without TMDB"
+    );
+    let amelie = cards.iter().find(|c| c.title == "Amélie").unwrap();
+    assert_eq!(
+        (amelie.facts.rating, amelie.facts.rating_source.as_deref()),
+        (None, None)
+    );
 }
 
 #[tokio::test]

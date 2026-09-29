@@ -13,7 +13,9 @@ export function useProfilePreference<T extends object>(
 ) {
   const [value, setValue] = useState(defaults);
   const [loaded, setLoaded] = useState(false);
-  const updateRef = useRef<(patch: Partial<T>) => void>(() => {});
+  const updateRef = useRef<(patch: Partial<T>, now?: boolean) => Promise<unknown>>(() =>
+    Promise.resolve()
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -65,22 +67,30 @@ export function useProfilePreference<T extends object>(
       });
     };
 
-    updateRef.current = (patch) => {
+    // `now` saves without the debounce; the promise settles once the
+    // write (or the pending one) has landed.
+    updateRef.current = (patch, now = false) => {
       edits = { ...edits, ...patch };
       if (!initialized) loadingEdits = { ...loadingEdits, ...patch };
       current = { ...current, ...patch };
       dirty = true;
       setValue(current);
       window.clearTimeout(timer);
-      timer = window.setTimeout(flush, 400);
+      if (now) flush();
+      else timer = window.setTimeout(flush, 400);
+      return Promise.resolve(writes.get(key));
     };
     return () => {
       cancelled = true;
-      updateRef.current = () => {};
+      updateRef.current = () => Promise.resolve();
       flush();
     };
   }, [profileId, defaults, readCommand, writeCommand, field]);
 
-  const update = useCallback((patch: Partial<T>) => updateRef.current(patch), []);
-  return { value, update, loaded };
+  const update = useCallback((patch: Partial<T>) => {
+    void updateRef.current(patch);
+  }, []);
+  /// Saves without the debounce; settles once the value is persisted.
+  const save = useCallback((patch: Partial<T>) => updateRef.current(patch, true), []);
+  return { value, update, save, loaded };
 }

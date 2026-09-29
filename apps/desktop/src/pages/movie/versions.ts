@@ -35,16 +35,21 @@ export function orderVersions(variants: VariantSummary[]): VariantSummary[] {
 /// One line explaining a source's place.
 export function versionReason(v: VariantSummary, preferredLang: string | null): string {
   if (!v.available) return "No longer listed by the provider.";
-  if (v.recentlyFailed) return "Failed recently — tried last.";
   const q = quality(v);
   if (v.picked) {
+    // Picked while failed means every playable source failed recently.
+    if (v.recentlyFailed) return "Every source failed recently — Nova tries this one first.";
     const lang = preferredLang ? (LANGUAGE_NAMES[preferredLang] ?? preferredLang) : null;
-    const audio = v.badges.some((b) => AUDIO_TAG[b] === preferredLang || b === "MULTI");
-    if (lang && audio) return `Nova plays this one: ${q ? `${q} with ` : ""}${lang} audio.`;
+    const withQ = q ? `${q} with ` : "";
+    if (lang && v.badges.some((b) => AUDIO_TAG[b] === preferredLang))
+      return `Nova plays this one: ${withQ}${lang} audio.`;
+    if (lang && v.badges.includes("MULTI"))
+      return `Nova plays this one: ${withQ}several audio tracks, likely including ${lang}.`;
     if (q === "FHD") return "Nova plays this one: full HD, the steadiest picture over IPTV.";
     if (q) return `Nova plays this one: the best ${q} source that plays reliably.`;
     return "Nova plays this one by default.";
   }
+  if (v.recentlyFailed) return "Failed recently — tried last.";
   if (q === "4K") return "4K streams stall more often over IPTV.";
   if (q === "SD") return "Lower picture quality.";
   return "Another source of the same film.";

@@ -128,9 +128,9 @@ export const DecadesShelf = memo(function DecadesShelf({
                   {d.count.toLocaleString()} {d.count === 1 ? "film" : "films"}
                 </span>
                 <span aria-hidden className="mt-auto flex gap-1">
-                  {d.posterUrls.map((p) => (
+                  {d.posterUrls.map((p, i) => (
                     <span
-                      key={p}
+                      key={i}
                       className="h-[39px] w-[26px] overflow-hidden rounded-[3px] bg-white/[0.06]"
                     >
                       <Artwork

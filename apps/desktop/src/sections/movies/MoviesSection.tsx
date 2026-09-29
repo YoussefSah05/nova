@@ -13,6 +13,7 @@ import { BrowseGrid } from "@/features/browse/BrowseGrid";
 import { Rail } from "@/features/browse/Rail";
 import {
   RECENTLY_ADDED_RAIL,
+  movieFacetApplied,
   useBrowseCount,
   useLibraryCollections,
   useMovieDecades,
@@ -74,11 +75,16 @@ export function MoviesSection() {
     [query, facets.genre, facets.decade, facets.collection, sort]
   );
   const narrowed = Boolean(query || facets.genre || facets.decade !== null || facets.collection);
+  // Plain search is one relevance-ranked set from `search_movies`: no sort,
+  // and no list count (it would count a different match).
+  const plainSearch = Boolean(query) && !movieFacetApplied(filters);
+  // The count does not depend on the order; keep sort out of its key.
+  const countFilters = useMemo<BrowseFilters>(() => ({ ...filters, sort: undefined }), [filters]);
   const { data: matching } = useBrowseCount(
     "movies",
     profile.id,
-    narrowed ? activeSourceId : null,
-    filters
+    narrowed && !plainSearch ? activeSourceId : null,
+    countFilters
   );
 
   const chips = useMemo<Facet[]>(() => {
@@ -168,13 +174,15 @@ export function MoviesSection() {
           onChange={onChange}
           onClear={clear}
           trailing={
-            <SimpleSelect
-              value={sort}
-              options={SORTS}
-              onChange={(v) => setSort(v)}
-              ariaLabel="Sort films"
-              className="h-9 min-w-[150px] rounded-[10px] border-white/10 bg-white/[0.04]"
-            />
+            !plainSearch && (
+              <SimpleSelect
+                value={sort}
+                options={SORTS}
+                onChange={(v) => setSort(v)}
+                ariaLabel="Sort films"
+                className="h-9 min-w-[150px] rounded-[10px] border-white/10 bg-white/[0.04]"
+              />
+            )
           }
         />
       </div>
@@ -183,9 +191,11 @@ export function MoviesSection() {
           {narrowed ? (
             <section aria-labelledby="movies-matching" className="flex flex-col gap-[18px]">
               <h2 id="movies-matching" className="font-display text-[28px] font-medium">
-                {matching === undefined
-                  ? "Films"
-                  : `${matching.toLocaleString()} ${matching === 1 ? "film" : "films"}`}
+                {plainSearch
+                  ? `Best matches for “${query}”`
+                  : matching === undefined
+                    ? "Films"
+                    : `${matching.toLocaleString()} ${matching === 1 ? "film" : "films"}`}
               </h2>
               <BrowseGrid
                 tab="movies"

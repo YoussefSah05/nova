@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT d.decade as \"decade!: i64\", d.n as \"count!: i64\",\n                      (SELECT group_concat(p, char(31)) FROM (\n                         SELECT COALESCE(v2.poster_url, v2.logo_url) AS p\n                         FROM stream_variants s2\n                         JOIN vod_items v2 ON v2.id = s2.vod_item_id\n                         WHERE s2.source_id = ?1\n                           AND s2.vod_item_id = (\n                             SELECT MIN(r.vod_item_id) FROM stream_variants r\n                             WHERE r.entity_id = s2.entity_id AND r.source_id = s2.source_id)\n                           AND v2.year BETWEEN d.decade AND d.decade + 9\n                           AND COALESCE(v2.poster_url, v2.logo_url) IS NOT NULL\n                         ORDER BY v2.poster_url IS NULL, v2.id\n                         LIMIT 4)) as \"posters?: String\"\n               FROM (\n                 SELECT v.year / 10 * 10 AS decade, COUNT(*) AS n\n                 FROM stream_variants s\n                 JOIN vod_items v ON v.id = s.vod_item_id\n                 WHERE s.source_id = ?1\n                   AND s.vod_item_id = (\n                     SELECT MIN(r.vod_item_id) FROM stream_variants r\n                     WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)\n                   AND v.year BETWEEN 1888 AND 2100\n                 GROUP BY v.year / 10\n               ) d\n               ORDER BY d.decade DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "decade!: i64",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      },
+      {
+        "name": "posters?: String",
+        "ordinal": 2,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "1770cb9b6a9990a5a216b88de6d50620250b342123aa14e6a7621d22bdfbb82d"
+}

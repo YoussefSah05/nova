@@ -213,7 +213,7 @@ function filterPayload(tab: BrowseTab, filters: BrowseFilters): BrowseFilters {
 }
 
 /// A movie filter beyond search is applied (search then stays on the list).
-function movieFacetApplied(filters: BrowseFilters): boolean {
+export function movieFacetApplied(filters: BrowseFilters): boolean {
   return Boolean(
     filters.category ||
     filters.favoritesOnly ||

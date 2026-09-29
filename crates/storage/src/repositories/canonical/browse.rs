@@ -153,19 +153,12 @@ impl CanonicalRepository<'_> {
         let fav: i64 = filters.favorites_only.into();
         let wl: i64 = filters.watchlist_only.into();
         let sort = sort_code(sort);
+        // Sort and cut the page on cheap columns first (materialized), then
+        // compute the per-film source hints for the page's rows only: in one
+        // query they would run for every matching film before the sort.
         let rows = sqlx::query!(
-            r#"SELECT entity_id as "entity_id!: String", title as "title!: String",
-                      source_title as "source_title!: String", year as "year?: i64",
-                      category as "category?: String", poster_url as "poster_url?: String",
-                      backdrop_url as "backdrop_url?: String", overview as "overview?: String",
-                      is_favorite as "is_favorite!: i64", is_in_watchlist as "is_in_watchlist!: i64",
-                      added_at as "added_at?: i64", dedup_group as "dedup_group?: String",
-                      genres as "genres?: String", genre as "genre?: String",
-                      runtime_min as "runtime_min?: i64", rating as "rating?: f64",
-                      rating_source as "rating_source?: String", quality as "quality?: String",
-                      languages as "languages?: String", versions as "versions!: i64"
-               FROM (
-                 SELECT e.id AS entity_id,
+            r#"WITH page AS MATERIALIZED (
+                 SELECT e.id AS entity_id, s.source_id AS source_id,
                         COALESCE(v.canonical_title, e.title, v.name) AS title,
                         v.name AS source_title, v.year AS year, v.category AS category,
                         COALESCE(v.poster_url, v.logo_url) AS poster_url,
@@ -173,23 +166,14 @@ impl CanonicalRepository<'_> {
                         e.is_favorite AS is_favorite, e.is_in_watchlist AS is_in_watchlist,
                         v.added_at AS added_at, v.dedup_group AS dedup_group,
                         COALESCE(m.genres, v.tmdb_genres) AS genres, v.genre AS genre,
-                        CAST(COALESCE(json_extract(f.facts, '$.runtimeMin'),
-                                      json_extract(v.provider_facts, '$.duration_sec') / 60)
+                        CAST(COALESCE(NULLIF(json_extract(f.facts, '$.runtimeMin'), 0),
+                                      json_extract(v.provider_facts, '$.durationSec') / 60)
                              AS INTEGER) AS runtime_min,
-                        COALESCE(json_extract(f.facts, '$.rating'),
-                                 json_extract(v.provider_facts, '$.rating')) AS rating,
-                        CASE WHEN json_extract(f.facts, '$.rating') IS NOT NULL THEN 'tmdb'
-                             WHEN json_extract(v.provider_facts, '$.rating') IS NOT NULL THEN 'provider'
+                        COALESCE(NULLIF(json_extract(f.facts, '$.rating'), 0),
+                                 NULLIF(json_extract(v.provider_facts, '$.rating'), 0)) AS rating,
+                        CASE WHEN NULLIF(json_extract(f.facts, '$.rating'), 0) IS NOT NULL THEN 'tmdb'
+                             WHEN NULLIF(json_extract(v.provider_facts, '$.rating'), 0) IS NOT NULL THEN 'provider'
                         END AS rating_source,
-                        (SELECT group_concat(q.quality_hints) FROM stream_variants r
-                         JOIN vod_items q ON q.id = r.vod_item_id
-                         WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id) AS quality,
-                        (SELECT group_concat(q.language_hints) FROM stream_variants r
-                         JOIN vod_items q ON q.id = r.vod_item_id
-                         WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id) AS languages,
-                        (SELECT COUNT(*) FROM stream_variants r
-                         WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id
-                           AND r.vod_item_id IS NOT NULL) AS versions,
                         v.id AS row_id
                  FROM stream_variants s
                  JOIN canonical_entities e ON e.id = s.entity_id
@@ -211,14 +195,40 @@ impl CanonicalRepository<'_> {
                    AND (?8 IS NULL OR v.year >= ?8)
                    AND (?9 IS NULL OR v.year <= ?9)
                    AND (?12 IS NULL OR json_extract(f.facts, '$.collection.id') = ?12)
+                 ORDER BY CASE WHEN ?1 = 1 THEN v.added_at END DESC,
+                          CASE WHEN ?1 = 1 THEN v.id END DESC,
+                          CASE WHEN ?1 = 2 THEN COALESCE(v.canonical_title, e.title, v.name) END COLLATE NOCASE ASC,
+                          CASE WHEN ?1 = 3 THEN v.year END DESC,
+                          CASE WHEN ?1 = 4 THEN COALESCE(NULLIF(json_extract(f.facts, '$.rating'), 0),
+                                                         NULLIF(json_extract(v.provider_facts, '$.rating'), 0)) END DESC,
+                          v.id ASC
+                 LIMIT ?10 OFFSET ?11
                )
-               ORDER BY CASE WHEN ?1 = 1 THEN added_at END DESC,
-                        CASE WHEN ?1 = 1 THEN row_id END DESC,
-                        CASE WHEN ?1 = 2 THEN title END COLLATE NOCASE ASC,
-                        CASE WHEN ?1 = 3 THEN year END DESC,
-                        CASE WHEN ?1 = 4 THEN rating END DESC,
-                        row_id ASC
-               LIMIT ?10 OFFSET ?11"#,
+               SELECT p.entity_id as "entity_id!: String", p.title as "title!: String",
+                      p.source_title as "source_title!: String", p.year as "year?: i64",
+                      p.category as "category?: String", p.poster_url as "poster_url?: String",
+                      p.backdrop_url as "backdrop_url?: String", p.overview as "overview?: String",
+                      p.is_favorite as "is_favorite!: i64", p.is_in_watchlist as "is_in_watchlist!: i64",
+                      p.added_at as "added_at?: i64", p.dedup_group as "dedup_group?: String",
+                      p.genres as "genres?: String", p.genre as "genre?: String",
+                      p.runtime_min as "runtime_min?: i64", p.rating as "rating?: f64",
+                      p.rating_source as "rating_source?: String",
+                      (SELECT group_concat(q.quality_hints) FROM stream_variants r
+                       JOIN vod_items q ON q.id = r.vod_item_id
+                       WHERE r.entity_id = p.entity_id AND r.source_id = p.source_id) as "quality?: String",
+                      (SELECT group_concat(q.language_hints) FROM stream_variants r
+                       JOIN vod_items q ON q.id = r.vod_item_id
+                       WHERE r.entity_id = p.entity_id AND r.source_id = p.source_id) as "languages?: String",
+                      (SELECT COUNT(*) FROM stream_variants r
+                       WHERE r.entity_id = p.entity_id AND r.source_id = p.source_id
+                         AND r.vod_item_id IS NOT NULL) as "versions!: i64"
+               FROM page p
+               ORDER BY CASE WHEN ?1 = 1 THEN p.added_at END DESC,
+                        CASE WHEN ?1 = 1 THEN p.row_id END DESC,
+                        CASE WHEN ?1 = 2 THEN p.title END COLLATE NOCASE ASC,
+                        CASE WHEN ?1 = 3 THEN p.year END DESC,
+                        CASE WHEN ?1 = 4 THEN p.rating END DESC,
+                        p.row_id ASC"#,
             sort,
             source_id,
             category,
@@ -260,13 +270,13 @@ impl CanonicalRepository<'_> {
                       v.added_at as "added_at?: i64", v.dedup_group as "dedup_group?: String",
                       COALESCE(m.genres, v.tmdb_genres) as "genres?: String",
                       v.genre as "genre?: String",
-                      CAST(COALESCE(json_extract(f.facts, '$.runtimeMin'),
-                                    json_extract(v.provider_facts, '$.duration_sec') / 60)
+                      CAST(COALESCE(NULLIF(json_extract(f.facts, '$.runtimeMin'), 0),
+                                    json_extract(v.provider_facts, '$.durationSec') / 60)
                            AS INTEGER) as "runtime_min?: i64",
-                      COALESCE(json_extract(f.facts, '$.rating'),
-                               json_extract(v.provider_facts, '$.rating')) as "rating?: f64",
-                      CASE WHEN json_extract(f.facts, '$.rating') IS NOT NULL THEN 'tmdb'
-                           WHEN json_extract(v.provider_facts, '$.rating') IS NOT NULL THEN 'provider'
+                      COALESCE(NULLIF(json_extract(f.facts, '$.rating'), 0),
+                               NULLIF(json_extract(v.provider_facts, '$.rating'), 0)) as "rating?: f64",
+                      CASE WHEN NULLIF(json_extract(f.facts, '$.rating'), 0) IS NOT NULL THEN 'tmdb'
+                           WHEN NULLIF(json_extract(v.provider_facts, '$.rating'), 0) IS NOT NULL THEN 'provider'
                       END as "rating_source?: String",
                       (SELECT group_concat(q.quality_hints) FROM stream_variants r
                        JOIN vod_items q ON q.id = r.vod_item_id
@@ -391,7 +401,7 @@ impl CanonicalRepository<'_> {
                            AND s2.vod_item_id = (
                              SELECT MIN(r.vod_item_id) FROM stream_variants r
                              WHERE r.entity_id = s2.entity_id AND r.source_id = s2.source_id)
-                           AND v2.year / 10 * 10 = d.decade
+                           AND v2.year BETWEEN d.decade AND d.decade + 9
                            AND COALESCE(v2.poster_url, v2.logo_url) IS NOT NULL
                          ORDER BY v2.poster_url IS NULL, v2.id
                          LIMIT 4)) as "posters?: String"
