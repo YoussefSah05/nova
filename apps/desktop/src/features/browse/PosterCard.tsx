@@ -21,6 +21,7 @@ import { PosterFallback } from "./PosterFallback";
 import type { BrowseItem } from "./queries";
 import { Artwork } from "@/components/Artwork";
 import { ChannelTile } from "./ChannelTile";
+import { usePrefetchTitle } from "./prefetch";
 import { useChannelGuide } from "./guide";
 import { GuideLine } from "./GuideViews";
 
@@ -43,13 +44,20 @@ export const PosterCard = memo(function PosterCard({
   });
   const cardRef = useRef<HTMLDivElement>(null);
   const preview = useHoverPreview();
+  const prefetch = usePrefetchTitle(item);
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
           ref={cardRef}
-          onMouseEnter={preview.onEnter}
-          onMouseLeave={preview.onLeave}
+          onMouseEnter={(e) => {
+            preview.onEnter(e);
+            prefetch.onEnter();
+          }}
+          onMouseLeave={() => {
+            preview.onLeave();
+            prefetch.onLeave();
+          }}
           className={cn(
             "group relative flex flex-shrink-0 snap-start flex-col gap-2 [contain:layout_paint]",
             live ? "w-44" : "w-36"
@@ -61,7 +69,10 @@ export const PosterCard = memo(function PosterCard({
                 item={item}
                 anchor={cardRef.current.getBoundingClientRect()}
                 live={live}
-                onActivate={onActivate}
+                onActivate={(i) => {
+                  preview.close();
+                  onActivate(i);
+                }}
                 onToggleFavorite={onToggleFavorite}
                 onToggleWatchlist={onToggleWatchlist}
                 onClose={preview.close}
@@ -70,7 +81,10 @@ export const PosterCard = memo(function PosterCard({
           </AnimatePresence>
           <button
             type="button"
-            onClick={() => onActivate(item)}
+            onClick={() => {
+              preview.close();
+              onActivate(item);
+            }}
             className={cn(
               "relative w-full overflow-hidden ring-ring transition-[transform,box-shadow,border-color] duration-200",
               "hover:-translate-y-1 hover:shadow-2xl hover:shadow-black/50 focus:outline-none focus-visible:ring-2",

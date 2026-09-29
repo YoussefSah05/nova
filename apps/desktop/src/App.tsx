@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Profile } from "@/types";
 import { ProfilePicker } from "@/features/profile/ProfilePicker";
-import { Home } from "@/routes/Home";
+import { AppShell } from "@/app/AppShell";
 import { GuideProvider } from "@/features/browse/GuideViews";
 
 type View = { screen: "picker" } | { screen: "home"; profile: Profile };
@@ -12,7 +12,7 @@ export default function App() {
   if (view.screen === "home") {
     return (
       <GuideProvider profileId={view.profile.id}>
-        <Home profile={view.profile} onSwitchProfile={() => setView({ screen: "picker" })} />
+        <AppShell profile={view.profile} onSwitchProfile={() => setView({ screen: "picker" })} />
       </GuideProvider>
     );
   }

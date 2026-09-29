@@ -6,11 +6,9 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, ChevronDown, Headphones, Languages, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { DragRegion } from "@/components/DragRegion";
 import {
   DropdownMenu,
   DropdownMenuCheckItem,
@@ -23,7 +21,6 @@ import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
 import { fetchChannelsInGroup, movieToItem, type BrowseItem } from "./queries";
 import { ItemRail } from "./ItemRail";
-import type { CanonicalMediaDetail } from "@/types";
 import { titleArtSubject, useTitleArt } from "./titleArt";
 import { ChannelTile } from "./ChannelTile";
 import { useChannelGuide } from "./guide";
@@ -31,7 +28,7 @@ import { GuideLine } from "./GuideViews";
 import { CastStrip } from "./detail/CastStrip";
 import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
-import { useRelatedTitles, useTitleFacts } from "./detail/data";
+import { canonicalMovieQuery, useRelatedTitles, useTitleFacts } from "./detail/data";
 import { metaLine } from "./detail/meta";
 
 /// Preferred audio language choices. `null` = keep the stream's original track.
@@ -89,8 +86,7 @@ function LiveBundleDetail({
   }, [profileId, sourceId, item.groupKey]);
 
   return (
-    <div className="min-h-screen bg-neutral-950 px-8 pb-6 pt-10 text-white">
-      <DragRegion />
+    <div className="min-h-screen bg-neutral-950 px-[88px] pb-6 pt-[96px] text-white">
       <Button
         variant="ghost"
         size="sm"
@@ -171,9 +167,7 @@ export function ContentDetail({
   // Canonical movie detail (entity-owned resume state); the card's summary
   // renders immediately and the detail refines it when it arrives.
   const { data: detail } = useQuery({
-    queryKey: ["canonical-movie", profileId, item.entityId],
-    queryFn: () =>
-      invoke<CanonicalMediaDetail>("get_movie", { profileId, entityId: item.entityId }),
+    ...canonicalMovieQuery(profileId, item.entityId),
     enabled: item.kind === "movie" && !!item.entityId,
     staleTime: 0,
   });

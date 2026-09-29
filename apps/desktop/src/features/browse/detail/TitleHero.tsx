@@ -7,7 +7,6 @@ import type { ReactNode } from "react";
 import { ArrowLeft } from "lucide-react";
 
 import { Artwork } from "@/components/Artwork";
-import { DragRegion } from "@/components/DragRegion";
 import { Button } from "@/components/ui/button";
 import { AmbientGlow, useAmbientColor } from "@/lib/ambient";
 import { useArtworkSrc } from "@/lib/artwork";
@@ -47,7 +46,6 @@ export function TitleHero({
 
   return (
     <div className="relative min-h-screen bg-neutral-950 text-white">
-      <DragRegion />
       <div className="absolute inset-x-0 top-0 h-[60vh] overflow-hidden">
         {backdrop ? (
           <motion.img
@@ -69,7 +67,7 @@ export function TitleHero({
       <AmbientGlow color={ambient} className="h-[70vh] mix-blend-screen" />
 
       <motion.div
-        className="relative z-10 flex flex-col gap-6 px-8 pb-12 pt-10"
+        className="relative z-10 flex flex-col gap-6 px-[88px] pb-12 pt-[96px]"
         initial={reduce ? false : { y: 16, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: 0.4, ease: EASE_ENTER, delay: 0.08 }}

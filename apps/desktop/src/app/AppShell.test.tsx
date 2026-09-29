@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CanonicalMediaSummary, Channel, ChannelGroup, Profile, Source } from "@/types";
-import { Home } from "./Home";
+import { AppShell } from "./AppShell";
 
 // The browse grid is windowed (@tanstack/react-virtual), rails lazy-mount via
 // IntersectionObserver, and the grid sizes columns via ResizeObserver — none of
@@ -131,12 +131,29 @@ function groupFrom(c: Channel): ChannelGroup {
 
 function setupInvoke(
   channelsFor: (args: InvokeArgs) => Channel[],
-  movies: CanonicalMediaSummary[] = []
+  movies: CanonicalMediaSummary[] = [],
+  sourceList: Source[] = sources
 ) {
   mocks.invoke.mockImplementation((command: string, args?: InvokeArgs): Promise<unknown> => {
     switch (command) {
       case "list_sources":
-        return Promise.resolve(sources);
+        return Promise.resolve(sourceList);
+      case "get_trending_in_library":
+        return Promise.resolve({ movies: [], series: [] });
+      case "get_related_titles":
+        return Promise.resolve({ collectionName: null, collection: [], movies: [], series: [] });
+      case "get_title_art":
+        return Promise.resolve({
+          logoUrl: null,
+          logoLanguage: null,
+          logoWidth: null,
+          logoHeight: null,
+          backdropUrl: null,
+        });
+      case "get_title_facts":
+        return Promise.resolve(null);
+      case "epg_channels_now_and_next":
+        return Promise.resolve([]);
       case "count_channels":
         return Promise.resolve(250);
       case "count_movies":
@@ -184,31 +201,55 @@ function setupInvoke(
   });
 }
 
-function renderHome() {
+function renderShell() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={client}>
-      <Home profile={profile} onSwitchProfile={vi.fn()} />
+      <AppShell profile={profile} onSwitchProfile={vi.fn()} />
     </QueryClientProvider>
   );
 }
 
-describe("Home", () => {
+const reviewMovie: CanonicalMediaSummary = {
+  entityId: "mov-7",
+  kind: "movie",
+  title: "Review Movie",
+  sourceTitle: "Review Movie",
+  year: 2024,
+  category: "Movies",
+  posterUrl: null,
+  backdropUrl: null,
+  overview: null,
+  isFavorite: false,
+  isInWatchlist: false,
+  addedAt: null,
+  dedupGroup: null,
+};
+
+/// Open Movies, then the movie's page (the first card on the visible screen).
+async function openReviewMovie() {
+  await userEvent.click(await screen.findByRole("button", { name: "Movies" }));
+  const cards = await screen.findAllByRole("button", { name: "Review Movie" });
+  await userEvent.click(cards[0]);
+  return screen.findByRole("button", { name: "Add Review Movie to favourites" });
+}
+
+describe("AppShell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listen.mockResolvedValue(() => {});
   });
 
-  it("shows per-tab counts for the selected source", async () => {
+  it("shows each section's count for the selected playlist", async () => {
     setupInvoke(() => [channel(1)]);
 
-    renderHome();
+    renderShell();
 
-    // Content type lives in the sidebar rail now (buttons, not tabs); counts
-    // render as compact numbers inside each item.
-    expect(await screen.findByRole("button", { name: "Live" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Movies" })).toBeInTheDocument();
-    expect(await screen.findByText("250")).toBeInTheDocument();
+    // Sections live in the top bar; each section's header carries its count.
+    await userEvent.click(await screen.findByRole("button", { name: "Live" }));
+    expect(await screen.findByText("250 channels")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Movies" }));
+    expect(await screen.findByText("12 films")).toBeInTheDocument();
     expect(screen.getByLabelText("Playlist")).toBeInTheDocument();
   });
 
@@ -219,8 +260,8 @@ describe("Home", () => {
       return filters?.query ? [channel(1)] : [];
     });
 
-    renderHome();
-    await screen.findByRole("button", { name: "Live" });
+    renderShell();
+    await userEvent.click(await screen.findByRole("button", { name: "Live" }));
 
     // Type a term distinct from the result title so the active-filter chip
     // (which echoes the query) doesn't collide with the card's title text.
@@ -234,34 +275,10 @@ describe("Home", () => {
       )
     );
   });
-  it("updates favorite and watchlist controls in an open movie detail", async () => {
-    setupInvoke(
-      () => [],
-      [
-        {
-          entityId: "mov-7",
-          kind: "movie",
-          title: "Review Movie",
-          sourceTitle: "Review Movie",
-          year: 2024,
-          category: "Movies",
-          posterUrl: null,
-          backdropUrl: null,
-          overview: null,
-          isFavorite: false,
-          isInWatchlist: false,
-          addedAt: null,
-          dedupGroup: null,
-        },
-      ]
-    );
-    renderHome();
-    await userEvent.click(await screen.findByRole("button", { name: "Movies" }));
-    const cards = await screen.findAllByRole("button", { name: "Review Movie" });
-    await userEvent.click(cards[0]);
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Add Review Movie to favourites" })
-    );
+  it("updates favorite and watchlist controls in an open movie page", async () => {
+    setupInvoke(() => [], [reviewMovie]);
+    renderShell();
+    await userEvent.click(await openReviewMovie());
     expect(
       await screen.findByRole("button", { name: "Remove Review Movie from favourites" })
     ).toHaveAttribute("aria-pressed", "true");
@@ -284,5 +301,43 @@ describe("Home", () => {
       profileId: profile.id,
       entityId: "mov-7",
     });
+  });
+
+  it("invites a first playlist when there is none", async () => {
+    setupInvoke(() => [], [], []);
+    renderShell();
+    expect(
+      await screen.findByRole("heading", { name: "Your library starts with a playlist" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add a playlist" })).toBeInTheDocument();
+  });
+
+  it("keeps each section's pages while switching, and goes back with Esc", async () => {
+    setupInvoke(() => [], [reviewMovie]);
+    renderShell();
+    await openReviewMovie();
+
+    // Home and back: the movie page is still open in Movies.
+    await userEvent.click(screen.getByRole("button", { name: "Home" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Add Review Movie to favourites" })).toBeNull()
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Movies" }));
+    expect(
+      await screen.findByRole("button", { name: "Add Review Movie to favourites" })
+    ).toBeInTheDocument();
+
+    // Esc goes back to the section's root.
+    await userEvent.keyboard("{Escape}");
+    expect(await screen.findByRole("heading", { name: "Cinémathèque" })).toBeInTheDocument();
+    // The page is gone: no Back, neither in the top bar nor on a page.
+    expect(screen.queryAllByRole("button", { name: "Back" })).toHaveLength(0);
+
+    // Re-selecting the current section also returns to its root.
+    await openReviewMovie();
+    expect(screen.getAllByRole("button", { name: "Back" }).length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByRole("button", { name: "Movies" }));
+    expect(await screen.findByRole("heading", { name: "Cinémathèque" })).toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: "Back" })).toHaveLength(0);
   });
 });

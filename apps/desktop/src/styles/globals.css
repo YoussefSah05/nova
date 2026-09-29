@@ -306,3 +306,44 @@ html.nova-native-player-active .nova-native-player-shell * {
   content-visibility: auto;
   contain-intrinsic-size: auto 280px;
 }
+
+/* ── Shell screens (app/Screen.tsx) ─────────────────────────────────────────
+   Each screen scrolls on its own. Scroll chaining stops at the screen (no
+   rubber-banding the whole window), and hidden screens keep their layout and
+   scroll offset but skip painting and hit-testing. */
+.nova-screen {
+  overscroll-behavior: contain;
+  scroll-behavior: auto;
+}
+
+.nova-screen-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@supports (content-visibility: hidden) {
+  .nova-screen-hidden {
+    content-visibility: hidden;
+  }
+}
+
+/* A Home module below the fold: laid out and painted only when near the
+   viewport; the intrinsic size keeps the scrollbar honest meanwhile. */
+.nova-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
+}
+
+/* Screen changes cross-fade where WebKit has View Transitions (18+). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+  animation-timing-function: var(--ease-enter);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}

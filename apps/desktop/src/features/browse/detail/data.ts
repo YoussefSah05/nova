@@ -6,6 +6,7 @@ import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  CanonicalMediaDetail,
   CanonicalMediaSummary,
   ContinueWatchingItem,
   EpisodeView,
@@ -18,14 +19,27 @@ import type { TitleArtSubject } from "../titleArt";
 const subjectKey = (s: TitleArtSubject) =>
   s.kind === "movie" ? `movie:${s.entityId}` : `series:${s.seriesId}`;
 
-export function useTitleFacts(profileId: string, subject: TitleArtSubject | null) {
-  return useQuery({
-    queryKey: ["title-facts", profileId, subject ? subjectKey(subject) : null],
+/// The one definition of a title's facts query (hooks and prefetch share it).
+export function titleFactsQuery(profileId: string, subject: TitleArtSubject | null) {
+  return {
+    queryKey: ["title-facts", profileId, subject ? subjectKey(subject) : null] as const,
     queryFn: () => invoke<TitleFactsView>("get_title_facts", { profileId, subject }),
-    enabled: subject !== null,
     staleTime: 30 * 60 * 1000,
     retry: false,
-  });
+  };
+}
+
+export function useTitleFacts(profileId: string, subject: TitleArtSubject | null) {
+  return useQuery({ ...titleFactsQuery(profileId, subject), enabled: subject !== null });
+}
+
+/// A canonical movie's detail (variants + entity resume). The page refetches
+/// on open (resume moves while watching); a prefetch still paints it at once.
+export function canonicalMovieQuery(profileId: string, entityId: string | null | undefined) {
+  return {
+    queryKey: ["canonical-movie", profileId, entityId ?? null] as const,
+    queryFn: () => invoke<CanonicalMediaDetail>("get_movie", { profileId, entityId }),
+  };
 }
 
 /// Series are addressed by their canonical entity: Rust resolves where the

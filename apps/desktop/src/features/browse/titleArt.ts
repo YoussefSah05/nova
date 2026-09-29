@@ -32,16 +32,20 @@ export function useTitleArt(
   return useTitleArtFor(profileId, titleArtSubject(item));
 }
 
+/// The one definition of a title's art query (hooks and prefetch share it).
+export function titleArtQuery(profileId: string, subject: TitleArtSubject | null) {
+  return {
+    queryKey: ["title-art", profileId, subject ? subjectKey(subject) : null] as const,
+    queryFn: () => invoke<TitleArt>("get_title_art", { profileId, subject }),
+    staleTime: 60 * 60 * 1000,
+    retry: false,
+  };
+}
+
 export function useTitleArtFor(
   profileId: string,
   subject: TitleArtSubject | null
 ): TitleArt | undefined {
-  const { data } = useQuery({
-    queryKey: ["title-art", profileId, subject ? subjectKey(subject) : null],
-    queryFn: () => invoke<TitleArt>("get_title_art", { profileId, subject }),
-    enabled: subject !== null,
-    staleTime: 60 * 60 * 1000,
-    retry: false,
-  });
+  const { data } = useQuery({ ...titleArtQuery(profileId, subject), enabled: subject !== null });
   return data ?? undefined;
 }

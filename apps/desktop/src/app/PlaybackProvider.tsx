@@ -1,0 +1,77 @@
+//! The player overlay and the ways to start it (`playback.ts`). Closing the
+//! player refreshes what watching changes: Continue Watching and resume points.
+
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useQueryClient } from "@tanstack/react-query";
+
+import type { MoviePlaybackTarget } from "@/types";
+import { PlayerModal, type PlayMedia } from "@/features/player/PlayerModal";
+import { browseKeys, type BrowseItem } from "@/features/browse/queries";
+import { invalidateDetailProgress } from "@/features/browse/detail/data";
+import { errorMessage, useSession } from "./session";
+import { PlaybackContext, PlayingContext, type Playback } from "./playback";
+
+export function PlaybackProvider({ children }: { children: ReactNode }) {
+  const qc = useQueryClient();
+  const { profile, activeSourceId, setError } = useSession();
+  const [media, setMedia] = useState<PlayMedia | null>(null);
+
+  const playItem = useCallback(
+    async (item: BrowseItem) => {
+      if (item.kind === "movie" && item.entityId) {
+        try {
+          const target = await invoke<MoviePlaybackTarget>("resolve_movie_playback", {
+            profileId: profile.id,
+            entityId: item.entityId,
+            variantId: null,
+          });
+          setMedia({
+            kind: target.mediaKind,
+            id: target.mediaId,
+            title: item.title,
+            subtitle: item.subtitle,
+            posterUrl: item.posterUrl,
+          });
+        } catch (e: unknown) {
+          setError(errorMessage(e));
+        }
+        return;
+      }
+      setMedia({
+        kind: item.kind === "live" ? "live" : "vod",
+        id: item.id,
+        title: item.title,
+        subtitle: item.subtitle,
+        posterUrl: item.posterUrl,
+        channelGroup: item.groupKey ?? item.channel?.channelGroup ?? null,
+        category: item.channel?.category ?? null,
+        region: item.channel?.region ?? null,
+      });
+    },
+    [profile.id, setError]
+  );
+
+  const close = useCallback(() => {
+    setMedia(null);
+    void qc.invalidateQueries({ queryKey: browseKeys.continueWatching(profile.id) });
+    invalidateDetailProgress(qc, profile.id);
+  }, [qc, profile.id]);
+
+  const value = useMemo<Playback>(() => ({ playItem, playMedia: setMedia }), [playItem]);
+
+  return (
+    <PlaybackContext.Provider value={value}>
+      <PlayingContext.Provider value={media !== null}>{children}</PlayingContext.Provider>
+      {media && (
+        <PlayerModal
+          profileId={profile.id}
+          media={media}
+          onClose={close}
+          sourceId={activeSourceId}
+          onPlayMedia={setMedia}
+        />
+      )}
+    </PlaybackContext.Provider>
+  );
+}

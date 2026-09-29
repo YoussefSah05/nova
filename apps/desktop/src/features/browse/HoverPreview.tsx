@@ -177,8 +177,10 @@ function clamp(anchor: DOMRect, width: number): { top: number; left: number } {
 }
 
 /// Hover-intent gate shared by cards. Returns handlers + the open state. Opens
-/// after `delay`ms of dwell (never within 180ms of a scroll); closing is left to
-/// the preview's own `onMouseLeave` so moving onto it doesn't dismiss it.
+/// after `delay`ms of dwell (never within 180ms of a scroll, and never for a
+/// card on a screen that has since been hidden: the preview is portalled, so
+/// it would show over the page opened meanwhile); closing is left to the
+/// preview's own `onMouseLeave` so moving onto it doesn't dismiss it.
 export function useHoverPreview(delay = 450) {
   const [open, setOpen] = useState(false);
   const timer = useRef<number | null>(null);
@@ -194,10 +196,12 @@ export function useHoverPreview(delay = 450) {
 
   return {
     open,
-    onEnter: () => {
+    onEnter: (event: { currentTarget: Element }) => {
       cancel();
+      const card = event.currentTarget;
       timer.current = window.setTimeout(() => {
-        if (performance.now() - lastScrollAt > 180) setOpen(true);
+        timer.current = null;
+        if (performance.now() - lastScrollAt > 180 && !card.closest("[inert]")) setOpen(true);
       }, delay);
     },
     onLeave: () => {
