@@ -586,13 +586,60 @@ to React.
   pass. **Not verified on device:** playback of live HLS, VOD files and AirPlay through the new
   routes under the CSP (`just dev`, then a production build).
 
+### Frontend redesign, UI-1: shell and Home (M22 / §49–51) — 2026-09-29
+
+Branch `feat/ui-shell-home`. Plan: floating glass top bar, sections with their own design and one
+identity, a clickable prototype approved first (Home "Tonight", Cinémathèque, a movie page, Shows,
+the Live guide, the ⌘K palette). UI-1 builds the shell and Home; Movies, Series, Live, Search,
+Library and Settings get their own designs in UI-2..UI-7.
+
+- **Shell** (`src/app/`): `routes/Home.tsx` (857 lines) split into session (stable) + session status,
+  playback (stable actions + a separate "playing" flag), overlays, library actions and catalog
+  events. A floating top bar (sections, ⌘K pill, playlist switcher, profile menu; a deep drag
+  region; transparent over art, glass once scrolled via opacity only). One navigation stack per
+  section (`navigation/nav.ts`, pure reducer): pages push inside the shell instead of replacing
+  it; Esc/⌘[ back, ⌘1–5 sections, re-selecting a section returns to its root; switching playlist
+  returns every section to its root. View Transitions cross-fade where WebKit has them.
+- **Keep-alive screens** (`app/Screen.tsx`): every visited screen stays mounted in its own scroll
+  container, hidden (visibility + `content-visibility: hidden` + `inert`), so switching and back are
+  instant with the same scroll, images and state. Hidden screens' queries unsubscribe (TanStack
+  `subscribed`), so invalidations never refetch or re-render them until shown; focus follows the
+  shown screen; hover previews close with their screen.
+- **Home "Tonight"** (`src/sections/home/`, no backend change): resume hero (TMDB text-free backdrop
+  and logo, progress, "Also in progress"), or a spotlight on a new film; On air now (recent and
+  favourite channels with programme and time left); Up next episodes; New in your library (a
+  feature and a list); Trending this week that you own (ranked); Because you watched X (TMDB
+  recommendations in the library, with a why chip). Every section has the add-a-playlist state.
+- **Performance / cache:** only the top bar blurs while scrolling; off-screen Home modules skip
+  layout and paint (`content-visibility: auto`); fixed image boxes, lazy decoding, hero fade-in;
+  memoized screen bodies and stable contexts so navigation never re-renders hidden screens; the
+  cache is warmed at start and on idle, and resting on a card prefetches its page (shared query
+  definitions: `titleArtQuery`, `titleFactsQuery`, `canonicalMovieQuery`).
+- **Tests:** shell (section counts, search, favourites on the page, no-playlist state, stacks kept
+  across switches, Esc back, re-select to root, a later-visited section never remounts another
+  screen — scroll kept, a failed favourite rolled back with the reason); nav reducer (stacks,
+  re-select, depth bound, patch, reset); Home feed; hover prefetch fills exactly what pages read.
+- **Independent review:** no Critical. **High, confirmed and fixed:** screens of a section were
+  remounted (scroll and state lost) when an earlier section was first visited (unkeyed nested
+  lists). **Medium, fixed:** pages and filters survived a playlist switch; enrichment refetched every
+  kept screen; scroll saved after hiding; most of the bar didn't drag the window; the grid assumed
+  the old padding; session status re-rendered every screen. **Low, fixed:** previews over the new
+  section; focus stranded on hidden screens; discovery lists didn't flip favourites; an episode
+  listed twice on Home; missing empty states; weights/strokes/second blur. Low, recorded: no
+  mouse back-button qualification; a red LIVE dot kept as a broadcast status colour. Mutation
+  check: reverting the flat screen list fails its test.
+- **Validation:** `just lint`, `just typecheck`, `just test` (596 Rust, 0 failed, 5 opt-in ignored; 86
+  frontend), `cargo fmt --check`, `git diff --check`, production build pass. **Not verified on
+  device** (`just dev`): scroll smoothness, the glass bar, View Transitions, the WebKit behaviour of
+  hidden screens (scroll kept under `content-visibility: hidden`).
+
 ### Next dependency
 
-**Migration-chain qualification (M26):** `real_profile_upgrade` has never run against a copy of a real
-profile. It needs a copy of the user's profile database (`NOVA_UPGRADE_DB=<path>`; the test migrates
-only a backup-API copy it makes itself). Without one, **scale qualification (M27)** (100k/250k app-level measurements) is next.
-Confirm playback through the new proxy routes on device first. **Later:** an EPG/live-guide repass
-after the frontend pass (requested 2026-09-29).
+**UI-2: Movies "Cinémathèque" + the movie page.** Needs the Movies DTO additions: genres, runtime,
+rating and quality/language badges on summaries; genre/decade filters and sorts; library
+collections; original title, release date, votes and keywords on the detail; variant quality,
+languages and why it was chosen. Then UI-3 Series, UI-4 Live + guide (the EPG repass), UI-5
+Search, UI-6 Library history, UI-7 Settings/Models. M26 still needs a real profile copy.
 
 ---
 
