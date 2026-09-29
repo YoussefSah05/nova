@@ -589,8 +589,8 @@ to React.
 ### Next dependency
 
 **Migration-chain qualification (M26):** `real_profile_upgrade` has never run against a copy of a real
-profile. It needs a copy of the user's profile database (`NOVA_REAL_PROFILE_DB=<copy>`), never the
-original. Without one, **scale qualification (M27)** (100k/250k app-level measurements) is next.
+profile. It needs a copy of the user's profile database (`NOVA_UPGRADE_DB=<path>`; the test migrates
+only a backup-API copy it makes itself). Without one, **scale qualification (M27)** (100k/250k app-level measurements) is next.
 Confirm playback through the new proxy routes on device first. **Later:** an EPG/live-guide repass
 after the frontend pass (requested 2026-09-29).
 
