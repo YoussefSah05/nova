@@ -49,7 +49,7 @@ function useDebounced<T>(value: T, ms: number): T {
 }
 
 export function SearchPage({ initialQuery }: { initialQuery: string }) {
-  const { profile, activeSourceId } = useSession();
+  const { profile, activeSourceId, sourcesLoaded } = useSession();
   const shell = useShell();
   const [input, setInput] = useState(initialQuery);
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
@@ -83,14 +83,9 @@ export function SearchPage({ initialQuery }: { initialQuery: string }) {
     momentsApply(plan) ? moments : null,
   ].filter((g) => g !== null);
   const settled = groups.every((g) => !g.isFetching);
+  const failed = groups.filter((g) => g.isError);
   const nothing =
-    active &&
-    settled &&
-    (movies.data?.length ?? 0) +
-      (series.data?.length ?? 0) +
-      (channels.data?.length ?? 0) +
-      (moments.data?.length ?? 0) ===
-      0;
+    active && settled && failed.length === 0 && groups.every((group) => !group.data?.length);
 
   return (
     <div className="flex flex-col gap-8 px-[88px] pb-24 pt-[108px]">
@@ -125,7 +120,40 @@ export function SearchPage({ initialQuery }: { initialQuery: string }) {
         )}
       </div>
 
-      {!active ? (
+      {active && failed.length > 0 && (
+        <div role="alert" className="flex items-center gap-4 text-sm text-white/60">
+          <p>Some search results couldn’t be loaded.</p>
+          <button
+            type="button"
+            onClick={() => failed.forEach((group) => void group.refetch())}
+            className="rounded-lg px-3 py-2 text-white/85 transition-colors hover:bg-white/[0.08] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Retry search
+          </button>
+        </div>
+      )}
+
+      {activeSourceId === null ? (
+        sourcesLoaded ? (
+          <div className="flex flex-col items-start gap-3 text-white/60">
+            <p>Add a playlist to search its films, shows and channels.</p>
+            <button
+              type="button"
+              onClick={shell.openAddSource}
+              className="rounded-lg bg-white/[0.08] px-4 py-2 text-sm text-white transition-colors hover:bg-white/[0.12] focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Add a playlist
+            </button>
+          </div>
+        ) : (
+          <div className="nova-shimmer h-24 rounded-xl bg-white/[0.03]" />
+        )
+      ) : plan.yearFrom !== null && !shows(plan, "movies") ? (
+        <p className="text-base text-white/60">
+          Year and decade filters currently apply to films. Remove the date chip to search shows or
+          channels.
+        </p>
+      ) : !active ? (
         <p className="text-base text-white/55">
           Try “90s crime films”, “sci-fi shows”, a channel, or words someone said.
         </p>
@@ -160,7 +188,7 @@ export function SearchPage({ initialQuery }: { initialQuery: string }) {
               layout="channel"
             />
           )}
-          {momentsApply(plan) && (
+          {momentsApply(plan) && (!moments.isError || !!moments.data) && (
             <Moments
               hits={moments.data}
               loading={moments.isFetching && !moments.data}

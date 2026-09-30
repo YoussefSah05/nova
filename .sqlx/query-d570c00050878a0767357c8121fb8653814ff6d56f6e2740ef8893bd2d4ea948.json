@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.id as \"id!: i64\", t.media_kind as \"kind!: String\",\n                      t.content_key as \"key!: String\"\n               FROM transcripts t\n               WHERE t.content_key <> '' AND t.media_kind IN ('vod', 'episode')\n                 AND NOT EXISTS (SELECT 1 FROM vod_items v\n                                 WHERE t.media_kind = 'vod' AND v.id = t.media_id)\n                 AND NOT EXISTS (SELECT 1 FROM series_episodes e\n                                 WHERE t.media_kind = 'episode' AND e.id = t.media_id)",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "kind!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "key!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "d570c00050878a0767357c8121fb8653814ff6d56f6e2740ef8893bd2d4ea948"
+}

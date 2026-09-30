@@ -423,6 +423,7 @@ export function PlayerModal({
             mediaKind: media.kind,
             mediaId: media.id,
             title: media.title,
+            startSec: media.startSec,
           },
           () => cancelled
         );
@@ -441,7 +442,7 @@ export function PlayerModal({
     return () => {
       cancelled = true;
     };
-  }, [profileId, media.kind, media.id, media.title, reopenNonce]);
+  }, [profileId, media.kind, media.id, media.title, media.startSec, reopenNonce]);
 
   // Tear the libmpv session down only when the player actually closes — not on
   // every content switch (those reuse the session). Uses the ref so the latest
@@ -890,6 +891,12 @@ export function PlayerModal({
     const video = videoRef.current;
     if (!video) return;
 
+    // A dialogue moment replaces resume, including a timestamp of zero.
+    if (media.startSec != null && Number.isFinite(media.startSec) && media.startSec >= 0) {
+      video.currentTime = Math.max(0, media.startSec - 1);
+      return;
+    }
+
     let cancelled = false;
     void (async () => {
       try {
@@ -909,7 +916,7 @@ export function PlayerModal({
     return () => {
       cancelled = true;
     };
-  }, [ready, isLive, profileId, media.kind, media.id]);
+  }, [ready, isLive, profileId, media.kind, media.id, media.startSec]);
 
   // -- 6. Watch-history writes (web fallback path only) --------------------
   // The native session's progress, completion and final write are owned by
@@ -1065,16 +1072,6 @@ export function PlayerModal({
     },
     [isLive, nativeToken]
   );
-
-  // A moment opens at its line once the stream is ready (after any resume).
-  const startedAt = useRef<number | null>(null);
-  useEffect(() => {
-    const start = media.startSec;
-    if (!ready || isLive || start == null || startedAt.current === start) return;
-    if (USE_MPV_ENGINE && !nativeToken) return;
-    startedAt.current = start;
-    seekTo(Math.max(0, start - 1));
-  }, [ready, isLive, media.startSec, nativeToken, seekTo]);
 
   const seekToLiveEdge = useCallback(() => {
     if (USE_MPV_ENGINE) {

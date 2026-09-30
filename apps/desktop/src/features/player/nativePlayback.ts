@@ -15,7 +15,13 @@ export interface NativeOpenResult {
 }
 
 export function openNativePlayback(
-  options: { profileId: string; mediaKind: string; mediaId: number; title: string },
+  options: {
+    profileId: string;
+    mediaKind: string;
+    mediaId: number;
+    title: string;
+    startSec?: number | null;
+  },
   cancelled: () => boolean
 ): Promise<NativeOpenResult | null> {
   return serial(async () => {

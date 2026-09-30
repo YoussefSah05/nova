@@ -37,8 +37,14 @@ pub async fn mpv_open_stream(
     media_kind: String,
     media_id: i64,
     title: String,
+    start_sec: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<MpvOpenResult, ApiError> {
+    if start_sec.is_some_and(|start| !start.is_finite() || start < 0.0) {
+        return Err(ApiError::InvalidInput(
+            "startSec must be finite and non-negative".into(),
+        ));
+    }
     let epoch = state.page_epoch();
     let pool = require_profile_pool(&profile_id, &state).await?;
     let resolved = PlaybackRepository::new(&pool)
@@ -63,7 +69,7 @@ pub async fn mpv_open_stream(
     // one. A failed open leaves the previous session tracked.
     state
         .playback
-        .begin(opened.token.clone(), pool, media_kind, media_id)
+        .begin(opened.token.clone(), pool, media_kind, media_id, start_sec)
         .await;
     if state.page_epoch() != epoch {
         // The page that asked for this reloaded meanwhile: nobody will show

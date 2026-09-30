@@ -301,6 +301,8 @@ pub async fn search_transcript(
 
 /// Most moments one search returns.
 const MOMENTS_LIMIT: i64 = 50;
+/// Shortest dialogue search.
+const MOMENTS_MIN_CHARS: usize = 2;
 
 /// Dialogue search across the playlist's transcribed films and episodes:
 /// where a line was said, to play from it. Lexical (FTS5, spoken and cached
@@ -313,6 +315,10 @@ pub async fn search_moments(
     limit: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<nova_storage::MomentHit>, ApiError> {
+    // A single letter matches nearly every line: nothing to rank.
+    if query.trim().chars().count() < MOMENTS_MIN_CHARS {
+        return Ok(Vec::new());
+    }
     let match_expr = nova_search::fts_match(&query);
     if match_expr.is_empty() {
         return Ok(Vec::new());

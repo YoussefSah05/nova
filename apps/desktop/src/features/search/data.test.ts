@@ -22,6 +22,9 @@ describe("search plans", () => {
     expect(channelsApply(plan("bbc news"))).toBe(true);
     expect(channelsApply(plan("crime 90s"))).toBe(false);
     expect(momentsApply(plan("see you later"))).toBe(true);
+    expect(momentsApply(plan("a"))).toBe(false);
+    expect(momentsApply(plan("𐐀"))).toBe(false);
+    expect(momentsApply(plan("go"))).toBe(true);
     expect(momentsApply(plan("crime shows"))).toBe(false);
     expect(seriesApply(plan("drama 90s")), "shows have no year filter").toBe(false);
   });

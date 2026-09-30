@@ -68,6 +68,9 @@ export function interpret(
     const f = facet(m);
     if (!f || dismissed.has(facetId(f)) || found.some((x) => facetId(x.facet) === facetId(f)))
       return;
+    // The list API accepts one genre. Extra genre words stay searchable,
+    // rather than displaying chips whose restrictions would be discarded.
+    if (f.kind === "genre" && found.some((x) => x.facet.kind === "genre")) return;
     found.push({ at: m.index, facet: f });
     rest = rest.slice(0, m.index) + " ".repeat(m[0].length) + rest.slice(m.index + m[0].length);
   };
@@ -109,7 +112,12 @@ export function interpret(
   // own it is more likely part of a title ("Blade Runner 2049", "1917").
   const maxYear = new Date().getFullYear() + 1;
   const yearIn = /\b(?:(?:from|in|of)\s+)?(19[2-9]\d|20\d\d)\b/.exec(rest);
-  if (yearIn && Number(yearIn[1]) <= maxYear && (found.length > 0 || yearIn[0] !== yearIn[1]))
+  if (
+    yearIn &&
+    !found.some((x) => x.facet.kind === "decade") &&
+    Number(yearIn[1]) <= maxYear &&
+    (found.length > 0 || yearIn[0] !== yearIn[1])
+  )
     take(new RegExp(`\\b${escape(yearIn[0])}\\b`), () => ({
       kind: "year",
       value: yearIn[1],

@@ -754,11 +754,60 @@ Branch `feat/ui-live`.
   frontend), `cargo fmt --check`, `git diff --check`, production build pass. **Not verified on
   device** (`just dev`).
 
+### Frontend redesign, UI-5: Search — 2026-09-30
+
+Branch `feat/ui-search`. Main implementation: `bfde45f`; review fixes completed in the
+follow-up. UI-5 is complete within the scope and qualification limits recorded below.
+
+- **Search page:** opened from the command palette's "Search everything" action, with
+  separately queried film, show, channel and dialogue Moments groups. A deterministic
+  interpreter recognizes library genres, decades, contextual years and media types as
+  dismissible chips. Plain title queries use the existing lexical/semantic commands;
+  faceted queries use filtered lists. Missing semantic models have a capability notice.
+- **Moments:** FTS5 across the playlist's transcribed films and episodes, including cached
+  translations, with title and timestamp; choosing a moment passes `PlayMedia.startSec` to
+  playback. Live transcripts are excluded. This goes beyond the previously reserved group;
+  cross-library dialogue search is lexical, while per-title transcript search stays hybrid.
+- **Existing review fixes retained:** scope dialogue candidates before the ranking cap so
+  another playlist cannot crowd them out; collapse repeated moments from different
+  transcripts; reject dialogue queries shorter than two characters; reattach orphaned
+  transcripts by stable stream URL content key during playlist publication.
+- **Continuation fixes:** collapse repeated moments before the result limit, avoiding
+  underfilled pages; align the frontend's minimum dialogue query length with the command;
+  show a retry action for failed search groups instead of claiming no results. Regenerate
+  SQLx metadata against a temporary schema built from every app/profile migration (the
+  local development schema is stale).
+- **Independent review:** one high and two medium findings confirmed and fixed. Explicit
+  moment starts now belong to the native playback coordinator, overriding saved resume and
+  using its readiness/retry policy with a one-second lead-in; recovery resumes current
+  progress. The web fallback skips saved resume for explicit starts. Type-only searches
+  (`movies`, `shows`, `channels`) now query bounded lists. Extra genre/date terms remain
+  searchable text instead of displaying ignored chips. A fresh re-review found no further
+  actionable code defects. The IPC documentation was updated as requested by the reviewer.
+- **States:** an empty library offers Add a playlist; unsupported date filters for explicit
+  show/channel queries explain the limitation; failed Moments do not claim no matching lines.
+- **Validation:** `just lint`, `just typecheck`, `just test` (618 Rust, 0 failed, 5 opt-in
+  ignored; 116 frontend), `cargo fmt --all -- --check`, `git diff --check` and the frontend
+  production build pass (existing bundle-size warning). Rust fixture tests require localhost
+  access. SQLx offline metadata is current. The native debug `.app` build passes.
+- **Native smoke:** a separate debug bundle and isolated profile, with generated 90-second
+  H.264/AAC media, one film/show/channel and a seeded transcript. Verified keyboard entry
+  through the palette, the empty-library CTA, type-only Shows and Channels, genre/type/decade
+  film results, the Moments layout, and query/result preservation after closing playback.
+  A 42-second moment opened at **0:41**, overriding a later saved resume; playback advanced
+  normally and could be paused. This fixture validates playback positioning, not transcription
+  accuracy or a real provider. No existing user profiles were modified.
+- **Limits:** series year filtering is not implemented; groups are bounded previews without
+  pagination. Transcript reattachment requires an unchanged stream URL and is covered by
+  storage regression tests; real-provider refresh qualification remains outstanding. Native
+  smoke is not full device/performance certification; the web fallback was not exercised on
+  device. M26's real-profile upgrade qualification remains separate.
+
 ### Next dependency
 
-**UI-5: Search** — a Search page over movies, series and channels (lexical + semantic), the
-interpretation chips, the reserved Moments group and the semantic-search capability notice. Then
-UI-6 Library history, UI-7 Settings/Models. M26 still needs a real profile copy.
+**UI-6: Library/history**, followed by **UI-7: Settings/Models**. UI-1–UI-5 are implemented;
+UI-1–UI-4 have recorded automated validation, and their
+status entries still note native-device checks outstanding. M26 still needs a real profile copy.
 
 ---
 

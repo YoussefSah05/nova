@@ -6,6 +6,13 @@ const mockInvoke = vi.mocked(invoke);
 const options = { profileId: "fixture", mediaKind: "vod", mediaId: 1, title: "fixture" };
 
 describe("native playback lifetime", () => {
+  it("passes an explicit moment to the coordinator instead of issuing a separate seek", async () => {
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValue({ token: "moment", embedded: true });
+    await openNativePlayback({ ...options, startSec: 42 }, () => false);
+    expect(mockInvoke.mock.calls).toEqual([["mpv_open_stream", { ...options, startSec: 42 }]]);
+  });
+
   it("closes a late open before starting the next requested media", async () => {
     let finish!: (value: NativeOpenResult) => void;
     let cancelled = false;

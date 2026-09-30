@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH scoped AS (\n                 -- This playlist's transcribed films and episodes: ranking\n                 -- happens among them, so another playlist can't crowd them out.\n                 SELECT t.id AS transcript_id FROM transcripts t\n                 WHERE (t.media_kind = 'vod' AND EXISTS (\n                          SELECT 1 FROM vod_items v WHERE v.id = t.media_id AND v.source_id = ?1))\n                    OR (t.media_kind = 'episode' AND EXISTS (\n                          SELECT 1 FROM series_episodes e\n                          WHERE e.id = t.media_id AND e.source_id = ?1))\n               ),\n               hits AS (\n                 SELECT CAST(f.segment_id AS INTEGER) AS segment_id, f.text AS text,\n                        f.kind AS kind, bm25(transcript_fts) AS score\n                 FROM transcript_fts f\n                 JOIN transcript_segments s ON s.id = CAST(f.segment_id AS INTEGER)\n                 WHERE f.text MATCH ?2\n                   AND s.transcript_id IN (SELECT transcript_id FROM scoped)\n                 ORDER BY bm25(transcript_fts)\n                 LIMIT ?4\n               ),\n               best AS (\n                 SELECT h.segment_id, h.text, h.kind, h.score,\n                        ROW_NUMBER() OVER (\n                          PARTITION BY t.media_kind, t.media_id, ROUND(s.start_sec * 2.0)\n                          ORDER BY h.score, h.segment_id\n                        ) AS rn\n                 FROM hits h\n                 JOIN transcript_segments s ON s.id = h.segment_id\n                 JOIN transcripts t ON t.id = s.transcript_id\n               )\n               SELECT b.segment_id as \"segment_id!: i64\",\n                      ts.start_sec as \"start_sec!: f64\", ts.end_sec as \"end_sec!: f64\",\n                      b.text as \"text!: String\", b.kind as \"kind!: String\",\n                      t.media_kind as \"media_kind!: String\", t.media_id as \"media_id!: i64\",\n                      CASE WHEN t.media_kind = 'vod'\n                           THEN COALESCE(v.canonical_title, v.clean_title, v.name)\n                           ELSE COALESCE(sm.canonical_title, se.series_title) END\n                          as \"title!: String\",\n                      CASE WHEN t.media_kind = 'episode' THEN se.season END as \"season?: i64\",\n                      CASE WHEN t.media_kind = 'episode' THEN se.episode END as \"episode?: i64\",\n                      se.episode_title as \"episode_title?: String\",\n                      COALESCE(se.numbering = 'season_episode', 0) as \"numbered!: bool\",\n                      CASE WHEN t.media_kind = 'vod' THEN COALESCE(v.poster_url, v.logo_url)\n                           ELSE COALESCE(sm.poster_url, se.logo_url) END as \"poster_url?: String\",\n                      CASE WHEN t.media_kind = 'vod'\n                           THEN (SELECT s.entity_id FROM stream_variants s\n                                 WHERE s.vod_item_id = v.id LIMIT 1)\n                           ELSE (SELECT sb.entity_id FROM series_bindings sb\n                                 WHERE sb.source_id = se.source_id\n                                   AND sb.series_title = se.series_title) END\n                          as \"entity_id?: String\"\n               FROM best b\n               JOIN transcript_segments ts ON ts.id = b.segment_id\n               JOIN transcripts t ON t.id = ts.transcript_id\n               LEFT JOIN vod_items v ON t.media_kind = 'vod' AND v.id = t.media_id\n               LEFT JOIN series_episodes se ON t.media_kind = 'episode' AND se.id = t.media_id\n               LEFT JOIN series_meta sm\n                      ON sm.source_id = se.source_id AND sm.series_title = se.series_title\n               WHERE b.rn = 1\n                 AND ((v.id IS NOT NULL AND v.source_id = ?1)\n                      OR (se.id IS NOT NULL AND se.source_id = ?1))\n               ORDER BY b.score, b.segment_id\n               LIMIT ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "segment_id!: i64",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "start_sec!: f64",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "end_sec!: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "text!: String",
+        "ordinal": 3,
+        "type_info": "Null"
+      },
+      {
+        "name": "kind!: String",
+        "ordinal": 4,
+        "type_info": "Null"
+      },
+      {
+        "name": "media_kind!: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "media_id!: i64",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "season?: i64",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "episode?: i64",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "episode_title?: String",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "numbered!: bool",
+        "ordinal": 11,
+        "type_info": "Integer"
+      },
+      {
+        "name": "poster_url?: String",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "entity_id?: String",
+        "ordinal": 13,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "bad226c28eed3433c542ecb9c0df7f99ccc4a2cf76cc2c5b1dd46a702412c930"
+}

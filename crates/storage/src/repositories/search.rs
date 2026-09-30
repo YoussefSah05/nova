@@ -51,7 +51,7 @@ pub struct MomentHit {
     pub entity_id: Option<String>,
 }
 
-/// Most FTS matches weighed before scoping to the playlist.
+/// Most of the playlist's FTS matches weighed.
 const MOMENT_CANDIDATES: i64 = 400;
 
 impl<'a> SearchRepository<'a> {
@@ -70,18 +70,35 @@ impl<'a> SearchRepository<'a> {
         limit: i64,
     ) -> Result<Vec<MomentHit>, StorageError> {
         let rows = sqlx::query!(
-            r#"WITH hits AS (
+            r#"WITH scoped AS (
+                 -- This playlist's transcribed films and episodes: ranking
+                 -- happens among them, so another playlist can't crowd them out.
+                 SELECT t.id AS transcript_id FROM transcripts t
+                 WHERE (t.media_kind = 'vod' AND EXISTS (
+                          SELECT 1 FROM vod_items v WHERE v.id = t.media_id AND v.source_id = ?1))
+                    OR (t.media_kind = 'episode' AND EXISTS (
+                          SELECT 1 FROM series_episodes e
+                          WHERE e.id = t.media_id AND e.source_id = ?1))
+               ),
+               hits AS (
                  SELECT CAST(f.segment_id AS INTEGER) AS segment_id, f.text AS text,
                         f.kind AS kind, bm25(transcript_fts) AS score
                  FROM transcript_fts f
+                 JOIN transcript_segments s ON s.id = CAST(f.segment_id AS INTEGER)
                  WHERE f.text MATCH ?2
+                   AND s.transcript_id IN (SELECT transcript_id FROM scoped)
                  ORDER BY bm25(transcript_fts)
                  LIMIT ?4
                ),
                best AS (
-                 SELECT segment_id, text, kind, score,
-                        ROW_NUMBER() OVER (PARTITION BY segment_id ORDER BY score) AS rn
-                 FROM hits
+                 SELECT h.segment_id, h.text, h.kind, h.score,
+                        ROW_NUMBER() OVER (
+                          PARTITION BY t.media_kind, t.media_id, ROUND(s.start_sec * 2.0)
+                          ORDER BY h.score, h.segment_id
+                        ) AS rn
+                 FROM hits h
+                 JOIN transcript_segments s ON s.id = h.segment_id
+                 JOIN transcripts t ON t.id = s.transcript_id
                )
                SELECT b.segment_id as "segment_id!: i64",
                       ts.start_sec as "start_sec!: f64", ts.end_sec as "end_sec!: f64",
@@ -389,5 +406,57 @@ mod tests {
             "the playlist's films and episodes, never another playlist or live"
         );
         assert!(hits.iter().all(|h| h.start_sec == 42.0));
+
+        // Another playlist full of the word can't crowd this one out, and a
+        // second transcript of the same title doesn't repeat the line.
+        let crowd = tr
+            .get_or_create_transcript("crowd", "vod", other_film, 1, "en", "m", "/c", "/c")
+            .await
+            .unwrap();
+        let many: Vec<TranscriptSegment> = (0..MOMENT_CANDIDATES + 50)
+            .map(|i| TranscriptSegment {
+                seq: i,
+                start_sec: i as f64,
+                end_sec: i as f64 + 1.0,
+                text: "attached".into(),
+                words: None,
+            })
+            .collect();
+        tr.append_segments(crowd, &many).await.unwrap();
+        let again = tr
+            .get_or_create_transcript("film-2", "vod", film, 1, "en", "m2", "/b", "/b")
+            .await
+            .unwrap();
+        tr.append_segments(
+            again,
+            &[line("Don't let yourself get attached to anything")],
+        )
+        .await
+        .unwrap();
+        let hits = SearchRepository::new(&pool)
+            .search_moments(a, &nova_search::fts_match("attached"), 20)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 2, "{hits:?}");
+
+        // Duplicate higher-ranked episode lines must not consume the film's
+        // slot before the requested result limit is applied.
+        let duplicate = tr
+            .get_or_create_transcript("episode-2", "episode", episode, 1, "en", "m2", "/d", "/d")
+            .await
+            .unwrap();
+        tr.append_segments(duplicate, &[line("Everything is attached")])
+            .await
+            .unwrap();
+        let hits = SearchRepository::new(&pool)
+            .search_moments(a, &nova_search::fts_match("attached"), 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            hits.len(),
+            2,
+            "unique moments fill the requested page: {hits:?}"
+        );
+        assert!(hits.iter().any(|h| h.media_kind == "vod"));
     }
 }

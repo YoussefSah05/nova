@@ -80,6 +80,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    isFullscreen: () => Promise.resolve(false),
+    onResized: () => Promise.resolve(() => undefined),
+  }),
+}));
 
 type InvokeArgs = Record<string, unknown> | undefined;
 
@@ -352,6 +358,13 @@ function setupInvoke(
       case "resolve_movie_playback":
         // The player itself is out of scope here: stop at the resolution.
         return Promise.reject(new Error("no stream in tests"));
+      case "mpv_open_stream":
+        return Promise.reject(new Error("no stream in tests"));
+      case "airplay_set_picker_rect":
+      case "airplay_disengage":
+      case "mpv_request_redraw":
+      case "mpv_set_video_rect":
+        return Promise.resolve();
       case "get_profile_settings":
         return Promise.resolve({});
       case "set_movie_favorite":
@@ -610,6 +623,34 @@ describe("AppShell", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Breaking Bad" })).toBeInTheDocument();
   });
 
+  it("reports failed search groups and retries them without claiming there are no matches", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    setupInvoke(() => []);
+    const invoke = mocks.invoke.getMockImplementation()!;
+    let momentsFail = true;
+    mocks.invoke.mockImplementation((command: string, args?: InvokeArgs) => {
+      if (command === "search_moments" && momentsFail)
+        return Promise.reject(new Error("database is locked"));
+      return invoke(command, args);
+    });
+    renderShell();
+    await screen.findByRole("button", { name: "Live" });
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+    await userEvent.type(
+      await screen.findByPlaceholderText("Search content or jump to…"),
+      "attached"
+    );
+    await userEvent.click(
+      await screen.findByRole("option", { name: "Search everything for “attached”" })
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("couldn’t be loaded");
+    expect(screen.queryByText(/Nothing in this playlist matches/)).not.toBeInTheDocument();
+    momentsFail = false;
+    await userEvent.click(screen.getByRole("button", { name: "Retry search" }));
+    expect(await screen.findByRole("heading", { name: "Moments" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
   it("searches everything from the palette, reading a decade and a genre it can undo", async () => {
     // cmdk scrolls the active option into view; jsdom has no layout.
     Element.prototype.scrollIntoView = vi.fn();
@@ -646,10 +687,18 @@ describe("AppShell", () => {
         expect.objectContaining({ query: "90s" })
       )
     );
-    expect(
-      await screen.findByRole("button", {
-        name: "Play Review Movie · 1:02:03: “Don't let yourself get attached”",
+    const moment = await screen.findByRole("button", {
+      name: "Play Review Movie · 1:02:03: “Don't let yourself get attached”",
+    });
+    await userEvent.click(moment);
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("mpv_open_stream", {
+        profileId: profile.id,
+        mediaKind: "vod",
+        mediaId: 7,
+        title: "Review Movie",
+        startSec: 3723,
       })
-    ).toBeInTheDocument();
+    );
   });
 });

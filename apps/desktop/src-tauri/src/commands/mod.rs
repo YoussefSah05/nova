@@ -1260,6 +1260,15 @@ async fn build_candidate(
     WatchHistoryRepository::reattach_pending_for_source_tx(tx, source_id)
         .await
         .map_err(ImportFailure::storage)?;
+    // Transcripts follow their title to its new row (dialogue search and
+    // captions keep working after a refresh).
+    nova_storage::TranscriptRepository::reattach_orphans_tx(
+        tx,
+        source_id,
+        crate::caption_session::content_key,
+    )
+    .await
+    .map_err(ImportFailure::storage)?;
     // Entity-owned series matches survive the refresh (and provider renames):
     // re-mirror them onto the new rows instead of re-matching.
     ExternalMatchRepository::mirror_series_for_source_tx(tx, source_id)
@@ -3450,7 +3459,9 @@ mod stabilization_tests {
         let play = |token: &'static str, kind: &'static str, phase| {
             let (coordinator, pool) = (coordinator.clone(), pool.clone());
             async move {
-                coordinator.begin(token.into(), pool, kind.into(), 7).await;
+                coordinator
+                    .begin(token.into(), pool, kind.into(), 7, None)
+                    .await;
                 coordinator
                     .observe_at(engine_state(token, phase, 30.0), 1_000)
                     .await;
@@ -3578,7 +3589,7 @@ mod stabilization_tests {
         // engine session) and never writes the start position while the
         // resume hasn't taken effect, not even when closed.
         coordinator
-            .begin("tok-1".into(), pool.clone(), "episode".into(), e1)
+            .begin("tok-1".into(), pool.clone(), "episode".into(), e1, None)
             .await;
         coordinator
             .observe(engine_state("tok-1", Playing, 0.0))
@@ -3597,7 +3608,7 @@ mod stabilization_tests {
         // E2 plays: progress is written by Rust, snapshots of another token
         // are ignored, and the end marks it finished and names E3.
         coordinator
-            .begin("tok-2".into(), pool.clone(), "episode".into(), e2)
+            .begin("tok-2".into(), pool.clone(), "episode".into(), e2, None)
             .await;
         coordinator
             .observe(engine_state("tok-2", Playing, 42.0))
@@ -3720,7 +3731,7 @@ mod stabilization_tests {
             let pool = pool.clone();
             async move {
                 coordinator
-                    .begin(token.into(), pool, kind.into(), row)
+                    .begin(token.into(), pool, kind.into(), row, None)
                     .await
             }
         };

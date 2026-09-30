@@ -145,6 +145,77 @@ impl<'a> TranscriptRepository<'a> {
         Ok(row.id)
     }
 
+    /// Re-link transcripts of films and episodes whose catalog row a refresh
+    /// replaced (the delete trigger negates `media_id`) to the source's new
+    /// row with the same stream: `key_of` is the content key of a stream URL.
+    /// Only hashes the source's URLs when orphans exist. Returns re-linked.
+    pub async fn reattach_orphans_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        source_id: i64,
+        key_of: fn(&str) -> String,
+    ) -> Result<u64, StorageError> {
+        let orphans = sqlx::query!(
+            r#"SELECT t.id as "id!: i64", t.media_kind as "kind!: String",
+                      t.content_key as "key!: String"
+               FROM transcripts t
+               WHERE t.content_key <> '' AND t.media_kind IN ('vod', 'episode')
+                 AND NOT EXISTS (SELECT 1 FROM vod_items v
+                                 WHERE t.media_kind = 'vod' AND v.id = t.media_id)
+                 AND NOT EXISTS (SELECT 1 FROM series_episodes e
+                                 WHERE t.media_kind = 'episode' AND e.id = t.media_id)"#
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+        if orphans.is_empty() {
+            return Ok(0);
+        }
+        let mut wanted: std::collections::HashMap<(String, String), Vec<i64>> =
+            std::collections::HashMap::new();
+        for o in orphans {
+            wanted.entry((o.kind, o.key)).or_default().push(o.id);
+        }
+        let mut rows: Vec<(&'static str, i64, String)> = Vec::new();
+        if wanted.keys().any(|(k, _)| k == "vod") {
+            for r in sqlx::query!(
+                r#"SELECT id as "id!: i64", stream_url FROM vod_items WHERE source_id = ?"#,
+                source_id
+            )
+            .fetch_all(&mut **tx)
+            .await?
+            {
+                rows.push(("vod", r.id, r.stream_url));
+            }
+        }
+        if wanted.keys().any(|(k, _)| k == "episode") {
+            for r in sqlx::query!(
+                r#"SELECT id as "id!: i64", stream_url FROM series_episodes WHERE source_id = ?"#,
+                source_id
+            )
+            .fetch_all(&mut **tx)
+            .await?
+            {
+                rows.push(("episode", r.id, r.stream_url));
+            }
+        }
+        let mut relinked = 0;
+        for (kind, row_id, url) in rows {
+            let Some(transcripts) = wanted.remove(&(kind.to_string(), key_of(&url))) else {
+                continue;
+            };
+            for transcript in transcripts {
+                relinked += sqlx::query!(
+                    "UPDATE transcripts SET media_id = ? WHERE id = ?",
+                    row_id,
+                    transcript
+                )
+                .execute(&mut **tx)
+                .await?
+                .rows_affected();
+            }
+        }
+        Ok(relinked)
+    }
+
     /// Append a window's segments to a transcript (one transaction).
     pub async fn append_segments(
         &self,
@@ -449,6 +520,63 @@ mod tests {
         let path = dir.path().join("profile.db");
         let pool = init_profile_db(path.to_str().unwrap()).await.unwrap();
         (dir, pool)
+    }
+
+    #[tokio::test]
+    async fn a_refresh_keeps_a_titles_transcript_attached() {
+        let (_dir, pool) = temp_pool().await;
+        let source = crate::SourceRepository::new(&pool)
+            .create("m3u", "a", "http://a")
+            .await
+            .unwrap()
+            .id;
+        let key_of: fn(&str) -> String = |url| format!("key:{url}");
+        let insert = || {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO vod_items (source_id, name, stream_url) VALUES (?, 'Heat', 'http://a/heat.mkv')",
+                )
+                .bind(source)
+                .execute(&pool)
+                .await
+                .unwrap()
+                .last_insert_rowid()
+            }
+        };
+        let old_row = insert().await;
+        let t = TranscriptRepository::new(&pool)
+            .get_or_create_transcript(
+                &key_of("http://a/heat.mkv"),
+                "vod",
+                old_row,
+                0,
+                "en",
+                "m",
+                "/a.vtt",
+                "/a.json",
+            )
+            .await
+            .unwrap();
+        // A refresh replaces the row (the delete trigger detaches the transcript).
+        sqlx::query("DELETE FROM vod_items WHERE id = ?")
+            .bind(old_row)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let new_row = insert().await;
+        let mut tx = pool.begin().await.unwrap();
+        let relinked = TranscriptRepository::reattach_orphans_tx(&mut tx, source, key_of)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(relinked, 1);
+        let media: i64 = sqlx::query_scalar("SELECT media_id FROM transcripts WHERE id = ?")
+            .bind(t)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(media, new_row);
     }
 
     #[tokio::test]

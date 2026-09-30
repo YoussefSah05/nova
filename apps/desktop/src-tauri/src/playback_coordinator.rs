@@ -101,6 +101,17 @@ pub struct SessionPolicy {
 }
 
 impl SessionPolicy {
+    /// An explicit dialogue timestamp takes precedence even for completed
+    /// titles and moments near the beginning. Keep one second of lead-in.
+    fn with_moment(mut self, start_sec: Option<f64>) -> Self {
+        if !self.live {
+            if let Some(start) = start_sec.filter(|s| s.is_finite() && *s >= 0.0) {
+                self.resume_at = Some((start - 1.0).max(0.0));
+            }
+        }
+        self
+    }
+
     /// `resume` is the stored `(position, completed)`, if any.
     pub fn new(live: bool, resume: Option<(f64, bool)>) -> Self {
         let resume_at = resume
@@ -363,6 +374,7 @@ enum Msg {
         pool: Arc<SqlitePool>,
         media_kind: String,
         media_id: i64,
+        start_sec: Option<f64>,
         done: oneshot::Sender<()>,
     },
     Finish {
@@ -432,6 +444,7 @@ impl PlaybackCoordinator {
         pool: Arc<SqlitePool>,
         media_kind: String,
         media_id: i64,
+        start_sec: Option<f64>,
     ) {
         let (done, wait) = oneshot::channel();
         let _ = self.tx.send(Msg::Begin {
@@ -439,6 +452,7 @@ impl PlaybackCoordinator {
             pool,
             media_kind,
             media_id,
+            start_sec,
             done,
         });
         let _ = wait.await;
@@ -547,13 +561,21 @@ impl PlaybackCoordinator {
                     pool,
                     media_kind,
                     media_id,
+                    start_sec,
                     done,
                 } => {
                     if let Some(previous) = active.take() {
                         self.close_session(previous).await;
                     }
                     let from_recovery = expected.take() == Some((media_kind.clone(), media_id));
-                    let session = Self::open_session(token, pool, media_kind, media_id).await;
+                    let session = Self::open_session(
+                        token,
+                        pool,
+                        media_kind,
+                        media_id,
+                        if from_recovery { None } else { start_sec },
+                    )
+                    .await;
                     if !from_recovery {
                         // The user started this: a fresh set of recoveries.
                         chains.remove(&session.chain_key());
@@ -643,6 +665,7 @@ impl PlaybackCoordinator {
         pool: Arc<SqlitePool>,
         media_kind: String,
         media_id: i64,
+        start_sec: Option<f64>,
     ) -> ActiveSession {
         let live = media_kind == "live";
         let variant = if media_kind == "vod" {
@@ -682,7 +705,7 @@ impl PlaybackCoordinator {
             variant,
             preferred_lang,
             caption_mode: None,
-            policy: SessionPolicy::new(live, resume),
+            policy: SessionPolicy::new(live, resume).with_moment(start_sec),
         }
     }
 
@@ -918,6 +941,37 @@ mod tests {
             p.observe(Playing, 0.0, D, 400),
             vec![PolicyAction::Seek(600.0)]
         );
+    }
+
+    #[test]
+    fn a_moment_overrides_resume_and_retries_only_its_own_position() {
+        for completed in [false, true] {
+            let mut p = SessionPolicy::new(false, Some((600.0, completed))).with_moment(Some(42.0));
+            assert!(
+                p.observe(Playing, 0.0, None, 0).is_empty(),
+                "wait for duration"
+            );
+            assert_eq!(
+                p.observe(Playing, 0.0, D, 100),
+                vec![PolicyAction::Seek(41.0)]
+            );
+            assert_eq!(
+                p.observe(Playing, 0.0, D, 2_200),
+                vec![PolicyAction::Seek(41.0)]
+            );
+            assert_eq!(
+                records(&p.observe(Playing, 41.2, D, 2_500)),
+                vec![(41.2, false)]
+            );
+            assert_eq!(seeks(&p.observe(Playing, 43.0, D, 3_000)), 0);
+        }
+        let mut beginning = SessionPolicy::new(false, Some((600.0, false))).with_moment(Some(0.0));
+        assert_eq!(
+            beginning.observe(Playing, 0.0, D, 0),
+            vec![PolicyAction::Seek(0.0)]
+        );
+        let mut live = SessionPolicy::new(true, None).with_moment(Some(42.0));
+        assert_eq!(seeks(&live.observe(Playing, 0.0, D, 0)), 0);
     }
 
     #[test]

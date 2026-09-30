@@ -55,31 +55,35 @@ function key(profileId: string, sourceId: number | null, group: string, plan: Se
 }
 
 export function useSearchMovies(profileId: string, sourceId: number | null, plan: SearchPlan) {
-  const enabled = sourceId !== null && shows(plan, "movies") && (!!plan.text || faceted(plan));
+  const enabled =
+    sourceId !== null &&
+    shows(plan, "movies") &&
+    (!!plan.text || faceted(plan) || plan.types !== null);
   return useQuery({
     subscribed: useScreenActive(),
     queryKey: key(profileId, sourceId, "movies", plan),
     queryFn: async (): Promise<BrowseItem[]> => {
-      const rows = faceted(plan)
-        ? await invoke<CanonicalMediaSummary[]>("list_movies", {
-            profileId,
-            sourceId,
-            limit: GROUP_LIMIT.movies,
-            offset: 0,
-            filters: {
-              query: plan.text || null,
-              genre: plan.genre,
-              yearFrom: plan.yearFrom,
-              yearTo: plan.yearTo,
-              sort: "rating",
-            },
-          })
-        : await invoke<CanonicalMediaSummary[]>("search_movies", {
-            profileId,
-            sourceId,
-            query: plan.text,
-            limit: GROUP_LIMIT.movies,
-          });
+      const rows =
+        faceted(plan) || !plan.text
+          ? await invoke<CanonicalMediaSummary[]>("list_movies", {
+              profileId,
+              sourceId,
+              limit: GROUP_LIMIT.movies,
+              offset: 0,
+              filters: {
+                query: plan.text || null,
+                genre: plan.genre,
+                yearFrom: plan.yearFrom,
+                yearTo: plan.yearTo,
+                sort: "rating",
+              },
+            })
+          : await invoke<CanonicalMediaSummary[]>("search_movies", {
+              profileId,
+              sourceId,
+              query: plan.text,
+              limit: GROUP_LIMIT.movies,
+            });
       return rows.map(movieToItem);
     },
     enabled,
@@ -88,7 +92,11 @@ export function useSearchMovies(profileId: string, sourceId: number | null, plan
 
 /// Shows have no year filter: a search with a year or decade names films.
 export function seriesApply(plan: SearchPlan): boolean {
-  return shows(plan, "series") && plan.yearFrom === null && (!!plan.text || plan.genre !== null);
+  return (
+    shows(plan, "series") &&
+    plan.yearFrom === null &&
+    (!!plan.text || plan.genre !== null || plan.types !== null)
+  );
 }
 
 export function useSearchSeries(profileId: string, sourceId: number | null, plan: SearchPlan) {
@@ -97,7 +105,7 @@ export function useSearchSeries(profileId: string, sourceId: number | null, plan
     queryKey: key(profileId, sourceId, "series", plan),
     queryFn: async (): Promise<BrowseItem[]> => {
       const rows =
-        plan.genre !== null
+        plan.genre !== null || !plan.text
           ? await invoke<SeriesSummary[]>("list_series", {
               profileId,
               sourceId,
@@ -119,7 +127,7 @@ export function useSearchSeries(profileId: string, sourceId: number | null, plan
 
 /// Channels are found by name or subject; genres and years don't apply.
 export function channelsApply(plan: SearchPlan): boolean {
-  return shows(plan, "live") && !!plan.text && !faceted(plan);
+  return shows(plan, "live") && (!!plan.text || plan.types !== null) && !faceted(plan);
 }
 
 export function useSearchChannels(profileId: string, sourceId: number | null, plan: SearchPlan) {
@@ -128,12 +136,16 @@ export function useSearchChannels(profileId: string, sourceId: number | null, pl
     queryKey: key(profileId, sourceId, "live", plan),
     queryFn: async (): Promise<BrowseItem[]> =>
       (
-        await invoke<ChannelGroup[]>("semantic_search_channels", {
-          profileId,
-          sourceId,
-          query: plan.text,
-          limit: GROUP_LIMIT.live,
-        })
+        await invoke<ChannelGroup[]>(
+          plan.text ? "semantic_search_channels" : "list_channel_groups",
+          {
+            profileId,
+            sourceId,
+            query: plan.text,
+            limit: GROUP_LIMIT.live,
+            ...(!plan.text ? { offset: 0 } : {}),
+          }
+        )
       ).map(channelGroupToItem),
     enabled: sourceId !== null && channelsApply(plan),
   });
@@ -141,7 +153,7 @@ export function useSearchChannels(profileId: string, sourceId: number | null, pl
 
 /// Lines of dialogue: words only, whatever the facets.
 export function momentsApply(plan: SearchPlan): boolean {
-  return !!plan.text && plan.types === null;
+  return Array.from(plan.text.trim()).length >= 2 && plan.types === null;
 }
 
 export function useSearchMoments(profileId: string, sourceId: number | null, plan: SearchPlan) {

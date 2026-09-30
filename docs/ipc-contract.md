@@ -52,7 +52,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `epg_channels_now_and_next` | `{ profileId, channelIds: number[] }` | `ChannelNowAndNext[] { channelId, now, next }` (one per requested id, in order; each channel reads its own source's guide feed; empty for channels without a `tvgId`) — what cards, previews and the live player use, batched client-side and read in one query per call | M24 |
 | `list_epg_feeds` | `{ profileId, sourceId }` | `EpgFeedStatus[] { id, kind, lastRefreshUtc, lastError, programmeCount }` — never the feed URL (Xtream feed URLs carry credentials); URLs in stored errors are redacted | M24 |
 | `epg_refresh` | `{ profileId, sourceId }` | `void` (durable job: each feed is downloaded to a temp file capped at 512 MiB (gzip feeds are inflated while parsing, up to 2 GiB), parsed into bounded staged batches, then replaces only its own programmes in one short transaction; a feed that parses to no programmes fails and keeps its previous guide). Also queued automatically after every successful import (add or refresh) | 4, M24 |
-| `mpv_open_stream` | `{ profileId, mediaKind, mediaId, title }` | `{ token, engine: 'mpv', embedded }` | 5 |
+| `mpv_open_stream` | `{ profileId, mediaKind, mediaId, title, startSec? }` — optional finite, non-negative dialogue timestamp overrides saved resume for this opening (one-second lead-in); ignored for live | `{ token, engine: 'mpv', embedded }` | 5, UI-5 |
 | `mpv_close` | `{ token }` | `void` | 5 |
 | `playback_caption_mode` | `{ token, captionMode }` | `void` | M14 — the caption selection, persisted with the native session's progress by the playback coordinator |
 | `mpv_player_state` | `{ token? }` | `MpvPlayerState` | 5 |
@@ -545,3 +545,27 @@ invalid tags fall back to `en-US`.
   a title match.
 - It replaces `semantic_search_catalog` in the browse search and the Command
   palette. `semantic_search_catalog` still exists but is unused by the UI.
+
+## Moments: dialogue across the library (UI-5)
+
+`search_moments { profileId, sourceId, query, limit? } -> MomentHit[]`
+
+- Searches the dialogue of every transcribed film and episode of the playlist: FTS5 over
+  spoken and cached translated text, best match first, one hit per line, at most 50. Lexical
+  only; the per-title `search_transcript` stays hybrid.
+- Fewer than two Unicode characters after trimming returns no hits. Candidates are scoped
+  to the playlist before the 400-match ranking cap. Matches for the same media row in the
+  same rounded half-second bucket are collapsed across tracks/models/translations before
+  applying the result limit.
+- A hit carries the line (`text`, `kind`, `startSec`, `endSec`) and where it was said:
+  `mediaKind` (`vod` | `episode`) + `mediaId` to play, `title`, `season`/`episode`/
+  `episodeTitle` with `numbered`, `posterUrl` and `entityId`.
+- Live transcripts are excluded (no replayable timeline).
+- The Search page plays a hit with `PlayMedia.startSec`. Native opening forwards it to the
+  playback coordinator, which owns readiness/retries and overrides saved resume with a
+  one-second lead-in (clamped to zero). Recovery resumes the current session's progress,
+  rather than restarting the original moment. The web fallback also skips saved resume
+  when an explicit moment is provided.
+- Playlist publication reattaches orphaned film/episode transcripts by their stream URL's
+  content key, within the publication transaction. This requires the URL to stay the same;
+  it is not canonical transcript identity across URL changes.

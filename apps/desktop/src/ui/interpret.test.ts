@@ -9,6 +9,16 @@ const summary = (q: string, dismissed?: Set<string>) => {
 };
 
 describe("interpret", () => {
+  it("leaves unsupported extra filters in the searchable text", () => {
+    const multiple = summary("crime drama");
+    expect(multiple.facets.filter((f) => f.startsWith("genre:"))).toHaveLength(1);
+    expect(["crime", "drama"]).toContain(multiple.text);
+    expect(summary("movies 90s 2001")).toEqual({
+      text: "2001",
+      facets: ["type:movies", "decade:1990"],
+    });
+  });
+
   it("reads decades, genres and types, and searches what's left", () => {
     expect(summary("french comedies from the 90s")).toEqual({
       text: "french",
