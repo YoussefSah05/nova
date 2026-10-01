@@ -40,6 +40,8 @@ const DEDUP_THRESHOLD: f32 = 0.92;
 const GENRE_THRESHOLD: f32 = 0.78;
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
 pub struct EnrichModelStatus {
     pub installed: bool,

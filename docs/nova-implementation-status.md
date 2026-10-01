@@ -841,10 +841,59 @@ follow-up. UI-5 is complete within the scope and qualification limits recorded b
   M26's real-profile upgrade qualification remain separate. Native smoke is not full
   device/performance certification; the web fallback was not exercised on device.
 
+### Frontend redesign, UI-7: Settings, models and storage — 2026-10-01
+
+- **Contract:** `docs/implementation/ui-7-settings-models.md`. Settings now uses an
+  accessible dialog with seven keyboard-navigable sections: Playback & captions,
+  Appearance, Models, Storage, Catalog, Playlists & guide, and Profile & about.
+  Portal selects remain usable, Escape closes the appropriate layer, and Command-K
+  does not stack another overlay. Intentional Add-playlist/profile handoffs preserve
+  destination focus; closing Settings restores the entry point. The profile menu
+  finishes closing before opening Settings so it cannot steal dialog focus.
+- **Models:** one view for Whisper and embedding installation, with loading/error/retry
+  states, per-artifact Whisper progress, installed/repair states, runtime workload and
+  memory estimates, and external-folder status. Pending mutations survive section/dialog
+  remounts and prevent duplicate model actions. Completion refreshes Search capability.
+  External folders remain read-only registrations; current jobs use internal models.
+- **Storage and catalog:** separate profile transcript and shared artwork caches with
+  explicit scoped confirmations. Counts refresh when reopened; clearing transcripts
+  invalidates that profile's Moments results. Catalog retains opt-in metadata, write-only
+  credentials and explicit enrichment, using the existing serialized preference writer.
+  Model installation links to Models. Playlist and profile actions report safe errors;
+  failed playlist loading no longer masquerades as an empty library.
+- **IPC and scope:** eight existing DTOs are generated from Rust with test-only `ts-rs`;
+  `just bindings` includes desktop exports. No new command, migration, model backend,
+  automatic download, scheduler or external-model execution. Transcript byte totals are
+  app-wide in the existing command, so the profile cache displays its transcript count only.
+- **Automated validation:** `just lint`, `just typecheck`, and `just test` pass: **629 Rust
+  tests, 5 environment-dependent tests ignored; 135 frontend tests** after the final
+  frontend rerun. Regressions cover dialog/menu focus, portal selects, section navigation,
+  remounting pending downloads, progress, model errors, capability invalidation, scoped
+  cache clearing, fresh counts, playlist failures and credential/persistence behavior.
+  Formatting/diff checks and the native debug app build pass. An initial concurrent
+  build/doctest artifact collision was resolved by a sequential full-suite rerun.
+- **Independent review:** fixed Search capability invalidation, Add-playlist focus handoff,
+  and stale cache/Moments data; re-review found no further actionable issues. Native
+  inspection also prompted a responsive toolbar and scrollable Settings sidebar at the
+  minimum 1024×600 window size, plus the profile-menu focus fix; these were reviewed again.
+- **Native validation:** synthetic profile databases in a separate debug bundle; inspected
+  model/runtime and external-folder states, cache scopes, playlists, catalog, profile and
+  playback settings. Verified keyboard section navigation, select-popup Escape, palette
+  suppression, toolbar access and sidebar scrolling at the minimum window size. The final
+  build verified profile-menu entry focuses Settings, Tab stays inside, and Escape returns
+  focus to the profile button. Shared
+  installed-model/artwork locations were read only. No models were downloaded/removed,
+  caches cleared, external folders authorized, or existing user profiles modified.
+- **Limits:** actual download/removal/failure/progress and cache mutations are covered by
+  mocked frontend regressions, not exercised against live model services or user caches.
+  No live provider/TMDB enrichment qualification or performance certification. Existing
+  backend model capabilities and preference persistence semantics remain unchanged.
+
 ### Next dependency
 
-**UI-7: Settings/Models**. UI-1–UI-6 are implemented. Earlier phase entries retain their
-stated device validation limits. M26 still needs a real profile copy.
+**UI-1–UI-7 are implemented.** Earlier phase entries retain their stated device validation
+limits. M26's real-profile upgrade qualification still needs a real profile copy; it is
+separate from the completed frontend redesign. No UI-8 milestone is defined by this work.
 
 ---
 

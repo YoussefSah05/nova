@@ -1,90 +1,66 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ExternalLibraryStatus } from "@/types/generated/ExternalLibraryStatus";
+import { Skeleton } from "@/components/ui/skeleton";
+import { SettingRow, SettingsButton, SettingsCard, SettingsError } from "../SettingsUI";
 
-import { SettingRow, SettingsButton, SettingsCard } from "../SettingsUI";
-
-interface ExternalModel {
-  modelId: string;
-  capability: string;
-  availability: "missing" | "unverified" | "available" | "unavailable";
-}
-
-interface ExternalLibrary {
-  libraryId: string;
-  displayName: string;
-  availability: "available" | "unavailable";
-  observedAt: number;
-  models: ExternalModel[];
-}
-
+const key = ["settings-external-model-libraries"];
 export function ExternalModelLibraries() {
-  const [libraries, setLibraries] = useState<ExternalLibrary[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const request = useRef(0);
-
-  const refresh = useCallback(async () => {
-    const current = ++request.current;
-    try {
-      const result = await invoke<ExternalLibrary[]>("list_external_model_libraries");
-      if (current === request.current) {
-        setLibraries(result);
-        setError(null);
-      }
-    } catch {
-      if (current === request.current) setError("Could not check external model libraries.");
-    }
-  }, []);
-
-  useEffect(() => {
-    const currentRequest = request;
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 15_000);
-    return () => {
-      currentRequest.current++;
-      window.clearInterval(timer);
-    };
-  }, [refresh]);
-
-  const add = async () => {
-    setBusy(true);
-    try {
-      const id = await invoke<string | null>("add_external_model_library");
-      if (id) await refresh();
-    } catch {
-      setError("Could not add that model folder.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
+  const client = useQueryClient();
+  const libraries = useQuery({
+    queryKey: key,
+    queryFn: () => invoke<ExternalLibraryStatus[]>("list_external_model_libraries"),
+    staleTime: 0,
+    refetchInterval: 15000,
+  });
+  const add = useMutation({
+    mutationFn: () => invoke<string | null>("add_external_model_library"),
+    onSuccess: () => client.invalidateQueries({ queryKey: key }),
+  });
   return (
-    <SettingsCard title="External model libraries">
+    <SettingsCard title="External model folders">
       <SettingRow
-        title="Add a model folder"
+        title="Connect a model folder"
         description="Choose a folder containing models/whisper or models/embeddings. Nova only reads it."
       >
-        <SettingsButton onClick={add} disabled={busy}>
-          {busy ? "Opening…" : "Choose folder"}
+        <SettingsButton onClick={() => add.mutate()} disabled={add.isPending}>
+          {add.isPending ? "Opening…" : "Choose folder"}
         </SettingsButton>
       </SettingRow>
-      {libraries.map((library) => (
-        <SettingRow
-          key={library.libraryId}
-          title={`${library.displayName} · ${library.libraryId.slice(-8)}`}
-          description={`${library.availability === "available" ? "Connected" : "Disconnected"} · ${library.models.map((model) => `${model.capability}: ${model.availability}`).join(" · ")}`}
-        />
-      ))}
-      {error && (
-        <p className="py-3 text-xs text-rose-300" role="alert">
-          {error}
+      {libraries.isPending ? (
+        <Skeleton className="my-4 h-16" />
+      ) : libraries.isError ? (
+        <div className="py-4">
+          <SettingsError
+            message="Couldn’t check external model folders."
+            retry={() => void libraries.refetch()}
+          />
+        </div>
+      ) : libraries.data.length === 0 ? (
+        <p className="py-4 text-sm text-muted-foreground">
+          No folders connected. Use Choose folder to add one.
         </p>
+      ) : (
+        libraries.data.map((library) => (
+          <SettingRow
+            key={library.libraryId}
+            title={`${library.displayName} · ${library.libraryId.slice(-8)}`}
+            description={`${library.availability === "available" ? "Connected" : "Disconnected — reconnect the drive to check it again"} · ${library.models.length ? library.models.map((model) => `${model.capability}: ${model.availability}`).join(" · ") : "No recognized models"}`}
+          />
+        ))
+      )}
+      {add.isError && (
+        <div className="py-4">
+          <SettingsError message="Couldn’t connect that folder. Try choosing it again." />
+        </div>
       )}
       <SettingRow
-        title="Refresh library status"
-        description="Disconnected folders keep their model identity and return when the drive is available. Current AI jobs still use Nova's internal models."
+        title="Folder status"
+        description="Disconnected folders stay registered. Current AI jobs use Nova’s internal models."
       >
-        <SettingsButton onClick={() => void refresh()}>Refresh</SettingsButton>
+        <SettingsButton onClick={() => void libraries.refetch()} disabled={libraries.isFetching}>
+          Refresh folders
+        </SettingsButton>
       </SettingRow>
     </SettingsCard>
   );

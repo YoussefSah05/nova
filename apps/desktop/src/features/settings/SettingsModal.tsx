@@ -1,28 +1,63 @@
-//! Settings overlay — left section sidebar + right content pane.
-
-import { useState } from "react";
-import { Captions, Cpu, Palette, Sparkles, Tv, UserCog, X } from "lucide-react";
-
+//! Settings share one accessible dialog; section changes preserve model jobs.
+import { useRef, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { Captions, Cpu, HardDrive, Palette, Sparkles, Tv, UserCog, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { motion } from "@/lib/motion";
+import { Reveal } from "@/lib/motion";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Profile } from "@/types";
 import { PlaybackCaptionsSection } from "./sections/PlaybackCaptionsSection";
-import { TranscriptionSection } from "./sections/TranscriptionSection";
+import { ModelsSection } from "./sections/ModelsSection";
+import { StorageSection } from "./sections/StorageSection";
 import { EnrichmentSection } from "./sections/EnrichmentSection";
 import { AppearanceSection } from "./sections/AppearanceSection";
 import { SourcesEpgSection } from "./sections/SourcesEpgSection";
 import { ProfileAboutSection } from "./sections/ProfileAboutSection";
 
-type SectionId = "appearance" | "playback" | "transcription" | "enrichment" | "sources" | "profile";
-
-const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
-  { id: "appearance", label: "Appearance", icon: <Palette className="h-4 w-4" /> },
-  { id: "playback", label: "Playback & Captions", icon: <Captions className="h-4 w-4" /> },
-  { id: "transcription", label: "Transcription & Cache", icon: <Cpu className="h-4 w-4" /> },
-  { id: "enrichment", label: "Catalog Enrichment", icon: <Sparkles className="h-4 w-4" /> },
-  { id: "sources", label: "Sources & EPG", icon: <Tv className="h-4 w-4" /> },
-  { id: "profile", label: "Profile & About", icon: <UserCog className="h-4 w-4" /> },
-];
+const SECTIONS = [
+  {
+    id: "playback",
+    label: "Playback & captions",
+    description: "Make every watch feel right.",
+    icon: Captions,
+  },
+  {
+    id: "appearance",
+    label: "Appearance",
+    description: "A little more you, throughout Nova.",
+    icon: Palette,
+  },
+  {
+    id: "models",
+    label: "Models",
+    description: "On-device intelligence, ready when you need it.",
+    icon: Cpu,
+  },
+  {
+    id: "storage",
+    label: "Storage",
+    description: "See what Nova keeps on this Mac.",
+    icon: HardDrive,
+  },
+  {
+    id: "catalog",
+    label: "Catalog",
+    description: "Choose how your titles and artwork are enriched.",
+    icon: Sparkles,
+  },
+  {
+    id: "sources",
+    label: "Playlists & guide",
+    description: "Keep your playlists and programme guides up to date.",
+    icon: Tv,
+  },
+  {
+    id: "profile",
+    label: "Profile & about",
+    description: "Your profile, your preferences.",
+    icon: UserCog,
+  },
+] as const;
 
 export function SettingsModal({
   profile,
@@ -30,87 +65,144 @@ export function SettingsModal({
   onSwitchProfile,
   onProfileUpdated,
   onSourcesChanged,
+  onAddSource,
 }: {
   profile: Profile;
   onClose: () => void;
   onSwitchProfile: () => void;
   onProfileUpdated: (p: Profile) => void;
   onSourcesChanged: () => void;
+  onAddSource: () => void;
 }) {
-  const [active, setActive] = useState<SectionId>("playback");
-
+  const [active, setActive] = useState("playback");
+  const [previousFocus] = useState(() => document.activeElement);
+  const handoff = useRef(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const section = SECTIONS.find((s) => s.id === active) ?? SECTIONS[0];
+  function navigate(next: string) {
+    setActive(next);
+    scrollRef.current?.scrollTo({ top: 0 });
+  }
   return (
-    <motion.div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-6"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.15 }}
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
     >
-      <motion.div
-        className="flex h-[80vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-neutral-950 shadow-2xl"
-        initial={{ opacity: 0, scale: 0.98, y: 8 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-      >
-        {/* Sidebar */}
-        <aside className="flex w-60 shrink-0 flex-col border-r border-white/10 bg-white/[0.02] p-3">
-          <p className="px-2 py-2 text-sm font-semibold text-white">Settings</p>
-          <nav className="mt-1 flex flex-col gap-1">
-            {SECTIONS.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => setActive(s.id)}
-                className={cn(
-                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
-                  active === s.id
-                    ? "bg-white/10 text-white"
-                    : "text-white/65 hover:bg-white/5 hover:text-white"
-                )}
-              >
-                {s.icon}
-                <span>{s.label}</span>
-              </button>
-            ))}
-          </nav>
-        </aside>
-
-        {/* Content */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header
-            data-tauri-drag-region
-            className="flex items-center justify-between border-b border-white/10 px-6 py-3"
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm" />
+        <Dialog.Content
+          aria-modal="true"
+          onInteractOutside={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            if (handoff.current) return;
+            const target =
+              previousFocus instanceof HTMLElement &&
+              previousFocus.isConnected &&
+              previousFocus !== document.body
+                ? previousFocus
+                : document.querySelector<HTMLElement>('[aria-label="Profile and settings"]');
+            target?.focus();
+          }}
+          className="fixed left-1/2 top-1/2 z-50 h-[calc(100dvh-48px)] max-h-[800px] w-[calc(100vw-48px)] max-w-5xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-border bg-background shadow-2xl outline-none"
+        >
+          <Tabs
+            value={active}
+            onValueChange={navigate}
+            orientation="vertical"
+            className="flex h-full min-h-0"
           >
-            <h2 className="text-sm font-semibold text-white">
-              {SECTIONS.find((s) => s.id === active)?.label}
-            </h2>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close settings"
-              className="flex h-8 w-8 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </header>
-          <div className="flex-1 overflow-y-auto px-6 py-5">
-            {active === "appearance" && <AppearanceSection profileId={profile.id} />}
-            {active === "playback" && <PlaybackCaptionsSection profileId={profile.id} />}
-            {active === "transcription" && <TranscriptionSection profileId={profile.id} />}
-            {active === "enrichment" && <EnrichmentSection profileId={profile.id} />}
-            {active === "sources" && (
-              <SourcesEpgSection profileId={profile.id} onSourcesChanged={onSourcesChanged} />
-            )}
-            {active === "profile" && (
-              <ProfileAboutSection
-                profile={profile}
-                onProfileUpdated={onProfileUpdated}
-                onSwitchProfile={onSwitchProfile}
-              />
-            )}
-          </div>
-        </div>
-      </motion.div>
-    </motion.div>
+            <aside className="flex w-52 shrink-0 flex-col overflow-y-auto border-r border-border bg-card/50 p-4">
+              <Dialog.Title className="px-3 pb-1 pt-3 font-display text-[22px] font-medium">
+                Settings
+              </Dialog.Title>
+              <Dialog.Description className="px-3 pb-6 text-xs text-muted-foreground">
+                For {profile.name} · on this Mac
+              </Dialog.Description>
+              <TabsList
+                aria-label="Settings sections"
+                className="h-auto shrink-0 flex-col items-stretch gap-1 rounded-none border-0 bg-transparent p-0"
+              >
+                {SECTIONS.map(({ id, label, icon: Icon }) => (
+                  <TabsTrigger
+                    key={id}
+                    value={id}
+                    className={cn(
+                      "justify-start gap-3 rounded-lg px-3 py-3 text-left text-sm font-normal normal-case",
+                      "data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
+                    )}
+                  >
+                    <Icon size={16} strokeWidth={1.5} aria-hidden />
+                    <span>{label}</span>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              <p className="mt-auto px-3 pt-6 text-xs leading-relaxed text-muted-foreground">
+                Profile preferences stay with {profile.name}. Models and artwork are shared on this
+                Mac.
+              </p>
+            </aside>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <header className="flex items-start justify-between gap-4 border-b border-border p-6">
+                <div>
+                  <h2 className="font-display text-[28px] font-medium">{section.label}</h2>
+                  <p className="mt-2 text-sm text-muted-foreground">{section.description}</p>
+                </div>
+                <Dialog.Close
+                  className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label="Close settings"
+                >
+                  <X size={20} strokeWidth={1.5} aria-hidden />
+                </Dialog.Close>
+              </header>
+              <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-6">
+                <Reveal key={`${profile.id}:${active}`}>
+                  <TabsContent value="appearance">
+                    <AppearanceSection profileId={profile.id} />
+                  </TabsContent>
+                  <TabsContent value="playback">
+                    <PlaybackCaptionsSection profileId={profile.id} />
+                  </TabsContent>
+                  <TabsContent value="models">
+                    <ModelsSection />
+                  </TabsContent>
+                  <TabsContent value="storage">
+                    <StorageSection profileId={profile.id} />
+                  </TabsContent>
+                  <TabsContent value="catalog">
+                    <EnrichmentSection
+                      profileId={profile.id}
+                      onOpenModels={() => navigate("models")}
+                    />
+                  </TabsContent>
+                  <TabsContent value="sources">
+                    <SourcesEpgSection
+                      profileId={profile.id}
+                      onSourcesChanged={onSourcesChanged}
+                      onAddSource={() => {
+                        handoff.current = true;
+                        onAddSource();
+                      }}
+                    />
+                  </TabsContent>
+                  <TabsContent value="profile">
+                    <ProfileAboutSection
+                      profile={profile}
+                      onProfileUpdated={onProfileUpdated}
+                      onSwitchProfile={() => {
+                        handoff.current = true;
+                        onSwitchProfile();
+                      }}
+                    />
+                  </TabsContent>
+                </Reveal>
+              </div>
+            </div>
+          </Tabs>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

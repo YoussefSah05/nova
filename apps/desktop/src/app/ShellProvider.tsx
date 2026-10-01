@@ -19,14 +19,20 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   // ⌘K anywhere (except over the player) toggles the palette.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k" && !playing) {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "k" &&
+        !playing &&
+        !settingsOpen &&
+        !addSourceOpen
+      ) {
         e.preventDefault();
         setPaletteOpen((open) => !open);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [playing]);
+  }, [playing, settingsOpen, addSourceOpen]);
 
   const value = useMemo<Shell>(
     () => ({
@@ -54,11 +60,16 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       )}
       {settingsOpen && (
         <SettingsModal
+          key={session.profile.id}
           profile={session.profile}
           onClose={() => setSettingsOpen(false)}
           onSwitchProfile={session.switchProfile}
           onProfileUpdated={session.setProfile}
           onSourcesChanged={session.reloadSources}
+          onAddSource={() => {
+            setSettingsOpen(false);
+            setAddSourceOpen(true);
+          }}
         />
       )}
     </ShellContext.Provider>

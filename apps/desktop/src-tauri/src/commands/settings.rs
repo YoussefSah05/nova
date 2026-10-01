@@ -98,9 +98,13 @@ pub async fn remove_whisper_model(
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
 pub struct CacheStats {
+    #[cfg_attr(test, ts(type = "number"))]
     pub transcripts: i64,
+    #[cfg_attr(test, ts(type = "number"))]
     pub bytes: u64,
 }
 
@@ -132,9 +136,13 @@ pub async fn clear_transcription_cache(
 // ── Artwork cache ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
 pub struct ArtworkCacheStats {
+    #[cfg_attr(test, ts(type = "number"))]
     pub files: u64,
+    #[cfg_attr(test, ts(type = "number"))]
     pub bytes: u64,
 }
 

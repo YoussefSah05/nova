@@ -1,24 +1,23 @@
-//! Settings → Catalog Enrichment: download the on-device embedding model, run
-//! the de-dup / genre-fill pass, and configure the opt-in TMDB metadata layer
-//! (canonical titles, posters, backdrops, overviews, genres).
-
-import { useCallback, useEffect, useState } from "react";
+//! Catalog preferences and explicit enrichment. Installation lives in Models.
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-
+import { useQuery } from "@tanstack/react-query";
 import type { ProfileSettings, Source } from "@/types";
-import { DEFAULT_PROFILE_SETTINGS } from "@/types";
+import type { EnrichModelStatus } from "@/types/generated/EnrichModelStatus";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useProfileSettings } from "../useProfileSettings";
+import { modelKeys } from "../modelData";
 import {
   SelectInput,
   SettingRow,
   SettingsCard,
   SettingsButton,
+  SettingsError,
   TextInput,
   Toggle,
 } from "../SettingsUI";
 import { ChannelLogoDirectoryCard } from "./ChannelLogoDirectoryCard";
 
-/// Languages offered for TMDB titles/overviews (BCP-47 tags TMDB accepts).
 const METADATA_LANGUAGES = [
   { value: "en-US", label: "English" },
   { value: "fr-FR", label: "Français" },
@@ -31,142 +30,135 @@ const METADATA_LANGUAGES = [
   { value: "nl-NL", label: "Nederlands" },
 ];
 
-interface EnrichModelStatus {
-  installed: boolean;
-  modelId: string;
-}
-interface EnrichProgress {
-  sourceId: number;
-  stage: string;
-  processed: number;
-  total: number;
-  done: boolean;
-  error?: string | null;
-}
-
-export function EnrichmentSection({ profileId }: { profileId: string }) {
-  const [model, setModel] = useState<EnrichModelStatus | null>(null);
-  const [busy, setBusy] = useState<null | "download" | "run">(null);
-  const [progress, setProgress] = useState<EnrichProgress | null>(null);
-  const [settings, setSettings] = useState<ProfileSettings>(DEFAULT_PROFILE_SETTINGS);
-  // The token is write-only: the backend never returns it, so this draft is
-  // the only place it exists in the page, and only while being typed.
+export function EnrichmentSection({
+  profileId,
+  onOpenModels,
+}: {
+  profileId: string;
+  onOpenModels?: () => void;
+}) {
+  const { settings, saveSettings, loaded } = useProfileSettings(profileId);
+  const credential = useQuery({
+    queryKey: ["settings-credential", profileId],
+    staleTime: 0,
+    queryFn: () => invoke<ProfileSettings>("get_profile_settings", { profileId }),
+  });
+  const model = useQuery({
+    queryKey: modelKeys.embedding,
+    staleTime: 0,
+    queryFn: () => invoke<EnrichModelStatus>("get_enrich_model_status"),
+  });
   const [tokenDraft, setTokenDraft] = useState("");
   const [editingToken, setEditingToken] = useState(false);
+  const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    const [m, s] = await Promise.all([
-      invoke<EnrichModelStatus>("get_enrich_model_status"),
-      invoke<ProfileSettings>("get_profile_settings", { profileId }),
-    ]);
-    setModel(m);
-    setSettings(s);
-  }, [profileId]);
-
-  useEffect(() => {
-    void refresh();
-    const un = listen<EnrichProgress>("catalog:enrich:progress", (e) => {
-      setProgress(e.payload);
-      if (e.payload.done) {
-        setBusy(null);
-        // "no-model" means the marker vanished — re-sync so the button flips to Download.
-        if (e.payload.stage === "no-model") void refresh();
-      }
-    });
-    return () => {
-      void un.then((u) => u());
-    };
-  }, [refresh]);
-
-  const persist = async (next: ProfileSettings) => {
-    setSettings(next);
-    await invoke("set_profile_settings", { profileId, settings: next });
-  };
-
+  const [running, setRunning] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
   const saveToken = async () => {
+    setTokenBusy(true);
     setTokenError(null);
     try {
       await invoke("set_tmdb_credential", { profileId, credential: tokenDraft });
       setTokenDraft("");
       setEditingToken(false);
-      await refresh();
-    } catch (e) {
-      setTokenError((e as { message?: string } | null)?.message ?? "The token could not be saved.");
+      await credential.refetch();
+    } catch {
+      setTokenError("The token could not be saved. Try again.");
+    } finally {
+      setTokenBusy(false);
     }
   };
-
   const removeToken = async () => {
     if (!window.confirm("Remove the saved TMDB token? TMDB matching stops until a new one is set."))
       return;
-    await invoke("clear_tmdb_credential", { profileId });
-    setTokenDraft("");
-    setEditingToken(false);
-    await refresh();
-  };
-
-  const showTokenInput = !settings.tmdbCredentialConfigured || editingToken;
-
-  const download = async () => {
-    setBusy("download");
+    setTokenBusy(true);
+    setTokenError(null);
     try {
-      await invoke("download_enrich_models");
-      await refresh();
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const run = async () => {
-    setBusy("run");
-    setProgress(null);
-    try {
-      const sources = await invoke<Source[]>("list_sources", { profileId });
-      for (const s of sources) {
-        await invoke("start_enrichment", { profileId, sourceId: s.id });
-      }
+      await invoke("clear_tmdb_credential", { profileId });
+      setTokenDraft("");
+      setEditingToken(false);
+      await credential.refetch();
     } catch {
-      setBusy(null);
+      setTokenError("The token could not be removed. Try again.");
+    } finally {
+      setTokenBusy(false);
     }
-    // `busy` clears on the terminal `catalog:enrich:progress` event.
   };
-
-  const runLabel = (() => {
-    if (!progress || progress.done) return "Running…";
-    if (progress.stage === "queued") return "Waiting for available resources…";
-    if (progress.stage === "loading-model") return "Loading model…";
-    const stageWord =
-      progress.stage === "embedding"
-        ? "Embedding"
-        : progress.stage === "matching"
-          ? "Matching"
-          : "Working";
-    return progress.total > 0
-      ? `${stageWord} ${progress.processed}/${progress.total}`
-      : `${stageWord}…`;
-  })();
-
+  const run = async () => {
+    setRunning(true);
+    setMessage(null);
+    setRunError(null);
+    try {
+      const current = await model.refetch();
+      if (!current.data?.installed) {
+        setRunError("Download the catalog model in Models first.");
+        return;
+      }
+      const sources = await invoke<Source[]>("list_sources", { profileId });
+      for (const source of sources)
+        await invoke("start_enrichment", { profileId, sourceId: source.id });
+      setMessage(
+        sources.length
+          ? `Enrichment queued for ${sources.length} playlist${sources.length === 1 ? "" : "s"}. You can keep browsing.`
+          : "Add a playlist before running enrichment."
+      );
+    } catch {
+      setRunError(
+        "Couldn’t queue all playlists. Existing catalog content is still available; try again."
+      );
+    } finally {
+      setRunning(false);
+    }
+  };
+  const showTokenInput = !credential.data?.tmdbCredentialConfigured || editingToken;
+  if (credential.isError)
+    return (
+      <SettingsError
+        message="Couldn’t load catalog preferences."
+        retry={() => void credential.refetch()}
+      />
+    );
+  if (!loaded || credential.isPending)
+    return <Skeleton className="h-48" aria-label="Loading catalog preferences" />;
   return (
     <div className="flex flex-col gap-6">
-      <SettingsCard title="On-device model">
+      <SettingsCard title="Catalog enrichment">
         <SettingRow
-          title="Embedding model"
+          title="Refresh catalog intelligence"
           description={
-            model ? `${model.modelId} · ${model.installed ? "installed" : "not installed"}` : "…"
+            model.data?.installed
+              ? "Fill missing genres and update search for your playlists."
+              : "The catalog model is managed in Models."
           }
         >
-          {model?.installed ? (
-            <SettingsButton variant="primary" onClick={run} disabled={busy !== null}>
-              {busy === "run" ? runLabel : "Run enrichment"}
+          {model.data?.installed ? (
+            <SettingsButton variant="primary" onClick={() => void run()} disabled={running}>
+              {running ? "Queuing…" : "Run enrichment"}
             </SettingsButton>
           ) : (
-            <SettingsButton variant="primary" onClick={download} disabled={busy !== null}>
-              {busy === "download" ? "Downloading…" : "Download (~120MB)"}
-            </SettingsButton>
+            <SettingsButton onClick={() => onOpenModels?.()}>Open Models</SettingsButton>
           )}
         </SettingRow>
+        {model.isError && (
+          <div className="pb-4">
+            <SettingsError
+              message="Couldn’t check the catalog model."
+              retry={() => void model.refetch()}
+            />
+          </div>
+        )}
+        {message && (
+          <p role="status" className="pb-4 text-xs text-muted-foreground">
+            {message}
+          </p>
+        )}
+        {runError && (
+          <div className="pb-4">
+            <SettingsError message={runError} />
+          </div>
+        )}
       </SettingsCard>
-
       <SettingsCard title="TMDB metadata (optional)">
         <SettingRow
           title="Use TMDB"
@@ -174,7 +166,7 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
         >
           <Toggle
             checked={settings.tmdbEnabled}
-            onChange={(v) => void persist({ ...settings, tmdbEnabled: v })}
+            onChange={(v) => void saveSettings({ tmdbEnabled: v })}
             label="Use TMDB"
           />
         </SettingRow>
@@ -185,7 +177,7 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
           <SelectInput
             value={settings.metadataLanguage}
             options={METADATA_LANGUAGES}
-            onChange={(v) => void persist({ ...settings, metadataLanguage: v })}
+            onChange={(v) => void saveSettings({ metadataLanguage: v })}
             ariaLabel="TMDB title language"
           />
         </SettingRow>
@@ -203,11 +195,11 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
               <SettingsButton
                 variant="primary"
                 onClick={() => void saveToken()}
-                disabled={tokenDraft.trim() === ""}
+                disabled={tokenDraft.trim() === "" || tokenBusy}
               >
                 Save
               </SettingsButton>
-              {settings.tmdbCredentialConfigured && (
+              {credential.data?.tmdbCredentialConfigured && (
                 <SettingsButton
                   onClick={() => {
                     setTokenDraft("");
@@ -225,10 +217,16 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
                 className="flex-1 font-mono text-sm text-white/70"
                 aria-label="Saved TMDB token"
               >
-                Token saved ••••{settings.tmdbCredentialHint}
+                Token saved ••••{credential.data?.tmdbCredentialHint}
               </span>
-              <SettingsButton onClick={() => setEditingToken(true)}>Replace</SettingsButton>
-              <SettingsButton variant="danger" onClick={() => void removeToken()}>
+              <SettingsButton disabled={tokenBusy} onClick={() => setEditingToken(true)}>
+                Replace
+              </SettingsButton>
+              <SettingsButton
+                variant="danger"
+                disabled={tokenBusy}
+                onClick={() => void removeToken()}
+              >
                 Remove
               </SettingsButton>
             </div>
@@ -242,13 +240,18 @@ export function EnrichmentSection({ profileId }: { profileId: string }) {
         </div>
       </SettingsCard>
 
-      <ChannelLogoDirectoryCard profileId={profileId} settings={settings} persist={persist} />
+      <ChannelLogoDirectoryCard
+        profileId={profileId}
+        settings={settings}
+        persist={async (next) => {
+          await saveSettings({ logoDirectoryEnabled: next.logoDirectoryEnabled });
+        }}
+      />
 
       <p className="text-xs text-white/40">
-        Cleans the catalog with on-device AI: collapses duplicate channels/movies into one card and
-        fills in missing genres. Runs automatically after an import once the model is installed —
-        re-run here anytime. This product uses the TMDB API but is not endorsed or certified by
-        TMDB.
+        Catalog enrichment fills missing genres and improves search with on-device AI. Runs
+        automatically after an import once the model is installed. This product uses the TMDB API
+        but is not endorsed or certified by TMDB.
       </p>
     </div>
   );

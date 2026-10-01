@@ -28,6 +28,8 @@ pub struct InternalModelStatus {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalModelStatus {
     pub model_id: String,
@@ -36,20 +38,26 @@ pub struct ExternalModelStatus {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalLibraryStatus {
     pub library_id: String,
     pub display_name: String,
     pub availability: String,
+    #[cfg_attr(test, ts(type = "number"))]
     pub observed_at: i64,
     pub models: Vec<ExternalModelStatus>,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
 pub struct ModelRuntimeStatus {
     pub loaded_models: usize,
     pub active_leases: usize,
+    #[cfg_attr(test, ts(type = "number"))]
     pub estimated_resident_bytes: u64,
     pub unknown_resident_models: usize,
     pub busy_models: usize,

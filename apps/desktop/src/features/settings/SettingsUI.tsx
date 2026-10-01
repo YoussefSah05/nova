@@ -15,23 +15,25 @@ export function SettingRow({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-6 py-3">
-      <div className="min-w-0">
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4">
+      <div className="min-w-0 flex-1 basis-48">
         <p className="text-sm font-medium text-white">{title}</p>
-        {description && <p className="mt-0.5 text-xs text-white/50">{description}</p>}
+        {description && (
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground break-words">
+            {description}
+          </p>
+        )}
       </div>
-      {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
+      {children && <div className="flex max-w-full flex-wrap items-center gap-2">{children}</div>}
     </div>
   );
 }
 
 export function SettingsCard({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-xl border border-white/10 bg-white/[0.02] px-4">
+    <section className="nova-glass rounded-xl border border-border px-4">
       {title && (
-        <p className="border-b border-white/5 py-3 text-[11px] font-semibold uppercase tracking-wider text-white/45">
-          {title}
-        </p>
+        <h3 className="border-b border-border py-4 text-sm font-medium text-foreground">{title}</h3>
       )}
       <div className="divide-y divide-white/5">{children}</div>
     </section>
@@ -55,13 +57,23 @@ export function SelectInput<T extends string>({
   options,
   onChange,
   ariaLabel,
+  disabled,
 }: {
   value: T;
   options: { value: T; label: string }[];
   onChange: (v: T) => void;
   ariaLabel?: string;
+  disabled?: boolean;
 }) {
-  return <SimpleSelect value={value} options={options} onChange={onChange} ariaLabel={ariaLabel} />;
+  return (
+    <SimpleSelect
+      value={value}
+      options={options}
+      onChange={onChange}
+      ariaLabel={ariaLabel}
+      disabled={disabled}
+    />
+  );
 }
 
 export function TextInput({
@@ -111,7 +123,7 @@ export function SettingsButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
         variant === "primary" && "bg-primary text-primary-foreground hover:brightness-110",
         variant === "danger" && "bg-rose-500/15 text-rose-300 hover:bg-rose-500/25",
         variant === "default" && "bg-white/10 text-white/85 hover:bg-white/20"
@@ -119,5 +131,17 @@ export function SettingsButton({
     >
       {children}
     </button>
+  );
+}
+
+export function SettingsError({ message, retry }: { message: string; retry?: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm"
+    >
+      <p>{message}</p>
+      {retry && <SettingsButton onClick={retry}>Try again</SettingsButton>}
+    </div>
   );
 }

@@ -50,3 +50,6 @@ objc2-web-kit = { workspace = true }
 objc2-av-foundation = { workspace = true }
 objc2-av-kit = { workspace = true }
 objc2-core-media = { workspace = true }
+
+[dev-dependencies]
+ts-rs = { workspace = true }

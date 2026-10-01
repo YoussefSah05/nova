@@ -6,7 +6,7 @@
 //! Both states are stacked layers whose opacity changes (compositor-only):
 //! the blur itself is never switched on and off while scrolling.
 
-import { memo } from "react";
+import { memo, useRef } from "react";
 import {
   ChevronLeftIcon,
   LogOutIcon,
@@ -38,11 +38,12 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
   const shell = useShell();
   const { sourceTotals, refreshing } = useSessionStatus();
   const { sources, activeSourceId } = session;
+  const settingsHandoff = useRef(false);
 
   return (
     <header
       data-tauri-drag-region="deep"
-      className="fixed inset-x-0 top-0 z-40 flex h-[72px] items-center gap-6 pl-[88px] pr-6"
+      className="fixed inset-x-0 top-0 z-40 flex h-[72px] items-center gap-3 pl-[88px] pr-6 xl:gap-6"
     >
       <div
         aria-hidden
@@ -59,7 +60,7 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
         )}
       />
 
-      <div className="relative flex items-center gap-2">
+      <div className="relative flex shrink-0 items-center gap-2">
         <button
           type="button"
           onClick={() => nav.switchTo("home")}
@@ -82,7 +83,7 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
         )}
       </div>
 
-      <nav aria-label="Sections" className="relative flex items-center gap-1">
+      <nav aria-label="Sections" className="relative flex shrink-0 items-center gap-1">
         {SECTIONS.map((id) => (
           <SectionButton
             key={id}
@@ -99,11 +100,11 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
         type="button"
         onClick={() => shell.setPaletteOpen(true)}
         aria-label="Search, or tell Nova what you want"
-        className="relative flex h-[38px] w-[320px] items-center gap-2.5 rounded-xl border border-white/[0.12] bg-white/[0.05] pl-3.5 pr-2 text-sm text-white/60 transition-colors hover:border-white/20 hover:bg-white/[0.08] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="relative flex h-[38px] w-[320px] min-w-0 items-center gap-2.5 rounded-xl border border-white/[0.12] bg-white/[0.05] pl-3.5 pr-2 text-sm text-white/60 transition-colors hover:border-white/20 hover:bg-white/[0.08] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <SearchIcon className="h-4 w-4" strokeWidth={1.5} aria-hidden />
-        <span className="flex-1 truncate text-left">Search titles, channels…</span>
-        <kbd className="rounded-md border border-white/[0.14] px-1.5 py-0.5 font-sans text-xs text-white/70">
+        <SearchIcon className="h-4 w-4 shrink-0" strokeWidth={1.5} aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-left">Search titles, channels…</span>
+        <kbd className="shrink-0 rounded-md border border-white/[0.14] px-1.5 py-0.5 font-sans text-xs text-white/70">
           ⌘K
         </kbd>
       </button>
@@ -120,7 +121,7 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
           }))}
           onChange={(v) => session.setActiveSourceId(Number(v))}
           ariaLabel="Playlist"
-          className="relative h-[38px] min-w-[160px] rounded-xl border-white/10 bg-white/[0.04]"
+          className="relative h-[38px] w-40 shrink-0 rounded-xl border-white/10 bg-white/[0.04] [&>span]:truncate"
         />
       )}
 
@@ -129,7 +130,7 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
           <button
             type="button"
             aria-label="Profile and settings"
-            className="relative flex h-[38px] w-[38px] items-center justify-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="relative flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <span
               className="flex h-[30px] w-[30px] items-center justify-center rounded-full text-xs font-medium text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,.14)]"
@@ -139,9 +140,23 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
             </span>
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuContent
+          align="end"
+          className="w-56"
+          onCloseAutoFocus={(event) => {
+            if (settingsHandoff.current) {
+              event.preventDefault();
+              settingsHandoff.current = false;
+              shell.openSettings();
+            }
+          }}
+        >
           <DropdownMenuLabel>{session.profile.name}</DropdownMenuLabel>
-          <DropdownMenuItem onSelect={shell.openSettings}>
+          <DropdownMenuItem
+            onSelect={() => {
+              settingsHandoff.current = true;
+            }}
+          >
             <SettingsIcon className="h-4 w-4" strokeWidth={1.5} aria-hidden /> Settings
           </DropdownMenuItem>
           <DropdownMenuItem

@@ -87,6 +87,7 @@ export function SimpleSelect<T extends string>({
   ariaLabel,
   placeholder,
   className,
+  disabled,
 }: {
   value: T;
   options: { value: T; label: string }[];
@@ -94,9 +95,10 @@ export function SimpleSelect<T extends string>({
   ariaLabel?: string;
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
-    <Select value={value} onValueChange={(v) => onChange(v as T)}>
+    <Select value={value} onValueChange={(v) => onChange(v as T)} disabled={disabled}>
       <SelectTrigger aria-label={ariaLabel} className={className}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>

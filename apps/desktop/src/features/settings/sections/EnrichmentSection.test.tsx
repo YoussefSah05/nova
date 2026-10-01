@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 
 import { DEFAULT_PROFILE_SETTINGS, type ProfileSettings } from "@/types";
@@ -43,8 +44,13 @@ function backend(initial: Partial<ProfileSettings> = {}) {
 }
 
 async function renderSection() {
-  render(<EnrichmentSection profileId="p1" />);
-  await act(async () => {});
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <EnrichmentSection profileId="p1" />
+    </QueryClientProvider>
+  );
+  await screen.findByLabelText("TMDB API Read Access Token");
 }
 
 describe("TMDB credential in settings", () => {

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { Profile } from "@/types";
-import { SettingRow, SettingsCard, SettingsButton, TextInput } from "../SettingsUI";
+import { SettingRow, SettingsCard, SettingsButton, TextInput, SettingsError } from "../SettingsUI";
 import { formatBytes } from "../format";
 
 const AVATAR_COLORS = ["#6366f1", "#ec4899", "#f59e0b", "#10b981", "#3b82f6", "#ef4444"];
@@ -27,6 +27,7 @@ export function ProfileAboutSection({
 }) {
   const [name, setName] = useState(profile.name);
   const [color, setColor] = useState(profile.avatarColor);
+  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [info, setInfo] = useState<AppInfo | null>(null);
 
@@ -40,6 +41,7 @@ export function ProfileAboutSection({
   const save = async () => {
     if (!dirty || !name.trim()) return;
     setSaving(true);
+    setError(null);
     try {
       const updated = await invoke<Profile>("update_profile", {
         id: profile.id,
@@ -47,6 +49,8 @@ export function ProfileAboutSection({
         avatarColor: color,
       });
       onProfileUpdated(updated);
+    } catch {
+      setError("Couldn’t save your profile. Try again.");
     } finally {
       setSaving(false);
     }
@@ -54,12 +58,21 @@ export function ProfileAboutSection({
   const remove = async () => {
     if (!window.confirm(`Delete profile “${profile.name}”? This removes its library and settings.`))
       return;
-    await invoke("delete_profile", { id: profile.id });
-    onSwitchProfile();
+    setSaving(true);
+    setError(null);
+    try {
+      await invoke("delete_profile", { id: profile.id });
+      onSwitchProfile();
+    } catch {
+      setError("Couldn’t delete the profile. Try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div className="flex flex-col gap-6">
+      {error && <SettingsError message={error} />}
       <SettingsCard title="Profile">
         <SettingRow title="Name">
           <div className="w-56">
@@ -75,7 +88,7 @@ export function ProfileAboutSection({
                 aria-label={`Colour ${c}`}
                 aria-pressed={color === c}
                 onClick={() => setColor(c)}
-                className="h-7 w-7 rounded-full border-2 transition-transform hover:scale-110"
+                className="h-7 w-7 rounded-full border-2 transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 style={{ backgroundColor: c, borderColor: color === c ? "#fff" : "transparent" }}
               />
             ))}
@@ -97,7 +110,7 @@ export function ProfileAboutSection({
           <SettingsButton onClick={onSwitchProfile}>Switch</SettingsButton>
         </SettingRow>
         <SettingRow title="Delete this profile" description="Permanently removes this profile.">
-          <SettingsButton variant="danger" onClick={remove}>
+          <SettingsButton variant="danger" onClick={remove} disabled={saving}>
             Delete
           </SettingsButton>
         </SettingRow>

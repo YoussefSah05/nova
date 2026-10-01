@@ -428,6 +428,24 @@ describe("AppShell", () => {
     mocks.listen.mockResolvedValue(() => {});
   });
 
+  it("hands focus from the profile menu to Settings and restores it on close", async () => {
+    setupInvoke(() => [channel(1)]);
+    renderShell();
+    const user = userEvent.setup();
+    const trigger = await screen.findByRole("button", { name: "Profile and settings" });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("menuitem", { name: "Settings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    for (let i = 0; i < 18; i++) {
+      await user.tab();
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    }
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument();
+  });
+
   it("shows each section's count for the selected playlist", async () => {
     setupInvoke(() => [channel(1)]);
 

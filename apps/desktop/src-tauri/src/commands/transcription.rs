@@ -21,14 +21,20 @@ use crate::state::AppState;
 use super::require_profile_pool;
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
 struct ModelDownloadEvent {
     artifact: String,
+    #[cfg_attr(test, ts(type = "number"))]
     downloaded_bytes: u64,
+    #[cfg_attr(test, ts(type = "number | null"))]
     total_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
 pub struct ModelStatus {
     pub installed: bool,

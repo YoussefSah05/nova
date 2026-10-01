@@ -33,7 +33,7 @@ export function AppearanceSection({ profileId }: { profileId: string }) {
                   aria-pressed={active}
                   title={t.label}
                   className={cn(
-                    "flex h-10 w-10 items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-neutral-950 transition-transform hover:scale-110 focus-visible:outline-none",
+                    "flex h-10 w-10 items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-neutral-950 transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-primary",
                     active ? "ring-white" : "ring-transparent"
                   )}
                   style={{ background: `linear-gradient(to bottom, ${t.hi}, ${t.lo})` }}
