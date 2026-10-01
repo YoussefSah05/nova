@@ -22,6 +22,7 @@ pub mod channel_logos;
 pub mod discovery;
 pub mod enrich;
 pub mod epg;
+pub mod library;
 pub mod models;
 pub mod movies;
 pub mod playback;

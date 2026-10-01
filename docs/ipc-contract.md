@@ -30,6 +30,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `list_movie_decades` | `{ profileId, sourceId }` | `{ decade, count, posterUrls }[]` — newest first, up to 4 posters | UI-2 |
 | `list_library_collections` | `{ profileId, sourceId }` | `{ id, name, count, posterUrls }[]` — TMDB collections with 2+ films in the playlist, known from fetched facts | UI-2 |
 | `count_movies` | `{ profileId, sourceId, filters? }` | `number` | P07 |
+| `list_library_history` | `{ profileId, sourceId, kind?: 'vod'\|'episode'\|'live', limit?, offset? }` | `LibraryHistoryItem[]` — latest watch per canonical film, durable episode or current channel in the playlist; includes completed and unavailable items (`mediaId: null`), newest first with a stable key tie-break. Default limit 51, clamped 1–100; offset non-negative. No stream URLs. Generated DTO: `just bindings`. | UI-6 |
 | `get_movie` | `{ profileId, entityId }` | `CanonicalMediaDetail` (summary + `variants[]` with `badges`, `recentlyFailed` and `picked` — the variant selector's first choice for the profile's audio language — + entity `resume`, `originalTitle`, `releaseDate`, `voteCount`, `keywords`) | P07, UI-2 |
 | `set_movie_favorite` | `{ profileId, entityId, isFavorite }` | `void` | P07 |
 | `set_movie_in_watchlist` | `{ profileId, entityId, inWatchlist }` | `void` | P07 |

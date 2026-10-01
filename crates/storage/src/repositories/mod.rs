@@ -8,6 +8,7 @@ pub mod enrich;
 pub mod epg_sources;
 pub mod external_matches;
 pub mod jobs;
+pub mod library_history;
 pub mod models;
 pub mod playback;
 pub mod profile_settings;
@@ -41,6 +42,7 @@ pub use external_matches::{
     MatchedMetadata, MovieMatchWork, TMDB_MOVIE,
 };
 pub use jobs::{Job, JobRepository};
+pub use library_history::{LibraryHistoryItem, LibraryHistoryRepository};
 pub use models::{
     ExternalLibraryRecord, ExternalRegisteredModel, ModelRepository, RegisteredModel,
 };

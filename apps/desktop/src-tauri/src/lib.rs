@@ -192,6 +192,7 @@ pub fn run() {
             commands::set_vod_in_watchlist,
             commands::set_series_in_watchlist,
             commands::list_continue_watching,
+            commands::library::list_library_history,
             // Phase 4 — EPG
             commands::epg::epg_now_and_next,
             commands::epg::epg_range,

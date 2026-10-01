@@ -70,18 +70,25 @@ export function PlaybackProvider({ children }: { children: ReactNode }) {
     [resolveMovie]
   );
 
-  const close = useCallback(() => {
-    setMedia(null);
+  const refreshProgress = useCallback(() => {
     void qc.invalidateQueries({ queryKey: browseKeys.continueWatching(profile.id) });
     invalidateDetailProgress(qc, profile.id);
     // Shows' watched counts (Continue cards, series pages, the wall).
     void qc.invalidateQueries({
       predicate: (q) =>
         q.queryKey[1] === profile.id &&
-        (q.queryKey[3] === "seriesCards" ||
+        (q.queryKey[3] === "history" ||
+          q.queryKey[3] === "seriesCards" ||
           (q.queryKey[3] === "grid" && q.queryKey[4] === "series")),
     });
   }, [qc, profile.id]);
+
+  const close = useCallback(() => {
+    setMedia(null);
+    // Also refresh failed opens; successful sessions refresh again after their
+    // asynchronous final progress write through onProgressSaved.
+    refreshProgress();
+  }, [refreshProgress]);
 
   const value = useMemo<Playback>(
     () => ({ playItem, playVariant, playMedia: setMedia }),
@@ -96,6 +103,7 @@ export function PlaybackProvider({ children }: { children: ReactNode }) {
           profileId={profile.id}
           media={media}
           onClose={close}
+          onProgressSaved={refreshProgress}
           sourceId={activeSourceId}
           onPlayMedia={setMedia}
         />

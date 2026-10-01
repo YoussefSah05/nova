@@ -803,11 +803,48 @@ follow-up. UI-5 is complete within the scope and qualification limits recorded b
   smoke is not full device/performance certification; the web fallback was not exercised on
   device. M26's real-profile upgrade qualification remains separate.
 
+### Frontend redesign, UI-6: Library and history — 2026-10-01
+
+- **Contract:** `docs/implementation/ui-6-library.md`. Library now has keyboard-accessible
+  Watchlist, Favourites and History views scoped to the selected playlist. Saved views reuse
+  the existing bounded, virtualized grids, card actions and detail navigation; films/shows
+  have A–Z and playlist-added ordering, with search across every media type. Channels retain
+  their existing family grouping. Empty states offer a relevant browse or clear-search action.
+- **History:** a read-only `list_library_history` command reads durable canonical film and
+  episode progress plus current live-channel history. It includes completed titles and
+  unavailable films/episodes, groups by local date, and pages 50 rows with one-row lookahead.
+  Each row is the latest watch of that film, episode or channel, not a session event log.
+  Resume, Watch again and Watch live use the existing player; completed playback starts at
+  zero. Missing media has no playback action. No migration or new AI/provider work.
+- **Lifecycle:** source changes reset controls; hidden screens unsubscribe from queries.
+  Saved-item toggles invalidate membership grids/counts. Catalog refresh invalidates history;
+  player teardown refreshes it again after the final asynchronous progress write, fixing
+  a race found in independent review. Unsupported channel sort controls were also removed.
+- **IPC types:** the new DTO is generated from Rust through a test-only `ts-rs` dependency;
+  `just bindings` regenerates and formats it. Existing handwritten DTOs are unchanged.
+- **Automated validation:** `just lint`, `just typecheck`, `just test` pass: **621 Rust tests,
+  5 environment-dependent tests ignored; 123 frontend tests**. Formatting and diff checks
+  pass. New regressions cover scope, deterministic paging, completed/unavailable media,
+  episode reattachment, filters/source reset, empty/retry states, playback intents, saved
+  membership invalidation and delayed final progress writes. Independent review verified fixes.
+- **Native validation:** debug Tauri app build passed. An isolated synthetic profile on
+  macOS verified Watchlist/Favourites separation, removal through the film page followed
+  by the empty Watchlist, date-grouped history, completed and unavailable states, episode
+  filtering, and filter preservation after playback. A completed film replayed at **0:00**;
+  a saved 25-second episode resumed at **0:24** (the existing one-second start lead-in).
+  Closing playback immediately refreshed progress and changed the film action to Resume.
+  Artwork fallback and layouts were visually inspected. No user profiles were modified.
+- **Limits:** unavailable episodes lack retained episode title/numbering-kind metadata.
+  Saved coordinates may be synthetic, so they show the series name and “Episode” with
+  date/progress rather than invented numbering. Live history requires a current channel row.
+  No clear-history control or playback-event diary. Real-provider refresh qualification and
+  M26's real-profile upgrade qualification remain separate. Native smoke is not full
+  device/performance certification; the web fallback was not exercised on device.
+
 ### Next dependency
 
-**UI-6: Library/history**, followed by **UI-7: Settings/Models**. UI-1–UI-5 are implemented;
-UI-1–UI-4 have recorded automated validation, and their
-status entries still note native-device checks outstanding. M26 still needs a real profile copy.
+**UI-7: Settings/Models**. UI-1–UI-6 are implemented. Earlier phase entries retain their
+stated device validation limits. M26 still needs a real profile copy.
 
 ---
 

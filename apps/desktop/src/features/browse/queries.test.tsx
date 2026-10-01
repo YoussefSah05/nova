@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import type { CanonicalMediaSummary, SeriesSummary } from "@/types";
 import {
   browseKeys,
+  invalidateMembershipRails,
   fetchBrowsePage,
   patchItemEverywhere,
   seriesToItem,
@@ -121,5 +122,21 @@ it("a toggle patches show cards read as summaries, and rolls back", () => {
   expect(client.getQueryData<SeriesSummary[]>(key)?.[0].isFavorite).toBe(true);
   undo();
   expect(client.getQueryData<SeriesSummary[]>(key)?.[0].isFavorite).toBe(false);
+  client.clear();
+});
+
+it("refreshes saved grids and their counts without invalidating unrelated views", async () => {
+  const client = new QueryClient();
+  const saved = { watchlistOnly: true };
+  const grid = [...browseKeys.grid("p", 1, "movies", saved), 0];
+  const count = browseKeys.count("p", 1, "movies", saved);
+  const regular = [...browseKeys.grid("p", 1, "movies", {}), 0];
+  const otherSource = [...browseKeys.grid("p", 2, "movies", saved), 0];
+  for (const key of [grid, count, regular, otherSource]) client.setQueryData(key, []);
+  invalidateMembershipRails(client, "p", 1, "movies");
+  expect(client.getQueryState(grid)?.isInvalidated).toBe(true);
+  expect(client.getQueryState(count)?.isInvalidated).toBe(true);
+  expect(client.getQueryState(regular)?.isInvalidated).toBe(false);
+  expect(client.getQueryState(otherSource)?.isInvalidated).toBe(false);
   client.clear();
 });

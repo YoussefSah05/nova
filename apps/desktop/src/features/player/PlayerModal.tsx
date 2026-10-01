@@ -83,6 +83,8 @@ interface PlayerModalProps {
   profileId: string;
   media: PlayMedia;
   onClose: () => void;
+  /// Refresh progress views only after the player's final write has settled.
+  onProgressSaved?: () => void;
   /// Active source — enables the cinema-mode live channel strip.
   sourceId?: number | null;
   /// Switch the player to other media (used by the cinema live channel strip).
@@ -209,6 +211,7 @@ export function PlayerModal({
   profileId,
   media,
   onClose,
+  onProgressSaved,
   sourceId,
   onPlayMedia,
 }: PlayerModalProps) {
@@ -216,6 +219,10 @@ export function PlayerModal({
   const videoRegionRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const progressSavedRef = useRef(onProgressSaved);
+  useEffect(() => {
+    progressSavedRef.current = onProgressSaved;
+  }, [onProgressSaved]);
 
   const isLive = media.kind === "live";
   const guide = useChannelGuide(media.id, { profileId, enabled: isLive });
@@ -427,7 +434,10 @@ export function PlayerModal({
           },
           () => cancelled
         );
-        if (cancelled || !result) return;
+        if (cancelled || !result) {
+          progressSavedRef.current?.();
+          return;
+        }
         nativeOpeningRef.current = false;
         nativeTokenRef.current = result.token;
         setNativeToken(result.token);
@@ -452,7 +462,9 @@ export function PlayerModal({
     return () => {
       const token = nativeTokenRef.current;
       if (token) {
-        void closeNativePlayback(token).catch(() => undefined);
+        void closeNativePlayback(token)
+          .catch(() => undefined)
+          .then(() => progressSavedRef.current?.());
         nativeTokenRef.current = null;
       }
     };
@@ -935,10 +947,10 @@ export function PlayerModal({
     if (!video || !ready) return;
 
     const tick = () => {
-      if (!Number.isFinite(video.currentTime)) return;
+      if (!Number.isFinite(video.currentTime)) return Promise.resolve();
       const dur = Number.isFinite(video.duration) ? video.duration : null;
       const completed = dur !== null && video.currentTime / dur >= COMPLETED_THRESHOLD;
-      void invoke("record_watch_progress", {
+      return invoke("record_watch_progress", {
         profileId,
         mediaKind: media.kind,
         mediaId: media.id,
@@ -958,7 +970,7 @@ export function PlayerModal({
     return () => {
       window.clearInterval(interval);
       video.removeEventListener("pause", tick);
-      tick();
+      void tick().then(() => progressSavedRef.current?.());
     };
   }, [nativeToken, ready, profileId, media.kind, media.id]);
 

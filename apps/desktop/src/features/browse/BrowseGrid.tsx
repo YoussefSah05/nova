@@ -3,7 +3,7 @@
 //! container width; items are chunked into rows and only on-screen rows mount,
 //! so the grid stays smooth across tens of thousands of results.
 
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { RotateCwIcon, SearchXIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ interface BrowseGridProps extends PosterCardHandlers {
   scrollRef: RefObject<HTMLElement | null>;
   /// `landscape`: wide show cards (series), fewer per row.
   layout?: "poster" | "landscape";
+  emptyState?: ReactNode;
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -86,6 +87,7 @@ function BrowseGridBody({
   filters,
   scrollRef,
   layout = "poster",
+  emptyState,
   ...handlers
 }: BrowseGridProps & { width: number }) {
   const identity = JSON.stringify([tab, profileId, sourceId, filters]);
@@ -139,6 +141,7 @@ function BrowseGridBody({
   }
 
   if (items.length === 0 && offset === 0) {
+    if (emptyState) return <>{emptyState}</>;
     return (
       <Card className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
         <SearchXIcon className="h-8 w-8 text-muted-foreground" aria-hidden />

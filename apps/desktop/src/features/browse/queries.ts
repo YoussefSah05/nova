@@ -809,4 +809,13 @@ export function invalidateMembershipRails(
   for (const spec of [FAVORITES_RAIL, WATCHLIST_RAIL]) {
     void qc.invalidateQueries({ queryKey: browseKeys.rail(profileId, sourceId, tab, spec.id) });
   }
+  // Library's saved views need new membership and totals after a toggle.
+  void qc.invalidateQueries({
+    queryKey: browseKeys.source(profileId, sourceId),
+    predicate: (q) => {
+      if (q.queryKey[4] !== tab || !["grid", "count"].includes(String(q.queryKey[3]))) return false;
+      const filters = q.queryKey[5] as BrowseFilters | undefined;
+      return Boolean(filters?.favoritesOnly || filters?.watchlistOnly);
+    },
+  });
 }

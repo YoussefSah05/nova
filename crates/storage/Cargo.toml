@@ -25,4 +25,5 @@ security-framework = { workspace = true }
 core-foundation = { workspace = true }
 
 [dev-dependencies]
+ts-rs = { workspace = true }
 nova-search = { path = "../search" }

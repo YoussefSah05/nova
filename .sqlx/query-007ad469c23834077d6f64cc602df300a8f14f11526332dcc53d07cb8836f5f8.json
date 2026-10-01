@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH history AS (\n              SELECT 'movie:' || c.id AS key, 'vod' AS media_kind, v.id AS media_id,\n                     c.id AS entity_id, COALESCE(v.canonical_title, c.title) AS title,\n                     COALESCE(v.poster_url, v.logo_url) AS poster_url,\n                     NULL AS season, NULL AS episode, NULL AS episode_title, 0 AS numbered,\n                     w.position_sec, w.duration_sec, w.watched_at, w.completed\n              FROM entity_watch_state w\n              JOIN canonical_entities c ON c.id = w.entity_id AND c.state = 'active'\n              LEFT JOIN vod_items v ON v.id = (\n                SELECT MIN(s.vod_item_id) FROM stream_variants s\n                WHERE s.entity_id = c.id AND s.source_id = ?1)\n              WHERE EXISTS (SELECT 1 FROM stream_variants s\n                            WHERE s.entity_id = c.id AND s.source_id = ?1)\n              UNION ALL\n              SELECT 'episode:' || w.series_entity_id || ':' || w.episode_key,\n                     'episode', e.id, c.id, COALESCE(sm.canonical_title, c.title),\n                     COALESCE(sm.poster_url, e.logo_url),\n                     COALESCE(e.season, w.season), COALESCE(e.episode, w.episode),\n                     e.episode_title, COALESCE(e.numbering = 'season_episode', 0),\n                     w.position_sec, w.duration_sec, w.watched_at, w.completed\n              FROM episode_watch_state w\n              JOIN canonical_entities c ON c.id = w.series_entity_id AND c.state = 'active'\n              JOIN series_bindings b ON b.source_id = ?1 AND b.binding_key = (\n                SELECT MIN(b2.binding_key) FROM series_bindings b2\n                WHERE b2.entity_id = c.id AND b2.source_id = ?1)\n              LEFT JOIN series_episodes e ON e.id = (\n                SELECT MIN(e2.id) FROM series_episodes e2\n                JOIN series_bindings b2 ON b2.source_id = e2.source_id\n                  AND b2.series_title = e2.series_title\n                WHERE b2.entity_id = c.id AND b2.source_id = ?1\n                  AND e2.episode_key = w.episode_key)\n              LEFT JOIN series_meta sm ON sm.source_id = ?1\n                AND sm.series_title = COALESCE(e.series_title, b.series_title)\n              UNION ALL\n              SELECT 'live:' || c.id, 'live', c.id, NULL, c.name,\n                     c.logo_url, NULL, NULL, NULL, 0,\n                     0.0, NULL, w.watched_at, 0\n              FROM watch_history w\n              JOIN channels c ON w.media_kind = 'live' AND c.id = w.media_id\n              WHERE c.source_id = ?1\n            )\n            SELECT key as \"key!: String\", media_kind as \"media_kind!: String\",\n                   media_id as \"media_id?: i64\", entity_id as \"entity_id?: String\",\n                   title as \"title!: String\", poster_url as \"poster_url?: String\",\n                   season as \"season?: i64\", episode as \"episode?: i64\",\n                   episode_title as \"episode_title?: String\", numbered as \"numbered!: bool\",\n                   position_sec as \"position_sec!: f64\", duration_sec as \"duration_sec?: f64\",\n                   watched_at as \"watched_at!: i64\", completed as \"completed!: bool\"\n            FROM history WHERE (?2 IS NULL OR media_kind = ?2)\n            ORDER BY watched_at DESC, key ASC LIMIT ?3 OFFSET ?4",
+  "describe": {
+    "columns": [
+      {
+        "name": "key!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "media_kind!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "media_id?: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "entity_id?: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster_url?: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "season?: i64",
+        "ordinal": 6,
+        "type_info": "Null"
+      },
+      {
+        "name": "episode?: i64",
+        "ordinal": 7,
+        "type_info": "Null"
+      },
+      {
+        "name": "episode_title?: String",
+        "ordinal": 8,
+        "type_info": "Null"
+      },
+      {
+        "name": "numbered!: bool",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "position_sec!: f64",
+        "ordinal": 10,
+        "type_info": "Float"
+      },
+      {
+        "name": "duration_sec?: f64",
+        "ordinal": 11,
+        "type_info": "Float"
+      },
+      {
+        "name": "watched_at!: i64",
+        "ordinal": 12,
+        "type_info": "Integer"
+      },
+      {
+        "name": "completed!: bool",
+        "ordinal": 13,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "007ad469c23834077d6f64cc602df300a8f14f11526332dcc53d07cb8836f5f8"
+}
