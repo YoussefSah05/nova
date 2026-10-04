@@ -57,6 +57,7 @@ export const PosterCard = memo(function PosterCard({
       <ContextMenuTrigger asChild>
         <div
           ref={cardRef}
+          data-card
           onMouseEnter={(e) => {
             preview.onEnter(e);
             prefetch.onEnter();

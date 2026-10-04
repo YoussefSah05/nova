@@ -14,6 +14,9 @@ import { cn } from "@/lib/utils";
 import { ScreenActiveContext } from "@/lib/screenActive";
 import { ScreenScrollContext } from "./screenContext";
 
+/// Quiet time after the last scroll event before the pointer is live again.
+const SCROLL_IDLE_MS = 150;
+
 export const Screen = memo(function Screen({
   active,
   label,
@@ -42,11 +45,37 @@ export const Screen = memo(function Screen({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // While the screen scrolls, its cards ignore the pointer: cards passing
+    // under a resting cursor would otherwise each run hover styles (large
+    // shadow repaints in WebKit) and start hover previews and detail
+    // prefetches mid-scroll. A class on the container, never a React render;
+    // two style passes per gesture. Rails and the screen keep the wheel.
+    let idle = 0;
     const onScroll = () => {
-      if (activeRef.current) savedTop.current = el.scrollTop;
+      if (!activeRef.current) return;
+      savedTop.current = el.scrollTop;
+      if (!idle) el.classList.add("nova-scrolling");
+      window.clearTimeout(idle);
+      idle = window.setTimeout(() => {
+        idle = 0;
+        el.classList.remove("nova-scrolling");
+      }, SCROLL_IDLE_MS);
+    };
+    // A real pointer move hands the cards back at once (e.g. to click one
+    // while momentum is still settling); synthetic zero-distance moves don't.
+    const onPointerMove = (event: PointerEvent) => {
+      if (!idle || !(event.movementX || event.movementY)) return;
+      window.clearTimeout(idle);
+      idle = 0;
+      el.classList.remove("nova-scrolling");
     };
     el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
+    el.addEventListener("pointermove", onPointerMove, { passive: true });
+    return () => {
+      window.clearTimeout(idle);
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("pointermove", onPointerMove);
+    };
   }, []);
 
   // Scrolled past the top ↔ the sentinel left the viewport. One observer

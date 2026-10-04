@@ -42,6 +42,7 @@ export const ShowCard = memo(function ShowCard({
         <div
           onMouseEnter={prefetch.onEnter}
           onMouseLeave={prefetch.onLeave}
+          data-card
           className="group relative flex min-w-0 flex-col gap-2.5 [contain:layout_paint]"
         >
           <button
