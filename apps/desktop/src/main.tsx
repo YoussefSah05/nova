@@ -19,3 +19,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>
 );
+
+// Hand over from the static boot mark once React has painted. createRoot commits
+// asynchronously, so wait two frames; removal is unconditional, never stuck.
+requestAnimationFrame(() =>
+  requestAnimationFrame(() => {
+    const boot = document.getElementById("nova-boot");
+    if (!boot) return;
+    boot.dataset.done = "";
+    window.setTimeout(() => boot.remove(), 250);
+  })
+);

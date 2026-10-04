@@ -1045,6 +1045,63 @@ and [converter usage](../crates/storage/examples/README.md).
   M26 remains **PARTIAL**; no later milestone started. All approved frontend work is
   preserved, uncommitted.
 
+### Launch and profile picker on the Nova identity — 2026-10-04
+
+- **Scope:** frontend only (no IPC, schema or backend changes); approved by the user
+  as part of the identity pass. Builds on the M26 branch for the recovery dialog.
+- **Launch:**
+  - The window background is `#0a0a0c`, in both the main and validation configs.
+  - `index.html` paints the Nova mark before any bundle loads; `main.tsx` fades it
+    out after React's first frame. Launch no longer flashes white or shows the old
+    unstyled page.
+- **Picker:**
+  - Rebuilt on the shell identity: the TopBar's mark and wordmark, aligned to the
+    traffic-light inset, with Manage moved into the bar.
+  - A time-of-day greeting in Bricolage at weight 500 replaces "Who's watching?".
+  - Glass cards show when each profile was last used, its resume title in amber (its
+    own content) and its library line.
+  - New states: loading skeletons, a first-run welcome with one CTA, a load-failure
+    message, and an "Opening…" card that dims the other choices while a profile opens.
+  - Edit and delete are now real buttons; they were invalid nested `span role=button`
+    elements. The animated aurora (two full-screen blurred layers) is replaced by a
+    static warm light.
+- **Intelligence strip:**
+  - Shows real app-level state from `get_model_status` / `get_enrich_model_status`:
+    dialogue transcription and semantic search, each Ready or Not installed.
+  - Ask Nova is labelled "Coming with intelligence".
+  - Neutral and dashed, per the derived-UI convention; never amber.
+- **Validation:** 161 frontend tests pass, including 11 new picker tests (recency,
+  honest intelligence states, failed reads, first run, load retry, opening/blocking,
+  recovery on failure, manage buttons, last-profile delete). Typecheck, lint and
+  production build pass.
+  - Independent review found an invisible backdrop (stacking context) and seven
+    smaller issues: a failed model read shown as "Not installed", no retry after a
+    failed profile load, sticky manage mode, focusable dimmed cards, a clipped glow,
+    boot-fade timing, and a silent failed delete. All were fixed and covered.
+  - Headless screenshots of the real entry with synthetic mock IPC at 1280×800 covered
+    profiles, empty and loading. The temporary preview page was removed.
+  - Not yet seen in the native app.
+
+### Observed: Movies takes a long time to load — 2026-10-04 (reported, not fixed)
+
+- **Report:** on a real library (~28.6K movies), opening Movies takes noticeable time
+  before everything appears.
+- **Initial analysis (unmeasured):**
+  - Movies starts about seven catalog-wide queries at once: total count, genres,
+    decades, collections, filtered count, spotlight and the first grid page.
+  - The profile pool allows only 4 connections, so these run in at least two waves.
+  - Genre and decade facets aggregate the whole canonical catalog on every open of a
+    new source or profile.
+- **Proposed slice:** time each command against the 30K-movie synthetic profile from
+  `just recovery-fixture`, after its conversion. Fix the measured bottleneck, not the
+  hypothesis. Candidates:
+  - cache or persist facet aggregates per catalog version;
+  - render the grid first and load facets after it;
+  - indexes found from query plans.
+
+  This sits with M27 scale qualification and must keep the keep-alive and
+  `subscribed` screen rules.
+
 ### Next dependency
 
 **UI-1–UI-7 are implemented.** Earlier phase entries retain their stated device validation

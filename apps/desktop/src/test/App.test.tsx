@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi } from "vitest";
 import App from "../App";
 
@@ -7,8 +8,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 describe("App", () => {
-  it("renders the profile picker", () => {
-    render(<App />);
-    expect(screen.getByText("Who's watching?")).toBeInTheDocument();
+  it("launches into the profile picker", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>
+    );
+    expect(screen.getByText("Nova")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading profiles" })).toBeInTheDocument();
   });
 });

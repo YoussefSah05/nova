@@ -70,7 +70,7 @@ export function CreateProfileModal({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.2, ease: EASE_ENTER }}
       >
-        <h2 className="font-display text-lg font-semibold text-white">{title}</h2>
+        <h2 className="font-display text-lg font-medium text-white">{title}</h2>
 
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-white/50 uppercase tracking-wider">Name</label>
