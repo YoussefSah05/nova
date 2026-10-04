@@ -42,3 +42,10 @@ The opt-in test converts only a temporary copy and removes it afterward. It prin
 counts and elapsed time only. A successful conversion does not authorize replacing
 an installed profile. Normal startup still refuses the divergent original. The old
 schema-6 checksum with unknown provenance is intentionally unsupported.
+
+## Native validation fixture
+
+`recovery_validation_fixture` builds a synthetic data root (`app.db` plus legacy,
+unknown-lineage and healthy profiles) in an absolute, empty directory and refuses
+anything else. Use it with `just recovery-fixture` / `just dev-validation`; the steps
+are in `docs/implementation/m26-native-recovery-checklist.md`.

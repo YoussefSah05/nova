@@ -277,8 +277,11 @@ has the same results.
 
   All were fixed and covered by regressions. The remaining plausible races are
   bounded above.
-- **Not yet done:** native app validation, with a separate debug bundle ID and a
-  synthetic `NOVA_VALIDATION_DIR`.
+- **Not yet done:** native app validation. The tooling is ready:
+  - `just recovery-fixture` builds the synthetic data root;
+  - `just dev-validation` starts the app with the identifier
+    `app.nova.desktop.validation` and refuses relative or real data roots;
+  - the steps are in [`m26-native-recovery-checklist.md`](m26-native-recovery-checklist.md).
 
 Recover the schema-6 migration provenance; it remains refused. Address intentional
 flag promotion for duplicate rows before broadening accepted datasets. Qualify native

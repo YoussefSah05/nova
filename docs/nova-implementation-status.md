@@ -1036,7 +1036,9 @@ and [converter usage](../crates/storage/examples/README.md).
     - a library-level cancel during registration;
     - an empty directory created between the vacancy check and the rename.
 - **Remaining for M26:**
-  - native recovery and interruption validation in an isolated debug app;
+  - native recovery and interruption validation in an isolated debug app. Tooling and
+    checklist are ready:
+    [`implementation/m26-native-recovery-checklist.md`](implementation/m26-native-recovery-checklist.md);
   - migration-6 provenance;
   - duplicate-flag promotion.
 

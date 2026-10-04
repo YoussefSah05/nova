@@ -30,6 +30,17 @@ fixture-provider:
 test-fixtures:
     cargo test -p nova-iptv-fixture --locked
 
+# Synthetic data root for native profile-recovery validation (absolute, empty dir)
+recovery-fixture dir:
+    cargo run -p nova-storage --locked --example recovery_validation_fixture -- {{dir}}
+
+# Debug app with its own identity, pointed at a synthetic data root (never real profiles)
+# A relative path is ignored by the app, which would then open the real data root.
+dev-validation dir:
+    @case "{{dir}}" in /*) ;; *) echo "dir must be an absolute path"; exit 1;; esac
+    @test -f "{{dir}}/app.db" || { echo "no synthetic app.db; run: just recovery-fixture {{dir}}"; exit 1; }
+    NOVA_VALIDATION_DIR={{dir}} pnpm -C apps/desktop exec tauri dev --config src-tauri/tauri.validation.conf.json
+
 # Start the Tauri dev window
 dev:
     pnpm dev
