@@ -47,7 +47,7 @@ export function CaptionPicker({ mode, onChange, open, onClose, sourceNote }: Cap
       ref={ref}
       role="menu"
       className={cn(
-        "nova-glass absolute bottom-12 right-0 z-30 w-64 overflow-hidden rounded-lg",
+        "nova-glass nova-panel-enter absolute bottom-12 right-0 z-30 w-64 overflow-hidden rounded-xl",
         "text-sm text-white"
       )}
     >
@@ -82,6 +82,12 @@ export function CaptionPicker({ mode, onChange, open, onClose, sourceNote }: Cap
           );
         })}
       </ul>
+      <div className="border-t border-white/10 px-3 py-3">
+        <p className="text-xs text-primary">Translation & dual captions</p>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          Coming with the intelligence upgrade. Source captions are available today.
+        </p>
+      </div>
     </div>
   );
 }

@@ -194,6 +194,44 @@ html.nova-native-player-active .nova-native-player-shell * {
   animation: nova-fade-in var(--duration-fast) var(--ease-enter);
 }
 
+/* One entrance per screen activation, never per virtualized row. No persistent
+   will-change layers, no layout/blur animation and no per-frame JS work. */
+.nova-screen-enter {
+  animation: nova-fade-in 200ms var(--ease-enter);
+}
+
+.nova-showcase-enter {
+  animation: nova-fade-in 400ms var(--ease-enter);
+}
+
+@keyframes nova-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.nova-panel-enter {
+  animation: nova-panel-in 200ms var(--ease-enter);
+}
+
+/* CSS controls and portaled menus share the OS preference too. MotionConfig
+   handles JS-driven transforms; this covers CSS hover/press and shimmer. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .nova-fade-in {
     animation: none;

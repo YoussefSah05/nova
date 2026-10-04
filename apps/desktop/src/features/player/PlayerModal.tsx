@@ -13,6 +13,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import Hls, { type ErrorData } from "hls.js";
 import {
   AudioLines,
+  Sparkles,
   Clapperboard,
   ScrollText,
   Gauge,
@@ -47,7 +48,7 @@ import { useProfileSettings } from "@/features/settings/useProfileSettings";
 
 import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
 import { CaptionButton } from "./CaptionPicker";
-import { TranscriptPanel } from "./TranscriptPanel";
+import { PlayerCompanion, type CompanionTab } from "./PlayerCompanion";
 import { CaptionStyleButton } from "./CaptionStylePanel";
 import { CinemaEpisodeBrowser } from "./CinemaEpisodeBrowser";
 import { episodeToMedia } from "./episodeMedia";
@@ -280,7 +281,13 @@ export function PlayerModal({
   // -- caption state (Phase 5: inert; Phase 6/7 will populate the cue arrays) --
   const [captionMode, setCaptionMode] = useState<CaptionMode>("off");
   const [captionMenuOpen, setCaptionMenuOpen] = useState(false);
-  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [companionTab, setCompanionTab] = useState<CompanionTab | null>(null);
+  const companionTriggerRef = useRef<HTMLButtonElement>(null);
+  const companionOpen = companionTab !== null;
+  const closeCompanion = () => {
+    setCompanionTab(null);
+    companionTriggerRef.current?.focus();
+  };
   const [captionStyleOpen, setCaptionStyleOpen] = useState(false);
   const captionStyleState = useCaptionStyle(profileId);
 
@@ -1012,7 +1019,7 @@ export function PlayerModal({
     if (!USE_MPV_ENGINE) return;
     const el = videoRegionRef.current;
     const pushRect = () => {
-      if (!cinema || !el) {
+      if ((!cinema && !companionOpen) || !el) {
         void invoke("mpv_set_video_rect", { rect: null }).catch(() => undefined);
         return;
       }
@@ -1023,7 +1030,7 @@ export function PlayerModal({
     };
 
     pushRect();
-    if (!cinema || !el) return;
+    if ((!cinema && !companionOpen) || !el) return;
 
     const ro = new ResizeObserver(pushRect);
     ro.observe(el);
@@ -1034,7 +1041,7 @@ export function PlayerModal({
       // Restore full-window video when leaving cinema or unmounting.
       void invoke("mpv_set_video_rect", { rect: null }).catch(() => undefined);
     };
-  }, [cinema, nativeEmbedded]);
+  }, [cinema, companionOpen, nativeEmbedded]);
 
   // -- Imperative actions -------------------------------------------------
   const togglePlay = useCallback(() => {
@@ -1251,13 +1258,29 @@ export function PlayerModal({
   const revealControls = useCallback(() => {
     setControlsVisible(true);
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
-    const shouldAutoHide = USE_MPV_ENGINE ? playing : !videoRef.current?.paused;
+    const menuOpen =
+      captionMenuOpen ||
+      captionStyleOpen ||
+      audioMenuOpen ||
+      qualityMenuOpen ||
+      speedMenuOpen ||
+      companionOpen;
+    const shouldAutoHide = !menuOpen && (USE_MPV_ENGINE ? playing : !videoRef.current?.paused);
     if (shouldAutoHide) {
       hideTimerRef.current = window.setTimeout(() => {
-        setControlsVisible(false);
+        if (!containerRef.current?.querySelector("[data-controls]:focus-within"))
+          setControlsVisible(false);
       }, CONTROLS_HIDE_DELAY_MS);
     }
-  }, [playing]);
+  }, [
+    playing,
+    captionMenuOpen,
+    captionStyleOpen,
+    audioMenuOpen,
+    qualityMenuOpen,
+    speedMenuOpen,
+    companionOpen,
+  ]);
 
   useEffect(() => {
     if (!playing) {
@@ -1283,7 +1306,19 @@ export function PlayerModal({
       // Don't hijack typing in inputs (defensive - none exist in the modal
       // today but easy to add later).
       const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+      if (e.defaultPrevented) return;
+      if (e.key === "Escape" && companionOpen) {
+        e.preventDefault();
+        setCompanionTab(null);
+        companionTriggerRef.current?.focus();
+        return;
+      }
+      if (target?.closest("input, textarea, select, [contenteditable=true], [role=menu]")) return;
+      if (
+        target?.closest("button") &&
+        [" ", "Enter", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)
+      )
+        return;
 
       switch (e.key) {
         case "Escape":
@@ -1392,6 +1427,7 @@ export function PlayerModal({
     toggleFullscreen,
     exitFullscreenIfActive,
     cinema,
+    companionOpen,
     togglePip,
     stepFrame,
     flashSkip,
@@ -1417,7 +1453,7 @@ export function PlayerModal({
       if (last && now - last.t < DOUBLE_TAP_WINDOW_MS && Math.abs(last.x - x) < 60) {
         // Double tap - left third = -10, right third = +10, middle = fullscreen.
         lastTapRef.current = null;
-        const ratio = x / w;
+        const ratio = (x - e.currentTarget.getBoundingClientRect().left) / w;
         if (ratio < 0.35 && !isLive) {
           seekBy(-SKIP_SECONDS);
           flashSkip(-1);
@@ -1490,366 +1526,404 @@ export function PlayerModal({
       ref={containerRef}
       className={cn(
         "nova-native-player-shell fixed inset-0 z-50 flex flex-col select-none",
-        USE_MPV_ENGINE && nativeEmbedded ? "bg-transparent" : "bg-black",
+        USE_MPV_ENGINE && nativeEmbedded ? "bg-transparent" : "bg-background",
         // When controls hide we also hide the cursor.
         !controlsVisible && playing && "cursor-none"
       )}
       onPointerMove={revealControls}
     >
-      <div
-        ref={videoRegionRef}
-        className="relative flex-1 overflow-hidden"
-        onPointerDown={onSurfacePointerDown}
-      >
-        {USE_MPV_ENGINE ? (
-          <NativePlaybackBackdrop
-            posterUrl={media.posterUrl}
-            title={media.title}
-            playing={playing}
-            buffering={buffering}
-            embedded={nativeEmbedded}
-            cover={!hasPainted}
-          />
-        ) : (
-          <video
-            ref={videoRef}
-            poster={media.posterUrl ?? undefined}
-            autoPlay
-            playsInline
-            preload="auto"
-            className="absolute inset-0 h-full w-full bg-black"
-          />
-        )}
-
-        {/* AirPlay placeholder while streaming to an external device. */}
-        {airplay.engaged && (
-          <AirPlayOverlay
-            title={media.title}
-            isLive={isLive}
-            status={airplay.status}
-            onStop={airplay.stop}
-          />
-        )}
-
-        {/* Caption overlay - Phase 6 source captions. */}
-        <CaptionOverlay
-          mode={captionMode}
-          sourceCues={sourceCues}
-          currentTime={currentTime}
-          captionStyle={captionStyleState.style}
-        />
-
-        {/* Caption status banner: model-download prompt, preparing, or error.
-            Hidden once cues are streaming (status "streaming" with cues). */}
-        {captionMode === "source" &&
-          sourceCaptions.status !== "idle" &&
-          sourceCaptions.status !== "complete" &&
-          !(sourceCaptions.status === "streaming" && sourceCues.length > 0) && (
-            <div className="absolute inset-x-0 bottom-[22%] z-10 flex justify-center px-6">
-              <div
-                className={cn(
-                  "flex items-center gap-3 rounded-full bg-black/75 px-4 py-1.5 text-sm text-white/90",
-                  "border border-white/10 shadow-lg backdrop-blur-md"
-                )}
-              >
-                {sourceCaptions.status === "needsModel" ? (
-                  <>
-                    <span>Captions need a one-time model download (~500MB)</span>
-                    <button
-                      type="button"
-                      onClick={sourceCaptions.downloadModel}
-                      className="rounded-full bg-[var(--color-accent)] px-3 py-0.5 text-xs font-semibold text-white hover:brightness-110"
-                    >
-                      Download
-                    </button>
-                  </>
-                ) : sourceCaptions.status === "failed" ? (
-                  <>
-                    <span className="text-rose-300">
-                      Captions failed{sourceCaptions.error ? `: ${sourceCaptions.error}` : ""}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={sourceCaptions.downloadModel}
-                      className="rounded-full bg-white/15 px-3 py-0.5 text-xs font-semibold hover:bg-white/25"
-                    >
-                      Retry
-                    </button>
-                  </>
-                ) : (
-                  <span>
-                    Preparing captions — {sourceCaptionNote(sourceCaptions) ?? "working…"}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-
-        {/* Skip indicator (+-10s) */}
-        {skipIndicator && (
-          <div
-            key={skipIndicator.key}
-            className={cn(
-              "pointer-events-none absolute top-1/2 -translate-y-1/2 flex h-24 w-24 items-center justify-center rounded-full bg-white/10 backdrop-blur-md text-white",
-              "animate-[skip-pop_500ms_ease-out_forwards]",
-              skipIndicator.dir < 0 ? "left-[18%]" : "right-[18%]"
-            )}
-          >
-            {skipIndicator.dir < 0 ? (
-              <SkipBack className="h-9 w-9" />
-            ) : (
-              <SkipForward className="h-9 w-9" />
-            )}
-          </div>
-        )}
-
-        {/* Startup / buffering banner */}
-        {loadingVisible && (
-          <LoadingBanner
-            percent={visibleLoadingPct}
-            title={
-              USE_MPV_ENGINE
-                ? (recoveryNote ?? nativeLoadingTitle(loadingPhase))
-                : loadingTitle(loadingPhase, resolved)
-            }
-            detail={loadingDetail}
-          />
-        )}
-
-        {/* Center play button when paused (gives the empty state weight) */}
-        {!playing && ready && !buffering && !error && (
-          <button
-            data-controls
-            onClick={togglePlay}
-            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex h-20 w-20 items-center justify-center rounded-full bg-white/15 backdrop-blur-md text-white transition-all hover:bg-white/25 hover:scale-105 active:scale-95"
-            aria-label="Play"
-          >
-            <Play className="h-9 w-9 fill-current ml-1" />
-          </button>
-        )}
-
-        {/* Error overlay */}
-        {error && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/85 text-white">
-            <p className="text-sm text-white/80">{error}</p>
-            <button
-              onClick={onClose}
-              className="rounded-lg bg-white/10 px-4 py-1.5 text-xs font-medium transition-colors hover:bg-white/20"
-            >
-              Close
-            </button>
-          </div>
-        )}
-
-        {/* Top chrome: gradient + title + close (also the window drag handle) */}
+      <div className="flex min-h-0 flex-1">
         <div
-          data-controls
-          data-tauri-drag-region
-          className={cn(
-            "absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-4 px-6 pt-5 pb-12",
-            "bg-gradient-to-b from-black/85 via-black/40 to-transparent",
-            "transition-opacity duration-200",
-            controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
-          )}
+          ref={videoRegionRef}
+          className="relative min-w-0 flex-1 overflow-hidden"
+          onPointerDown={onSurfacePointerDown}
         >
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-base font-medium text-white drop-shadow-md">
-              {media.title}
-            </p>
-            {media.subtitle && (
-              <p className="truncate text-xs text-white/65 mt-0.5 drop-shadow-md">
-                {media.subtitle}
-              </p>
-            )}
-            {isLive && (
-              <GuideSummary guide={guide} tone="overlay" className="mt-2 max-w-md drop-shadow-md" />
-            )}
-          </div>
-          <button
-            onClick={onClose}
-            className="shrink-0 rounded-full bg-white/10 p-2 text-white/85 backdrop-blur-sm transition-all hover:bg-white/20 hover:text-white hover:scale-105"
-            aria-label="Close player"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* Bottom chrome: scrubber + controls row */}
-        <div
-          data-controls
-          className={cn(
-            "absolute inset-x-0 bottom-0 z-10 px-6 pt-12 pb-4",
-            "bg-gradient-to-t from-black/90 via-black/55 to-transparent",
-            "transition-opacity duration-200",
-            controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
-          )}
-        >
-          {isLive ? (
-            <LiveBar
-              atLiveEdge={atLiveEdge}
-              onJumpToLive={seekToLiveEdge}
-              bufferedPct={bufferedPct}
-              progressPct={progressPct}
+          {USE_MPV_ENGINE ? (
+            <NativePlaybackBackdrop
+              posterUrl={media.posterUrl}
+              title={media.title}
+              playing={playing}
+              buffering={buffering}
+              embedded={nativeEmbedded}
+              cover={!hasPainted}
             />
           ) : (
-            <Scrubber
-              progressPct={progressPct}
-              bufferedPct={bufferedPct}
-              duration={duration}
-              onSeek={seekTo}
+            <video
+              ref={videoRef}
+              poster={media.posterUrl ?? undefined}
+              autoPlay
+              playsInline
+              preload="auto"
+              className="absolute inset-0 h-full w-full bg-black"
             />
           )}
 
-          <div className="mt-2 flex items-center gap-3 text-white">
-            <IconButton onClick={togglePlay} label={playing ? "Pause" : "Play"}>
-              {playing ? (
-                <Pause className="h-5 w-5 fill-current" />
-              ) : (
-                <Play className="h-5 w-5 fill-current" />
-              )}
-            </IconButton>
+          {/* AirPlay placeholder while streaming to an external device. */}
+          {airplay.engaged && (
+            <AirPlayOverlay
+              title={media.title}
+              isLive={isLive}
+              status={airplay.status}
+              onStop={airplay.stop}
+            />
+          )}
 
-            {!isLive && (
-              <>
-                <IconButton onClick={() => seekBy(-SKIP_SECONDS)} label="Back 10 seconds">
-                  <SkipBack className="h-5 w-5" />
-                </IconButton>
-                <IconButton onClick={() => seekBy(SKIP_SECONDS)} label="Forward 10 seconds">
-                  <SkipForward className="h-5 w-5" />
-                </IconButton>
-              </>
+          {/* Caption overlay - Phase 6 source captions. */}
+          <CaptionOverlay
+            mode={captionMode}
+            sourceCues={sourceCues}
+            currentTime={currentTime}
+            captionStyle={captionStyleState.style}
+          />
+
+          {/* Caption status banner: model-download prompt, preparing, or error.
+            Hidden once cues are streaming (status "streaming" with cues). */}
+          {captionMode === "source" &&
+            sourceCaptions.status !== "idle" &&
+            sourceCaptions.status !== "complete" &&
+            !(sourceCaptions.status === "streaming" && sourceCues.length > 0) && (
+              <div className="absolute inset-x-0 bottom-[22%] z-10 flex justify-center px-6">
+                <div
+                  className={cn(
+                    "flex items-center gap-3 rounded-full bg-black/75 px-4 py-1.5 text-sm text-white/90",
+                    "border border-white/10 shadow-lg backdrop-blur-md"
+                  )}
+                >
+                  {sourceCaptions.status === "needsModel" ? (
+                    <>
+                      <span>Captions need a one-time model download (~500MB)</span>
+                      <button
+                        type="button"
+                        onClick={sourceCaptions.downloadModel}
+                        className="rounded-full bg-[var(--color-accent)] px-3 py-0.5 text-xs font-semibold text-white hover:brightness-110"
+                      >
+                        Download
+                      </button>
+                    </>
+                  ) : sourceCaptions.status === "failed" ? (
+                    <>
+                      <span className="text-rose-300">
+                        Captions failed{sourceCaptions.error ? `: ${sourceCaptions.error}` : ""}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={sourceCaptions.downloadModel}
+                        className="rounded-full bg-white/15 px-3 py-0.5 text-xs font-semibold hover:bg-white/25"
+                      >
+                        Retry
+                      </button>
+                    </>
+                  ) : (
+                    <span>
+                      Preparing captions — {sourceCaptionNote(sourceCaptions) ?? "working…"}
+                    </span>
+                  )}
+                </div>
+              </div>
             )}
 
-            <VolumeControl
-              volume={volume}
-              muted={muted}
-              onToggleMute={toggleMute}
-              onChange={setVol}
-            />
-
-            <div className="text-xs tabular-nums text-white/85">
-              {isLive ? (
-                <span className="flex items-center gap-1.5">
-                  <Radio className="h-3.5 w-3.5 text-red-500" />
-                  <span className="font-medium tracking-wide">LIVE</span>
-                </span>
+          {/* Skip indicator (+-10s) */}
+          {skipIndicator && (
+            <div
+              key={skipIndicator.key}
+              className={cn(
+                "pointer-events-none absolute top-1/2 -translate-y-1/2 flex h-24 w-24 items-center justify-center rounded-full bg-white/10 backdrop-blur-md text-white",
+                "animate-[skip-pop_500ms_ease-out_forwards]",
+                skipIndicator.dir < 0 ? "left-[18%]" : "right-[18%]"
+              )}
+            >
+              {skipIndicator.dir < 0 ? (
+                <SkipBack className="h-9 w-9" />
               ) : (
-                <>
-                  <span>{formatTime(currentTime)}</span>
-                  <span className="text-white/40"> / </span>
-                  <span className="text-white/65">{formatTime(duration)}</span>
-                </>
+                <SkipForward className="h-9 w-9" />
               )}
             </div>
+          )}
 
-            <div className="flex-1" />
-
-            {audioTracks.length >= 2 && (
-              <ChromeMenu
-                icon={<AudioLines className="h-5 w-5" />}
-                label="Audio track"
-                heading="Audio"
-                active={audioMenuOpen}
-                open={audioMenuOpen}
-                onToggle={() => setAudioMenuOpen((v) => !v)}
-                onClose={() => setAudioMenuOpen(false)}
-                options={audioTracks.map((t) => ({
-                  key: String(t.id),
-                  label: trackLabel(t),
-                  active: audioTrackId === t.id,
-                }))}
-                onSelect={(key) => selectAudioTrack(Number(key))}
-              />
-            )}
-
-            {videoTracks.length >= 2 && (
-              <ChromeMenu
-                icon={<MonitorCog className="h-5 w-5" />}
-                label="Quality"
-                heading="Quality"
-                active={qualityMenuOpen}
-                open={qualityMenuOpen}
-                onToggle={() => setQualityMenuOpen((v) => !v)}
-                onClose={() => setQualityMenuOpen(false)}
-                options={videoTracks.map((t) => ({
-                  key: String(t.id),
-                  label: trackLabel(t),
-                  active: videoTrackId === t.id,
-                }))}
-                onSelect={(key) => selectVideoTrack(Number(key))}
-              />
-            )}
-
-            {!isLive && (
-              <ChromeMenu
-                icon={<Gauge className="h-5 w-5" />}
-                label="Playback speed"
-                heading="Speed"
-                active={speedMenuOpen || Math.abs(speed - 1) > 0.01}
-                open={speedMenuOpen}
-                onToggle={() => setSpeedMenuOpen((v) => !v)}
-                onClose={() => setSpeedMenuOpen(false)}
-                options={SPEED_OPTIONS.map((rate) => ({
-                  key: String(rate),
-                  label: rate === 1 ? "Normal" : `${rate}×`,
-                  active: Math.abs(speed - rate) < 0.01,
-                }))}
-                onSelect={(key) => changeSpeed(Number(key))}
-              />
-            )}
-
-            <CaptionButton
-              mode={captionMode}
-              onChange={setCaptionMode}
-              open={captionMenuOpen}
-              onToggle={() => setCaptionMenuOpen((v) => !v)}
-              onClose={() => setCaptionMenuOpen(false)}
-              sourceNote={sourceCaptionNote(sourceCaptions)}
+          {/* Startup / buffering banner */}
+          {loadingVisible && (
+            <LoadingBanner
+              percent={visibleLoadingPct}
+              title={
+                USE_MPV_ENGINE
+                  ? (recoveryNote ?? nativeLoadingTitle(loadingPhase))
+                  : loadingTitle(loadingPhase, resolved)
+              }
+              detail={loadingDetail}
             />
+          )}
 
-            {/* Caption-style ("Aa") controls — only while captions are showing. */}
-            {captionMode !== "off" && (
-              <CaptionStyleButton
-                style={captionStyleState.style}
-                onChange={captionStyleState.setStyle}
-                open={captionStyleOpen}
-                onToggle={() => setCaptionStyleOpen((v) => !v)}
-                onClose={() => setCaptionStyleOpen(false)}
+          {/* Center play button when paused (gives the empty state weight) */}
+          {!playing && ready && !buffering && !error && (
+            <button
+              data-controls
+              onClick={togglePlay}
+              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex h-20 w-20 items-center justify-center rounded-full bg-white/15 backdrop-blur-md text-white transition-all hover:bg-white/25 hover:scale-105 active:scale-95"
+              aria-label="Play"
+            >
+              <Play className="h-9 w-9 fill-current ml-1" />
+            </button>
+          )}
+
+          {/* Error overlay */}
+          {error && (
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/85 text-white">
+              <p className="text-sm text-white/80">{error}</p>
+              <button
+                onClick={onClose}
+                className="rounded-lg bg-white/10 px-4 py-1.5 text-xs font-medium transition-colors hover:bg-white/20"
+              >
+                Close
+              </button>
+            </div>
+          )}
+
+          {/* Top chrome: gradient + title + close (also the window drag handle) */}
+          <div
+            data-controls
+            data-tauri-drag-region
+            className={cn(
+              "absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-4 px-6 pt-5 pb-12",
+              "bg-gradient-to-b from-black/85 via-black/40 to-transparent",
+              "transition-opacity duration-200",
+              controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
+            )}
+          >
+            <div className="min-w-0 flex-1">
+              <p className="mb-2 text-xs tracking-[0.16em] text-primary">
+                NOVA · {isLive ? "LIVE TV" : media.kind === "episode" ? "SERIES" : "PLAYER"}
+              </p>
+              <p className="truncate font-display text-xl font-medium text-white drop-shadow-md">
+                {media.title}
+              </p>
+              {media.subtitle && (
+                <p className="truncate text-xs text-white/65 mt-0.5 drop-shadow-md">
+                  {media.subtitle}
+                </p>
+              )}
+              {isLive && (
+                <GuideSummary
+                  guide={guide}
+                  tone="overlay"
+                  className="mt-2 max-w-md drop-shadow-md"
+                />
+              )}
+            </div>
+            <button
+              ref={companionTriggerRef}
+              type="button"
+              aria-label="Nova companion"
+              aria-expanded={companionOpen}
+              onClick={() => setCompanionTab(companionOpen ? null : "now")}
+              className="flex shrink-0 items-center gap-2 rounded-full border border-primary/30 bg-background/80 px-3 py-2 text-sm text-primary transition-colors hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Sparkles className="h-4 w-4" strokeWidth={1.5} /> Nova
+            </button>
+            <button
+              onClick={onClose}
+              className="shrink-0 rounded-full bg-white/10 p-2 text-white/85 backdrop-blur-sm transition-all hover:bg-white/20 hover:text-white hover:scale-105"
+              aria-label="Close player"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* Bottom chrome: scrubber + controls row */}
+          <div
+            data-controls
+            className={cn(
+              "absolute inset-x-0 bottom-0 z-10 px-6 pt-12 pb-4",
+              "bg-gradient-to-t from-black/90 via-black/55 to-transparent",
+              "transition-opacity duration-200",
+              controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
+            )}
+          >
+            {isLive ? (
+              <LiveBar
+                atLiveEdge={atLiveEdge}
+                onJumpToLive={seekToLiveEdge}
+                bufferedPct={bufferedPct}
+                progressPct={progressPct}
+              />
+            ) : (
+              <Scrubber
+                progressPct={progressPct}
+                bufferedPct={bufferedPct}
+                duration={duration}
+                onSeek={seekTo}
               />
             )}
 
-            {!isLive && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-white">
+              <IconButton onClick={togglePlay} label={playing ? "Pause" : "Play"}>
+                {playing ? (
+                  <Pause className="h-5 w-5 fill-current" />
+                ) : (
+                  <Play className="h-5 w-5 fill-current" />
+                )}
+              </IconButton>
+
+              {!isLive && (
+                <>
+                  <IconButton onClick={() => seekBy(-SKIP_SECONDS)} label="Back 10 seconds">
+                    <SkipBack className="h-5 w-5" />
+                  </IconButton>
+                  <IconButton onClick={() => seekBy(SKIP_SECONDS)} label="Forward 10 seconds">
+                    <SkipForward className="h-5 w-5" />
+                  </IconButton>
+                </>
+              )}
+
+              <VolumeControl
+                volume={volume}
+                muted={muted}
+                onToggleMute={toggleMute}
+                onChange={setVol}
+              />
+
+              <div className="text-xs tabular-nums text-white/85">
+                {isLive ? (
+                  <span className="flex items-center gap-1.5">
+                    <Radio className="h-3.5 w-3.5 text-red-500" />
+                    <span className="font-medium tracking-wide">LIVE</span>
+                  </span>
+                ) : (
+                  <>
+                    <span>{formatTime(currentTime)}</span>
+                    <span className="text-white/40"> / </span>
+                    <span className="text-white/65">{formatTime(duration)}</span>
+                  </>
+                )}
+              </div>
+
+              <div className="flex-1" />
+
+              {audioTracks.length >= 2 && (
+                <ChromeMenu
+                  icon={<AudioLines className="h-5 w-5" />}
+                  label="Audio track"
+                  heading="Audio"
+                  active={audioMenuOpen}
+                  open={audioMenuOpen}
+                  onToggle={() => setAudioMenuOpen((v) => !v)}
+                  onClose={() => setAudioMenuOpen(false)}
+                  options={audioTracks.map((t) => ({
+                    key: String(t.id),
+                    label: trackLabel(t),
+                    active: audioTrackId === t.id,
+                  }))}
+                  onSelect={(key) => selectAudioTrack(Number(key))}
+                />
+              )}
+
+              {videoTracks.length >= 2 && (
+                <ChromeMenu
+                  icon={<MonitorCog className="h-5 w-5" />}
+                  label="Quality"
+                  heading="Quality"
+                  active={qualityMenuOpen}
+                  open={qualityMenuOpen}
+                  onToggle={() => setQualityMenuOpen((v) => !v)}
+                  onClose={() => setQualityMenuOpen(false)}
+                  options={videoTracks.map((t) => ({
+                    key: String(t.id),
+                    label: trackLabel(t),
+                    active: videoTrackId === t.id,
+                  }))}
+                  onSelect={(key) => selectVideoTrack(Number(key))}
+                />
+              )}
+
+              {!isLive && (
+                <ChromeMenu
+                  icon={<Gauge className="h-5 w-5" />}
+                  label="Playback speed"
+                  heading="Speed"
+                  active={speedMenuOpen || Math.abs(speed - 1) > 0.01}
+                  open={speedMenuOpen}
+                  onToggle={() => setSpeedMenuOpen((v) => !v)}
+                  onClose={() => setSpeedMenuOpen(false)}
+                  options={SPEED_OPTIONS.map((rate) => ({
+                    key: String(rate),
+                    label: rate === 1 ? "Normal" : `${rate}×`,
+                    active: Math.abs(speed - rate) < 0.01,
+                  }))}
+                  onSelect={(key) => changeSpeed(Number(key))}
+                />
+              )}
+
+              <CaptionButton
+                mode={captionMode}
+                onChange={setCaptionMode}
+                open={captionMenuOpen}
+                onToggle={() => setCaptionMenuOpen((v) => !v)}
+                onClose={() => setCaptionMenuOpen(false)}
+                sourceNote={sourceCaptionNote(sourceCaptions)}
+              />
+
+              {/* Caption-style ("Aa") controls — only while captions are showing. */}
+              {captionMode !== "off" && (
+                <CaptionStyleButton
+                  style={captionStyleState.style}
+                  onChange={captionStyleState.setStyle}
+                  open={captionStyleOpen}
+                  onToggle={() => setCaptionStyleOpen((v) => !v)}
+                  onClose={() => setCaptionStyleOpen(false)}
+                />
+              )}
+
+              {!isLive && (
+                <IconButton
+                  onClick={() => setCompanionTab(companionTab === "find" ? null : "find")}
+                  label={companionTab === "find" ? "Hide transcript" : "Transcript"}
+                  active={companionTab === "find"}
+                >
+                  <ScrollText className="h-5 w-5" />
+                </IconButton>
+              )}
+
               <IconButton
-                onClick={() => setTranscriptOpen((v) => !v)}
-                label={transcriptOpen ? "Hide transcript" : "Transcript"}
-                active={transcriptOpen}
+                onClick={() => setCinema((v) => !v)}
+                label={cinema ? "Exit cinema mode" : "Cinema mode"}
+                active={cinema}
               >
-                <ScrollText className="h-5 w-5" />
+                <Clapperboard className="h-5 w-5" />
               </IconButton>
-            )}
 
-            <IconButton
-              onClick={() => setCinema((v) => !v)}
-              label={cinema ? "Exit cinema mode" : "Cinema mode"}
-              active={cinema}
-            >
-              <Clapperboard className="h-5 w-5" />
-            </IconButton>
-
-            {pipSupported && (
-              <IconButton onClick={togglePip} label="Picture in Picture" active={pipActive}>
-                <PictureInPicture className="h-5 w-5" />
+              {pipSupported && (
+                <IconButton onClick={togglePip} label="Picture in Picture" active={pipActive}>
+                  <PictureInPicture className="h-5 w-5" />
+                </IconButton>
+              )}
+              {USE_MPV_ENGINE && <AirPlayButton slotRef={airplay.buttonRef} />}
+              <IconButton
+                onClick={toggleFullscreen}
+                label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              >
+                {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
               </IconButton>
-            )}
-            {USE_MPV_ENGINE && <AirPlayButton slotRef={airplay.buttonRef} />}
-            <IconButton
-              onClick={toggleFullscreen}
-              label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-            >
-              {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
-            </IconButton>
+            </div>
           </div>
         </div>
+
+        <PlayerCompanion
+          key={mediaKey}
+          tab={companionTab}
+          onTab={setCompanionTab}
+          onClose={closeCompanion}
+          profileId={profileId}
+          media={media}
+          audioTrackIndex={selectedAudioTrack.index}
+          currentTime={currentTime}
+          sourceCues={sourceCues}
+          captionNote={sourceCaptionNote(sourceCaptions)}
+          onSeek={seekTo}
+          onEnableCaptions={() => setCaptionMode("source")}
+          onBrowse={() => {
+            setCompanionTab(null);
+            setCinema(true);
+          }}
+        />
       </div>
 
       {cinema && (
@@ -1860,18 +1934,6 @@ export function PlayerModal({
           sourceId={sourceId ?? null}
           currentMediaId={media.id}
           onSelectMedia={(m) => onPlayMedia?.(m)}
-        />
-      )}
-
-      {transcriptOpen && !isLive && (
-        <TranscriptPanel
-          profileId={profileId}
-          media={{ kind: media.kind, id: media.id }}
-          audioTrackIndex={selectedAudioTrack.index}
-          currentTime={currentTime}
-          sourceCues={sourceCues}
-          onSeek={seekTo}
-          onClose={() => setTranscriptOpen(false)}
         />
       )}
 

@@ -101,7 +101,7 @@ export const Screen = memo(function Screen({
       tabIndex={-1}
       className={cn(
         "nova-screen absolute inset-0 overflow-y-auto overflow-x-hidden outline-none",
-        !active && "nova-screen-hidden"
+        active ? "nova-screen-enter" : "nova-screen-hidden"
       )}
     >
       <div

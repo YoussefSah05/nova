@@ -12,6 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Search, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { useReducedMotion } from "@/lib/motion";
 import type { Cue } from "./CaptionOverlay";
 
 interface TranscriptLine {
@@ -79,6 +80,8 @@ export function TranscriptPanel({
   sourceCues,
   onSeek,
   onClose,
+  embedded = false,
+  maxTime,
 }: {
   profileId: string;
   media: { kind: string; id: number };
@@ -87,7 +90,10 @@ export function TranscriptPanel({
   sourceCues: Cue[];
   onSeek: (sec: number) => void;
   onClose: () => void;
+  embedded?: boolean;
+  maxTime?: number;
 }) {
+  const reduce = useReducedMotion();
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -98,6 +104,7 @@ export function TranscriptPanel({
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setLines([]);
     void invoke<TranscriptLine[]>("get_transcript", {
       profileId,
       mediaKind: media.kind,
@@ -114,6 +121,8 @@ export function TranscriptPanel({
 
   // Debounced FTS search over the title's dialogue.
   useEffect(() => {
+    let cancelled = false;
+    setHits([]);
     const q = query.trim();
     if (!q) {
       setHits([]);
@@ -127,13 +136,27 @@ export function TranscriptPanel({
         audioTrackIndex,
         query: q,
       })
-        .then(setHits)
-        .catch(() => setHits([]));
+        .then((results) => {
+          if (!cancelled) setHits(results);
+        })
+        .catch(() => {
+          if (!cancelled) setHits([]);
+        });
     }, 250);
-    return () => window.clearTimeout(t);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
   }, [query, profileId, media.kind, media.id, audioTrackIndex]);
 
-  const merged = useMemo(() => mergeLive(lines, sourceCues), [lines, sourceCues]);
+  const merged = useMemo(
+    () =>
+      mergeLive(lines, sourceCues).filter(
+        (line) => maxTime === undefined || line.startSec <= maxTime
+      ),
+    [lines, sourceCues, maxTime]
+  );
+  const visibleHits = hits.filter((hit) => maxTime === undefined || hit.startSec <= maxTime);
   const searching = query.trim().length > 0;
 
   // The line under the playhead (or the most recent one).
@@ -150,21 +173,29 @@ export function TranscriptPanel({
   // Keep the active line in view while not searching.
   useEffect(() => {
     if (searching) return;
-    activeRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [activeIdx, searching]);
+    activeRef.current?.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
+  }, [activeIdx, searching, reduce]);
 
   return (
-    <div className="nova-glass pointer-events-auto absolute right-0 top-0 bottom-0 z-40 flex w-[min(92vw,400px)] flex-col text-white">
-      <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
-        <span className="text-sm font-semibold">Transcript</span>
-        <button
-          onClick={onClose}
-          aria-label="Close transcript"
-          className="flex h-7 w-7 items-center justify-center rounded-full text-white/70 hover:bg-white/10 hover:text-white"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
+    <div
+      className={cn(
+        "flex min-h-0 flex-1 flex-col text-foreground",
+        !embedded &&
+          "nova-glass pointer-events-auto absolute right-0 top-0 bottom-0 z-40 w-[min(92vw,400px)]"
+      )}
+    >
+      {!embedded && (
+        <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
+          <span className="text-sm font-semibold">Transcript</span>
+          <button
+            onClick={onClose}
+            aria-label="Close transcript"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-white/70 hover:bg-white/10 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       <div className="relative px-3 py-2">
         <Search className="pointer-events-none absolute left-5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
@@ -172,6 +203,7 @@ export function TranscriptPanel({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search dialogue"
+          aria-label="Search dialogue"
           className="w-full rounded-md border border-white/10 bg-white/[0.04] py-1.5 pl-9 pr-3 text-sm text-white placeholder:text-white/40 outline-none focus:border-white/25"
         />
       </div>
@@ -180,14 +212,14 @@ export function TranscriptPanel({
         {loading ? (
           <p className="px-3 py-8 text-center text-sm text-white/50">Loading transcript…</p>
         ) : searching ? (
-          hits.length === 0 ? (
+          visibleHits.length === 0 ? (
             <p className="px-3 py-8 text-center text-sm text-white/50">No matches.</p>
           ) : (
             <>
               <p className="px-3 py-1 text-[11px] uppercase tracking-wider text-white/45">
-                {hits.length} match{hits.length === 1 ? "" : "es"}
+                {visibleHits.length} match{visibleHits.length === 1 ? "" : "es"}
               </p>
-              {hits.map((h, i) => (
+              {visibleHits.map((h, i) => (
                 <button
                   key={`${h.segmentId}-${h.kind}-${i}`}
                   onClick={() => onSeek(h.startSec)}

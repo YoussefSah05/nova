@@ -106,7 +106,7 @@ function ResumeFrame({
   return (
     <section aria-label="Continue watching" className={FRAME}>
       <HeroBackdrop src={art?.backdropUrl ?? item.posterUrl} />
-      <div className="absolute bottom-[72px] left-[88px] flex w-[620px] flex-col gap-4">
+      <div className="absolute bottom-[88px] left-6 right-6 flex max-w-[620px] flex-col gap-4 md:left-[88px] xl:max-w-[min(620px,calc(100%-560px))]">
         <p className="text-sm uppercase tracking-[0.14em] text-white/70">{line}</p>
         <TitleLogo
           title={item.title}
@@ -117,7 +117,7 @@ function ResumeFrame({
         />
         {sub && <p className="text-base text-white/80">{sub}</p>}
         {pct > 0 && (
-          <div className="flex w-[360px] flex-col gap-2">
+          <div className="flex w-full max-w-[360px] flex-col gap-2">
             <div className="flex justify-between text-xs text-white/70">
               <span>Stopped at {clockTime(item.positionSec)}</span>
               {left && <span>{left}</span>}
@@ -150,7 +150,7 @@ function AlsoInProgress({ items }: { items: ContinueWatchingItem[] }) {
   return (
     <aside
       aria-label="Also in progress"
-      className="absolute bottom-16 right-14 flex w-[336px] flex-col gap-1 rounded-2xl border border-white/[0.08] bg-[#111113]/[0.92] p-3.5 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
+      className="absolute bottom-20 right-14 hidden w-[336px] flex-col gap-1 rounded-2xl border border-white/[0.08] bg-[#111113]/[0.92] p-3.5 shadow-[0_8px_24px_rgba(0,0,0,0.45)] xl:flex"
     >
       <p className="mx-1.5 mb-1.5 mt-0.5 text-xs uppercase tracking-[0.12em] text-white/60">
         Also in progress
@@ -205,7 +205,7 @@ function SpotlightFrame({ item }: { item: BrowseItem }) {
   return (
     <section aria-label="Spotlight" className={FRAME}>
       <HeroBackdrop src={art?.backdropUrl ?? backdrop ?? item.posterUrl} />
-      <div className="absolute bottom-[72px] left-[88px] flex w-[620px] flex-col gap-4">
+      <div className="absolute bottom-[88px] left-6 right-6 flex max-w-[620px] flex-col gap-4 md:left-[88px]">
         <p className="text-sm uppercase tracking-[0.14em] text-white/70">
           {line} · New in your library
         </p>
@@ -225,9 +225,13 @@ function SpotlightFrame({ item }: { item: BrowseItem }) {
           </p>
         )}
         <div className="mt-1.5 flex gap-3">
-          <Button size="lg" onClick={() => void playItem(item)} className="gap-2.5">
+          <Button
+            size="lg"
+            onClick={() => (item.kind === "series" ? activate(item) : void playItem(item))}
+            className="gap-2.5"
+          >
             <PlayIcon className="h-4 w-4 fill-current" strokeWidth={1.5} aria-hidden />
-            Play
+            {item.kind === "series" ? "Choose episode" : "Play"}
           </Button>
           <Button variant="secondary" size="lg" onClick={() => activate(item)}>
             <InfoIcon className="h-4 w-4" strokeWidth={1.5} aria-hidden />
