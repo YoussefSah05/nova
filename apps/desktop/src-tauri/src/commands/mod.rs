@@ -26,6 +26,7 @@ pub mod library;
 pub mod models;
 pub mod movies;
 pub mod playback;
+pub mod profile_recovery;
 pub mod profile_settings;
 pub mod search;
 pub mod series;
@@ -67,6 +68,7 @@ pub async fn create_profile(
 
 #[tauri::command]
 pub async fn delete_profile(id: String, state: State<'_, AppState>) -> Result<(), ApiError> {
+    let _open = state.profile_open.lock().await;
     ProfileRepository::new(&state.pool)
         .delete(&id)
         .await
@@ -80,10 +82,9 @@ pub async fn select_profile(
     app: AppHandle,
 ) -> Result<Profile, ApiError> {
     let repo = ProfileRepository::new(&state.pool);
-    repo.update_last_used(&id).await.map_err(ApiError::from)?;
     let profile = repo.get(&id).await.map_err(ApiError::from)?;
-
     ensure_profile_pool(&id, &state, &app).await?;
+    repo.update_last_used(&id).await.map_err(ApiError::from)?;
     let pool = require_profile_pool(&id, &state).await?;
     let jobs = state.jobs_for_profile(&id, pool, app.clone()).await;
     *state.active_profile_id.write().await = Some(id);
@@ -104,6 +105,16 @@ pub(crate) async fn ensure_profile_pool(
     }
     // Re-check under the open lock: a concurrent caller may have opened it.
     let _open = state.profile_open.lock().await;
+    if !uuid::Uuid::parse_str(profile_id)
+        .map(|id| id.to_string() == profile_id)
+        .unwrap_or(false)
+    {
+        return Err(ApiError::InvalidInput("Invalid profile ID.".into()));
+    }
+    ProfileRepository::new(&state.pool)
+        .get(profile_id)
+        .await
+        .map_err(ApiError::from)?;
     if state.profile_pool(profile_id).await.is_none() {
         open_profile_db(profile_id, state, app).await?;
     }
@@ -1634,6 +1645,14 @@ async fn open_profile_db(
     };
     let data_dir = root.join("profiles").join(profile_id);
     std::fs::create_dir_all(&data_dir).map_err(|e| ApiError::Internal(e.to_string()))?;
+    // A registered copy recovery may still carry its ownership receipt if the
+    // app exited right after registering it; an opened profile never does.
+    if nova_storage::profile_recovery::release_recovery_receipt(&data_dir)
+        .await
+        .is_err()
+    {
+        tracing::warn!("recovered profile receipt could not be released before opening");
+    }
     let db_path = data_dir.join("profile.db");
     let pool = init_profile_db(
         db_path

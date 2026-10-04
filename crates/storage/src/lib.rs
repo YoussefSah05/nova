@@ -8,6 +8,7 @@ pub mod db;
 pub mod error;
 #[cfg(unix)]
 pub mod profile_keys;
+pub mod profile_recovery;
 pub mod repositories;
 #[cfg(unix)]
 pub mod snapshots;

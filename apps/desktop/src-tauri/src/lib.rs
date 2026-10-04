@@ -152,6 +152,8 @@ pub fn run() {
             commands::create_profile,
             commands::delete_profile,
             commands::select_profile,
+            commands::profile_recovery::inspect_profile_recovery,
+            commands::profile_recovery::recover_profile_copy,
             commands::get_profile_overview,
             // Phase 2
             commands::list_sources,

@@ -1,8 +1,8 @@
 //! Opt-in upgrade qualification against a real profile database.
 //!
 //! The database named by `NOVA_UPGRADE_DB` is copied into a temporary
-//! directory with SQLite's backup API; only the copy is migrated. Output is
-//! counts only — no titles, URLs or other profile content.
+//! directory with SQLite's `VACUUM INTO`; only the copy is migrated. Output is
+//! qualification metadata only — no titles, URLs or other profile content.
 //!
 //! ```text
 //! NOVA_UPGRADE_DB="$HOME/Library/Application Support/app.nova.desktop/profiles/<id>/profile.db" \
@@ -12,6 +12,30 @@
 use nova_storage::init_profile_db;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::SqlitePool;
+
+#[path = "../src/profile_recovery/qualification.rs"]
+mod qualification;
+use qualification::{lineage, PreservedRows};
+
+async fn fingerprint(
+    pool: &SqlitePool,
+    table: &'static str,
+    columns: &'static str,
+) -> PreservedRows {
+    qualification::fingerprint(pool, table, columns)
+        .await
+        .unwrap()
+}
+
+async fn preserved_rows(pool: &SqlitePool) -> Vec<PreservedRows> {
+    qualification::preserved_rows(pool).await.unwrap()
+}
+
+async fn verify_preserved(pool: &SqlitePool, baseline: &[PreservedRows]) {
+    qualification::verify_preserved(pool, baseline)
+        .await
+        .unwrap();
+}
 
 async fn count(pool: &SqlitePool, sql: &str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
@@ -42,6 +66,18 @@ async fn real_profile_upgrade_preserves_movie_user_state() {
     let pool = SqlitePool::connect_with(SqliteConnectOptions::new().filename(&copy))
         .await
         .unwrap();
+    let (from, pending) = lineage(&pool)
+        .await
+        .unwrap_or_else(|reason| panic!("qualification refused: {reason}"));
+    eprintln!(
+        "source migration {from}; pending migrations {pending}; qualification {}",
+        if pending == 0 {
+            "current-schema reopen only"
+        } else {
+            "upgrade"
+        }
+    );
+    let preserved = preserved_rows(&pool).await;
     let movies = count(&pool, "SELECT COUNT(*) FROM vod_items").await;
     let favorites = count(
         &pool,
@@ -63,6 +99,7 @@ async fn real_profile_upgrade_preserves_movie_user_state() {
     let started = std::time::Instant::now();
     let upgraded = init_profile_db(copy.to_str().unwrap()).await.unwrap();
     let elapsed = started.elapsed();
+    verify_preserved(&upgraded, &preserved).await;
 
     // Every legacy favourite / watchlisted row's entity carries the flag.
     let lost_favorites = count(
@@ -129,13 +166,14 @@ async fn real_profile_upgrade_preserves_movie_user_state() {
     let reopened = init_profile_db(copy.to_str().unwrap()).await.unwrap();
     let reopen = started.elapsed();
     let entities_after_reopen = count(&reopened, "SELECT COUNT(*) FROM canonical_entities").await;
+    verify_preserved(&reopened, &preserved).await;
     reopened.close().await;
 
     eprintln!(
         "movies {movies}, favourites {favorites}, watchlist {watchlist}, resume rows {history}; \
          entities {entities} ({merged} merged); lost favourites {lost_favorites}, lost watchlist {lost_watchlist}, \
          lost resume {lost_resume}, unmapped rows {unmapped}; integrity {integrity}, fk issues {fk}; \
-         upgrade {elapsed:?}, reopen {reopen:?}"
+         initialization {elapsed:?}, reopen {reopen:?}"
     );
     assert_eq!((lost_favorites, lost_watchlist, lost_resume), (0, 0, 0));
     assert_eq!(unmapped, 0);
@@ -143,4 +181,116 @@ async fn real_profile_upgrade_preserves_movie_user_state() {
     assert_eq!(integrity, "ok");
     assert_eq!(fk, 0);
     assert_eq!(entities, entities_after_reopen, "backfill is idempotent");
+}
+
+#[tokio::test]
+async fn qualification_rejects_a_different_lineage_without_rewriting_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fixture.db");
+    let pool = init_profile_db(path.to_str().unwrap()).await.unwrap();
+    assert_eq!(lineage(&pool).await.unwrap().1, 0);
+    sqlx::query("UPDATE _sqlx_migrations SET checksum = X'00' WHERE version = 20")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = fingerprint(
+        &pool,
+        "_sqlx_migrations",
+        "version,description,checksum,success",
+    )
+    .await;
+    assert!(lineage(&pool)
+        .await
+        .unwrap_err()
+        .contains("migration 20 has a different checksum"));
+    verify_preserved(&pool, &[before]).await;
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn preservation_detects_changed_content_even_when_counts_match() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::query("CREATE TABLE profile_settings (key TEXT, value TEXT)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO profile_settings VALUES ('viewing', ?)")
+        .bind("same\0before")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = fingerprint(&pool, "profile_settings", "key,value").await;
+    sqlx::query("UPDATE profile_settings SET value=?")
+        .bind("same\0after")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let after = fingerprint(&pool, "profile_settings", "key,value").await;
+    assert_eq!(before.rows, after.rows);
+    assert!(
+        before.digest != after.digest,
+        "same count cannot conceal changed content"
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn preservation_allows_orphan_cleanup_but_detects_deleted_valid_history() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE vod_items (id INTEGER PRIMARY KEY);
+         CREATE TABLE channels (id INTEGER PRIMARY KEY);
+         CREATE TABLE series_episodes (id INTEGER PRIMARY KEY);
+         CREATE TABLE watch_history (id INTEGER, media_kind TEXT, media_id INTEGER);
+         INSERT INTO vod_items VALUES (1);
+         INSERT INTO watch_history VALUES (1, 'vod', 1), (2, 'vod', 2);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let before = fingerprint(&pool, "watch_history", "id,media_kind,media_id").await;
+    assert_eq!(before.rows, 1);
+    sqlx::query("DELETE FROM watch_history WHERE id=2")
+        .execute(&pool)
+        .await
+        .unwrap();
+    verify_preserved(&pool, &[before]).await;
+    let before = fingerprint(&pool, "watch_history", "id,media_kind,media_id").await;
+    sqlx::query("DELETE FROM watch_history WHERE id=1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let after = fingerprint(&pool, "watch_history", "id,media_kind,media_id").await;
+    assert!(
+        before.digest != after.digest,
+        "valid history deletion detected"
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn preservation_distinguishes_adjacent_real_values() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::query("CREATE TABLE profile_settings (key TEXT, value REAL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let first = 1.0_f64;
+    sqlx::query("INSERT INTO profile_settings VALUES ('precision', ?)")
+        .bind(first)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = fingerprint(&pool, "profile_settings", "key,value").await;
+    sqlx::query("UPDATE profile_settings SET value=?")
+        .bind(f64::from_bits(first.to_bits() + 1))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let after = fingerprint(&pool, "profile_settings", "key,value").await;
+    assert!(
+        before.digest != after.digest,
+        "adjacent real values must not collide"
+    );
+    pool.close().await;
 }

@@ -17,38 +17,46 @@ pub async fn init_app_db(path: &str) -> Result<SqlitePool, StorageError> {
 
 pub async fn init_profile_db(path: &str) -> Result<SqlitePool, StorageError> {
     let pool = open_pool(path).await?;
+    if let Err(error) = initialize_profile_pool(&pool).await {
+        pool.close().await;
+        return Err(error);
+    }
+    Ok(pool)
+}
+
+async fn initialize_profile_pool(pool: &SqlitePool) -> Result<(), StorageError> {
     // `ignore_missing`: tolerate a DB that has *newer* migrations applied than
     // this build knows about (e.g. after running a feature branch then an older
     // one, or an app downgrade). Without it sqlx errors with VersionMissing and
     // the profile won't open. Pending older migrations still apply normally.
     let mut migrator = sqlx::migrate!("./migrations/profile");
     migrator.set_ignore_missing(true);
-    migrator.run(&pool).await?;
+    migrator.run(pool).await?;
     // Data step of the additive canonical-catalog migration (0021): bind
     // pre-existing movie rows to canonical entities, seeding user state.
-    let canonical = crate::repositories::CanonicalRepository::new(&pool);
+    let canonical = crate::repositories::CanonicalRepository::new(pool);
     canonical.backfill_movies().await?;
     // Canonical series (0036): bind pre-existing series to entities, seeding
     // their favorite/watchlist from the per-row flags.
     canonical.backfill_series().await?;
     // Series TMDB matches made before they were entity-owned move onto the
     // bound series entities (a no-op once carried over).
-    crate::repositories::ExternalMatchRepository::new(&pool)
+    crate::repositories::ExternalMatchRepository::new(pool)
         .backfill_series_matches()
         .await?;
     // Episode progress (0037): key episode rows and seed entity-owned progress
     // from the legacy row-keyed and parked history.
-    crate::repositories::WatchHistoryRepository::new(&pool)
+    crate::repositories::WatchHistoryRepository::new(pool)
         .backfill_episode_state()
         .await?;
     // Entity resolution (0023): resolve once for profiles that predate it or
     // were last resolved by an older rule set; a no-op otherwise.
     canonical.ensure_movies_resolved().await?;
     // Canonical search projection (0030): built once, rebuilt on version bumps.
-    crate::repositories::CatalogSearchRepository::new(&pool)
+    crate::repositories::CatalogSearchRepository::new(pool)
         .ensure_movies()
         .await?;
-    Ok(pool)
+    Ok(())
 }
 
 async fn open_pool(path: &str) -> Result<SqlitePool, StorageError> {

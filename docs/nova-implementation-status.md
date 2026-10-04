@@ -50,7 +50,7 @@
 | M23 Series / autoplay | PARTIAL | Episode progress owned by the series entity per durable episode key (0037); resume, Up next and series Continue Watching read it; autoplay uses the normal play path. | In-player next episode chosen in React; episodes aren't canonical entities; no cross-source episodes. |
 | M24 Live / EPG boundary | PARTIAL | Programmes owned per feed (0040); feed spooled with a 512 MiB cap, staged batches (0041), one short publish; empty feeds refused; one guide feed per channel. The guide is on screen: live cards, hover preview, bundle channels, the live player and its channel strip; refreshed after every import; Settings shows each source's guide status. | Channels still matched by `tvg_id` (no canonical channel/ChannelMatcher); no gzip feeds; no scheduled refresh; no grid guide view. |
 | M25 Security / privacy | PARTIAL | TMDB credential write-only; source and stream URLs never cross IPC; the stream proxy is session-scoped (opaque per-session resource ids, no open relay, no local upstreams incl. DNS); strict CSP; every log line and UI-bound error has URLs reduced to `scheme://host`. | Provider logo/poster URLs still reach the webview (opaque artwork ids not done); CORS `*` on token routes (tokens unguessable); `Debug`-formatted URLs and panics bypass the redactor; private/LAN upstreams allowed. |
-| M26 Migration-chain qualification | PARTIAL | Upgrade-chain tests; `real_profile_upgrade` (opt-in). | Never run against a real profile copy. |
+| M26 Migration-chain qualification | PARTIAL | Real schema-42 reopen and known schema-21 conversion qualified; picker offers validated recovery into a separate profile, retaining the original. | Unknown schema-6 lineage remains refused; native recovery/interruption qualification and duplicate-flag promotion remain. See the 2026-10-02 qualification below. |
 | M27 Scale qualification | PARTIAL | 30k release scale probes; `tools/catalog-scale`. | No 100k/250k app-level measurements. |
 | M28 AI failure matrix | PARTIAL | Missing/offline model and cancellation tests exist. | No matrix; see M13 inference-failure case. |
 | M29 macOS lifecycle | PARTIAL | Reload releases the old page's playback (page epochs; in-flight opens undo themselves); quit writes progress and stops remuxes/transcription; sleep pauses, wake reconnects a playing live channel (`lifecycle.rs`). | Not verified on device; AirPlay across sleep unhandled; no window-state/reopen handling beyond the window-state plugin; no display-sleep or App Nap handling. |
@@ -889,10 +889,165 @@ follow-up. UI-5 is complete within the scope and qualification limits recorded b
   No live provider/TMDB enrichment qualification or performance certification. Existing
   backend model capabilities and preference persistence semantics remain unchanged.
 
+### Approved player companion and Nova motion — 2026-10-02
+
+Frontend-only work requested before resuming architecture milestones. The approved
+interactive proposal informs the player; implementation boundaries are recorded in
+[`player-motion-frontend-contract.md`](player-motion-frontend-contract.md).
+
+- **Player:** Nova identity and one companion beside the video, with Now / Find /
+  Explore / Saved. Real source dialogue, transcript search/seeking, caption enablement,
+  existing episode/guide navigation and temporary player-session notes are connected.
+  Notes survive closing the companion, but reset with the player/media/profile; the UI
+  states that limitation. Native video bounds account for the companion without
+  animating geometry or adding per-frame IPC. Menus/focused controls stay visible;
+  Escape closes the companion and restores focus, including from its inputs.
+- **Intelligence boundary:** questions, summaries, semantic moments, generated chapters,
+  themes, recommendations and translation have explicit future-capability states.
+  No fictional answers, backend command, model job, schema or migration was added.
+- **Home:** a maximum of five real library titles, alternating films and series with
+  resume first, rotate every nine seconds. Controls provide previous/next, direct
+  selection and pause. Rotation stops on interaction, reduced motion, hidden document,
+  inactive/offscreen Home and overlays/player. Manual selection remains paused.
+  Canonical movie and source-aware series dedup retain one resumed title.
+- **Motion:** existing motion dependency and tokens reused; short screen/showcase fades,
+  companion/menu entrances and shared reduced-motion configuration. No scroll-driven
+  virtualized-row animation, continuous hero zoom or additional animation dependency.
+- **Validation:** frontend typecheck/lint and production build pass. All 143 frontend
+  tests passed before final regression additions; the final focused set adds coverage
+  for null-entity series dedup, document visibility and stale transcript search replies.
+  Browser visual checks used actual frontend components with isolated sample media at
+  1280px and the supported 1024×600 minimum. Temporary preview fixtures were removed.
+  Independent review found two issues (series duplication and input Escape), both fixed
+  and re-reviewed without further confirmed blockers.
+- **Limits:** no native playback/first-frame/120fps qualification or live-provider probe
+  in this pass. No Rust changes; Rust tests were not rerun. Vite still reports a large
+  application chunk. The existing shell-test fixture warnings remain non-failing.
+
+### M26 real-profile qualification — 2026-10-02
+
+Contract and remaining work: [`implementation/m26-profile-qualification.md`](implementation/m26-profile-qualification.md).
+
+- **Harness:** verifies applied migration checksums before initialization, reports
+  pending migrations, and distinguishes an actual upgrade from a current-schema
+  reopen. In-memory fingerprints check stable source records, movie/episode/channel
+  flags, valid watch history, transcript content, caption preferences and settings
+  after initialization and reopen. Intentional orphan cleanup remains allowed.
+- **Real copies:** the schema-42 sample passes: 28,597 movies, 33,787 canonical
+  entities, no unmapped movies or detected state loss, integrity `ok`, zero foreign-key
+  issues. Initialization/reopen took approximately 12/12 ms, excluding snapshot and
+  fingerprint work. This is reopen evidence only. Nonempty favorites, watchlists and
+  transcripts are absent in this sample; synthetic fixtures cover those states.
+- **Older profiles:** schema 6 is refused at checksum 6 (no matching SQL found in
+  available history). Schema 21 is refused at checksum 20; its migrations 20/21 match
+  the unmerged local-LLM branch and conflict with main's migration numbers. No ledger
+  override, applied migration edit or source database mutation was performed.
+- **Validation:** storage suite passes (114 tests, four opt-in/environment tests
+  ignored by default); the real-copy test also passes when explicitly run on schema
+  42. Storage Clippy with warnings denied passes. Independent review identified
+  incomplete state baselines and embedded-NUL fingerprint truncation; both fixed with
+  regression coverage; re-review found no further blockers. No frontend or native
+  playback changes in this pass.
+- **Status:** M26 remains **PARTIAL**. Qualifying an older real upgrade requires an
+  explicit compatibility path for the divergent branch and recovered provenance for
+  the unknown migration-6 lineage. No later architecture milestone was started.
+
+### M26 known-lineage conversion — 2026-10-02
+
+- **Implemented:** an explicit offline converter for the recovered local-LLM schema-21
+  lineage. It validates the complete historical ledger and actual schema, archives the
+  original ledger, then genuinely runs current migrations 20–42 on a private staging
+  copy. Branch-only cached text and TMDB facts are retained. Normal startup and applied
+  migration files are unchanged; no checksum is rewritten.
+- **Publication:** only a fully validated, reopened database is published to a new path.
+  Existing main files and SQLite sidecars, including dangling symlinks, are refused.
+  Output requires an exclusive private directory; no converted profile is installed
+  automatically. Failures do not publish an output or modify the original database.
+- **Real upgrade evidence:** the known schema-21 copy passes current migrations and
+  reopen with 28,070 movies, 5,222 episodes, 9,104 channels, 47 history rows, 401 transcript
+  segments, eight About-cache rows and 32,571 canonical entities. Complete snapshot,
+  conversion and validation took approximately 12 seconds. The temporary result was
+  removed. This is actual older-profile conversion evidence, unlike the schema-42 reopen.
+- **Validation:** 122 storage tests pass, five opt-in/environment tests ignored by
+  default; the legacy real-copy test also passes explicitly. Storage Clippy with warnings
+  denied, converter build and formatting checks pass. Review fixes cover destination
+  sidecars and semantic movie/series/progress preservation. Re-review found no blockers.
+  Shared fingerprints preserve embedded NUL and exact REAL bits. No frontend changes.
+- **Limits / next:** unknown migration 6 remains refused. Design the profile recovery
+  and installation flow before connecting this converter to app startup. Exact legacy
+  flag comparison can conservatively refuse datasets where canonical merging promotes
+  duplicate-row flags. M26 remains **PARTIAL**; no later milestone started.
+
+See the [qualification contract and results](implementation/m26-profile-qualification.md)
+and [converter usage](../crates/storage/examples/README.md).
+
+### M26 profile-picker recovery — 2026-10-02
+
+- **Recovery flow:** a failed profile open offers a compatibility check and “Recover a
+  copy” for the qualified legacy lineage. The original stays intact as the backup; a
+  new private UUID directory is validated before the recovered profile is registered.
+  Opening it is a separate action. Unsupported histories remain closed.
+- **Backend:** shared converter moved into `nova-storage::profile_recovery`; CLI and
+  Tauri reuse it. Recovery, opens and deletes share the profile-open lock. Recovery
+  starts no jobs, rejects invalid IDs/symlinked source paths, and removes only its newly
+  owned output on registration failure. Failed initialization closes its pool and no
+  longer updates last-used time. No applied migration edits or schema changes.
+- **Validation:** 293 storage/desktop Rust tests pass (six opt-in/environment tests
+  ignored), and all 150 frontend tests pass. Typecheck, lint, Clippy with warnings denied
+  and frontend production build pass. The sandbox-blocked localhost EPG fixture passed
+  in the permitted rerun. Synthetic recovery fixtures verify original bytes, new-profile
+  registration/reopen, failed registration cleanup and unsupported/invalid input.
+  Dialog tests cover double submit, retry, focus trapping and restoration. Independent
+  review's focus finding was fixed; re-review found no remaining blockers.
+- **Visual check:** actual picker/dialog components with isolated mock IPC at 1280×720;
+  inspected eligibility, progress and success. Temporary preview removed. Real profiles
+  were not installed or replaced. Native end-to-end recovery is not yet qualified.
+- **Remaining:** unknown migration-6 provenance, conservative refusal of legitimate
+  duplicate-flag promotion, and native interrupted-process qualification. A crash before
+  registration can leave an unregistered private directory, never an active partial
+  profile. M26 remains **PARTIAL**; no later milestone started.
+
+### M26 recovery interruption handling — 2026-10-04
+
+- **Behavior:**
+  - A cross-process lock and a versioned staging receipt cover each copy recovery.
+  - The complete target directory is published with one rename.
+  - Registration is the commit point. The receipt is released after it, and again
+    whenever a profile is opened, so cleanup never removes an opened profile. This
+    holds even after its row is deleted, since directories stay on disk.
+  - Cleanup runs before each new recovery and reconciles every leftover separately.
+  - The profile-open guard is owned by the blocking worker.
+  - Details and the full crash-window table:
+    [`implementation/m26-profile-qualification.md`](implementation/m26-profile-qualification.md).
+- **Validation:**
+  - Process-kill tests at six boundaries, and cancellation at three.
+  - Tests for: an opened-then-deleted copy, a stuck leftover with its receipt
+    removed last, lock contention, lock-file mode and symlinks, unknown markers.
+  - 298 storage/desktop Rust tests pass (seven ignored). Clippy with `-D warnings`,
+    fmt and `git diff --check` pass. Frontend typecheck, lint, 150 tests and build
+    pass.
+  - Independent review (two rounds) found seven confirmed issues; all are fixed and
+    were re-reviewed.
+- **Bounded, not fixed:**
+  - Cleanup does not run at startup.
+  - app.db uses `synchronous=NORMAL`, so a power loss can leave a never-opened copy
+    behind.
+  - Two plausible races are documented:
+    - a library-level cancel during registration;
+    - an empty directory created between the vacancy check and the rename.
+- **Remaining for M26:**
+  - native recovery and interruption validation in an isolated debug app;
+  - migration-6 provenance;
+  - duplicate-flag promotion.
+
+  M26 remains **PARTIAL**; no later milestone started. All approved frontend work is
+  preserved, uncommitted.
+
 ### Next dependency
 
 **UI-1–UI-7 are implemented.** Earlier phase entries retain their stated device validation
-limits. M26's real-profile upgrade qualification still needs a real profile copy; it is
+limits. M26 now has qualified legacy conversion and a copy-recovery UI. Unknown lineage,
+duplicate-state normalization and native interruption qualification remain. It is
 separate from the completed frontend redesign. No UI-8 milestone is defined by this work.
 
 ---

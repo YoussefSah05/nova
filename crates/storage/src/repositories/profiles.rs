@@ -14,7 +14,18 @@ impl<'a> ProfileRepository<'a> {
     }
 
     pub async fn create(&self, name: &str, avatar_color: &str) -> Result<Profile, StorageError> {
-        let id = Uuid::new_v4().to_string();
+        self.register(&Uuid::new_v4().to_string(), name, avatar_color)
+            .await
+    }
+
+    /// Register an already validated recovered profile. Callers generate the ID;
+    /// the database must be published before this row becomes visible.
+    pub async fn register(
+        &self,
+        id: &str,
+        name: &str,
+        avatar_color: &str,
+    ) -> Result<Profile, StorageError> {
         let now = now_ts();
         sqlx::query!(
             "INSERT INTO profiles (id, name, avatar_color, created_at) VALUES (?, ?, ?, ?)",
@@ -26,7 +37,7 @@ impl<'a> ProfileRepository<'a> {
         .execute(self.pool)
         .await?;
         Ok(Profile {
-            id,
+            id: id.to_string(),
             name: name.to_string(),
             avatar_color: avatar_color.to_string(),
             created_at: now,

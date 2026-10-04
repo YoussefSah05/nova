@@ -15,6 +15,8 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `create_profile` | `{ name: string, avatarColor: string }` | `Profile` | 1 |
 | `delete_profile` | `{ id: string }` | `void` | 1 |
 | `select_profile` | `{ id: string }` | `Profile` | 1 |
+| `inspect_profile_recovery` | `{ profileId: string }` | `ProfileRecoveryStatus` (`available` / `unsupported`); read-only recognition of the exact supported legacy lineage, no profile activation | M26 |
+| `recover_profile_copy` | `{ profileId: string }` | `Profile`; converts into a new private profile directory and registers only after validation, keeping the original unchanged; does not select or start jobs | M26 |
 | `list_sources` | `{ profileId: string }` | `Source[]` | 2 |
 | `add_source` | `{ profileId: string, name: string, url: string }` | `number` source id | 2 |
 | `refresh_source` | `{ profileId: string, sourceId: number }` | `void` | 5 |

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { PlusIcon, SlidersHorizontal, Check } from "lucide-react";
 import type { Profile, ProfileOverview } from "@/types";
@@ -8,6 +8,7 @@ import { Reveal, Stagger, StaggerItem } from "@/lib/motion";
 import { ProfileCard } from "./ProfileCard";
 import { CreateProfileModal } from "./CreateProfileModal";
 import { AuroraBackdrop } from "./AuroraBackdrop";
+import { ProfileRecoveryDialog } from "./ProfileRecoveryDialog";
 
 interface ProfilePickerProps {
   onSelect: (profile: Profile) => void;
@@ -25,7 +26,8 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
   const [editing, setEditing] = useState<Profile | null>(null);
   const [managing, setManaging] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [selectError, setSelectError] = useState<string | null>(null);
+  const [recovery, setRecovery] = useState<Profile | null>(null);
+  const selecting = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,12 +75,15 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
   }
 
   async function handleSelect(profile: Profile) {
-    setSelectError(null);
+    if (selecting.current) return;
+    selecting.current = true;
     try {
       const selected = await invoke<Profile>("select_profile", { id: profile.id });
       onSelect(selected);
-    } catch (e) {
-      setSelectError(typeof e === "string" ? e : "Couldn't open this profile.");
+    } catch {
+      setRecovery(profile);
+    } finally {
+      selecting.current = false;
     }
   }
 
@@ -92,10 +97,6 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
           Who's watching?
         </h1>
       </Reveal>
-
-      {selectError && (
-        <p className="-mt-6 max-w-md text-center text-sm text-rose-300">{selectError}</p>
-      )}
 
       <Stagger className="flex max-w-3xl flex-wrap justify-center gap-6">
         {profiles.map((p) => (
@@ -139,6 +140,18 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
         </Reveal>
       )}
 
+      {recovery && (
+        <ProfileRecoveryDialog
+          key={recovery.id}
+          profile={recovery}
+          onClose={() => setRecovery(null)}
+          onRecovered={(copy) => setProfiles((previous) => [...previous, copy].sort(byRecency))}
+          onOpen={(copy) => {
+            setRecovery(null);
+            void handleSelect(copy);
+          }}
+        />
+      )}
       {showCreate && (
         <CreateProfileModal onConfirm={handleCreate} onCancel={() => setShowCreate(false)} />
       )}
