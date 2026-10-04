@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH reps AS (\n                 SELECT v.id AS id, v.year / 10 * 10 AS decade,\n                        COALESCE(v.poster_url, v.logo_url) AS poster,\n                        v.poster_url IS NULL AS logo_only\n                 FROM stream_variants s\n                 JOIN vod_items v ON v.id = s.vod_item_id\n                 WHERE s.source_id = ?1\n                   AND s.vod_item_id = (\n                     SELECT MIN(r.vod_item_id) FROM stream_variants r\n                     WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)\n                   AND v.year BETWEEN 1888 AND 2100\n               ), ranked AS (\n                 SELECT decade, poster,\n                        ROW_NUMBER() OVER (\n                          PARTITION BY decade ORDER BY poster IS NULL, logo_only, id) AS rn\n                 FROM reps\n               )\n               SELECT decade as \"decade!: i64\", COUNT(*) as \"count!: i64\",\n                      group_concat(CASE WHEN rn <= 4 THEN poster END, char(31) ORDER BY rn)\n                        as \"posters?: String\"\n               FROM ranked\n               GROUP BY decade\n               ORDER BY decade DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "decade!: i64",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Null"
+      },
+      {
+        "name": "posters?: String",
+        "ordinal": 2,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "2282ca5fd8933b875ca5e8daa20ae434c7a64d9638651325ddef45816cb58ef1"
+}

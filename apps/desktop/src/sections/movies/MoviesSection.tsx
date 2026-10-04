@@ -59,8 +59,10 @@ export function MoviesSection() {
   const query = useDeferredValue(facets.query.trim());
 
   const { data: count } = useBrowseCount("movies", profile.id, activeSourceId);
-  const genres = useMovieGenres(profile.id, activeSourceId).data;
-  const decades = useMovieDecades(profile.id, activeSourceId).data;
+  const genresQuery = useMovieGenres(profile.id, activeSourceId);
+  const decadesQuery = useMovieDecades(profile.id, activeSourceId);
+  const genres = genresQuery.data;
+  const decades = decadesQuery.data;
   const collections = useLibraryCollections(profile.id, activeSourceId).data;
 
   const filters = useMemo<BrowseFilters>(
@@ -212,8 +214,18 @@ export function MoviesSection() {
             <div className="flex flex-col gap-14">
               <Spotlight />
               <CollectionsShelf collections={collections ?? []} onPick={pickCollection} />
-              <DecadesShelf decades={decades ?? []} active={facets.decade} onPick={pickDecade} />
-              <GenresShelf genres={genres ?? []} active={facets.genre} onPick={pickGenre} />
+              <DecadesShelf
+                decades={decades}
+                loading={decadesQuery.isPending}
+                active={facets.decade}
+                onPick={pickDecade}
+              />
+              <GenresShelf
+                genres={genres}
+                loading={genresQuery.isPending}
+                active={facets.genre}
+                onPick={pickGenre}
+              />
               <Rail
                 tab="movies"
                 profileId={profile.id}

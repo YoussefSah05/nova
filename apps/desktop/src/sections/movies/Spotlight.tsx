@@ -25,10 +25,13 @@ function withArt(items: BrowseItem[] | undefined): BrowseItem | null {
 
 export function Spotlight() {
   const { profile, activeSourceId } = useSession();
-  const watchlist = useRail("movies", profile.id, activeSourceId, WATCHLIST_RAIL, true).data;
-  const recent = useRail("movies", profile.id, activeSourceId, RECENTLY_ADDED_RAIL, true).data;
-  const fromWatchlist = withArt(watchlist);
-  const item = fromWatchlist ?? withArt(recent);
+  const watchlist = useRail("movies", profile.id, activeSourceId, WATCHLIST_RAIL, true);
+  const recent = useRail("movies", profile.id, activeSourceId, RECENTLY_ADDED_RAIL, true);
+  const fromWatchlist = withArt(watchlist.data);
+  const item = fromWatchlist ?? withArt(recent.data);
+  // Hold the frame while loading so the shelves below do not jump down.
+  if (!item && (watchlist.isPending || recent.isPending))
+    return <div aria-hidden className="nova-shimmer h-[450px] rounded-2xl bg-white/[0.03]" />;
   if (!item) return null;
   return (
     <SpotlightFrame

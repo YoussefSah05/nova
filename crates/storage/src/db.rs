@@ -59,6 +59,9 @@ async fn initialize_profile_pool(pool: &SqlitePool) -> Result<(), StorageError> 
     Ok(())
 }
 
+/// Upper bound of the per-database memory map (virtual; backed by the OS file cache).
+const MMAP_SIZE: &str = "268435456";
+
 async fn open_pool(path: &str) -> Result<SqlitePool, StorageError> {
     let options = SqliteConnectOptions::new()
         .filename(path)
@@ -66,7 +69,13 @@ async fn open_pool(path: &str) -> Result<SqlitePool, StorageError> {
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
-        .busy_timeout(Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5))
+        // Read pages through a shared memory map instead of copying them into
+        // each connection's small private cache. Catalog reads over a large
+        // library (tens of MB) otherwise re-read the file on every query and
+        // contend when the pool's connections run together: measured ~9x on
+        // the Movies-open reads at 28.6K films (tests/movies_browse_scale.rs).
+        .pragma("mmap_size", MMAP_SIZE);
     let pool = SqlitePoolOptions::new()
         .max_connections(4)
         .connect_with(options)

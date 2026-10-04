@@ -390,23 +390,15 @@ impl CanonicalRepository<'_> {
     }
 
     /// Films per release decade, newest first, with up to four posters each.
+    /// One pass: posters are ranked within each decade by a window function.
+    /// A per-decade poster subquery rescans the library once per decade, which
+    /// profiles without planner statistics pay in full (~275 ms at 28.6K films).
     pub async fn movie_decades(&self, source_id: i64) -> Result<Vec<DecadeCount>, StorageError> {
         let rows = sqlx::query!(
-            r#"SELECT d.decade as "decade!: i64", d.n as "count!: i64",
-                      (SELECT group_concat(p, char(31)) FROM (
-                         SELECT COALESCE(v2.poster_url, v2.logo_url) AS p
-                         FROM stream_variants s2
-                         JOIN vod_items v2 ON v2.id = s2.vod_item_id
-                         WHERE s2.source_id = ?1
-                           AND s2.vod_item_id = (
-                             SELECT MIN(r.vod_item_id) FROM stream_variants r
-                             WHERE r.entity_id = s2.entity_id AND r.source_id = s2.source_id)
-                           AND v2.year BETWEEN d.decade AND d.decade + 9
-                           AND COALESCE(v2.poster_url, v2.logo_url) IS NOT NULL
-                         ORDER BY v2.poster_url IS NULL, v2.id
-                         LIMIT 4)) as "posters?: String"
-               FROM (
-                 SELECT v.year / 10 * 10 AS decade, COUNT(*) AS n
+            r#"WITH reps AS (
+                 SELECT v.id AS id, v.year / 10 * 10 AS decade,
+                        COALESCE(v.poster_url, v.logo_url) AS poster,
+                        v.poster_url IS NULL AS logo_only
                  FROM stream_variants s
                  JOIN vod_items v ON v.id = s.vod_item_id
                  WHERE s.source_id = ?1
@@ -414,9 +406,18 @@ impl CanonicalRepository<'_> {
                      SELECT MIN(r.vod_item_id) FROM stream_variants r
                      WHERE r.entity_id = s.entity_id AND r.source_id = s.source_id)
                    AND v.year BETWEEN 1888 AND 2100
-                 GROUP BY v.year / 10
-               ) d
-               ORDER BY d.decade DESC"#,
+               ), ranked AS (
+                 SELECT decade, poster,
+                        ROW_NUMBER() OVER (
+                          PARTITION BY decade ORDER BY poster IS NULL, logo_only, id) AS rn
+                 FROM reps
+               )
+               SELECT decade as "decade!: i64", COUNT(*) as "count!: i64",
+                      group_concat(CASE WHEN rn <= 4 THEN poster END, char(31) ORDER BY rn)
+                        as "posters?: String"
+               FROM ranked
+               GROUP BY decade
+               ORDER BY decade DESC"#,
             source_id,
         )
         .fetch_all(self.pool)

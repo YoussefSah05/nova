@@ -1082,25 +1082,52 @@ and [converter usage](../crates/storage/examples/README.md).
     profiles, empty and loading. The temporary preview page was removed.
   - Not yet seen in the native app.
 
-### Observed: Movies takes a long time to load — 2026-10-04 (reported, not fixed)
+### Movies load latency — measured and fixed — 2026-10-05
 
-- **Report:** on a real library (~28.6K movies), opening Movies takes noticeable time
-  before everything appears.
-- **Initial analysis (unmeasured):**
-  - Movies starts about seven catalog-wide queries at once: total count, genres,
-    decades, collections, filtered count, spotlight and the first grid page.
-  - The profile pool allows only 4 connections, so these run in at least two waves.
-  - Genre and decade facets aggregate the whole canonical catalog on every open of a
-    new source or profile.
-- **Proposed slice:** time each command against the 30K-movie synthetic profile from
-  `just recovery-fixture`, after its conversion. Fix the measured bottleneck, not the
-  hypothesis. Candidates:
-  - cache or persist facet aggregates per catalog version;
-  - render the grid first and load facets after it;
-  - indexes found from query plans.
-
-  This sits with M27 scale qualification and must keep the keep-alive and
-  `subscribed` screen rules.
+- **Report:** on a real library (~28.6K movies), opening Movies took noticeable time
+  before everything appeared.
+- **Measurement:** `crates/storage/tests/movies_browse_scale.rs`, an opt-in
+  `--release` harness.
+  - **Data:** a synthetic 28.6K-film catalogue built through the real import and
+    compile path. About 8% of films have extra versions, 60% have TMDB matches and
+    facts (some in collections), and posters are set as enrichment would set them.
+    The database is 40 MB.
+  - **Planner statistics:** none (no `ANALYZE`), the same as real profiles.
+  - **What it times:** each Movies-open read on its own, and all of them concurrently
+    as the screen fires them, plus a no-mmap baseline on the same file.
+- **Causes:**
+  1. SQLite's default page cache is about 2 MB per connection, against a 40 MB
+     catalogue. Every read re-read the file, and the pool's four connections
+     contended. A larger page cache did not help; memory-mapped reads did.
+  2. `movie_decades` looked up each decade's posters with a subquery that rescanned
+     the library once per decade: 444 ms on its own without statistics.
+- **Fixes:**
+  - `open_pool` sets `mmap_size` to 256 MB. That is a virtual window backed by the
+    shared OS file cache, with no extra memory per connection. It applies to every
+    catalogue read.
+  - `movie_decades` now runs in one pass, ranking posters within each decade with
+    `ROW_NUMBER()`. The output is unchanged: up to four posters, real posters before
+    logos, lowest id first. A new regression test covers poster choice.
+- **Result on identical data:** concurrent Movies-open reads went from **1,196 ms to
+  127 ms**.
+  - decades 444 → 57 ms;
+  - genres 105 → 30 ms;
+  - grid page 107 → 77 ms;
+  - count 83 → 48 ms.
+- **Frontend:** the Spotlight keeps its 450 px frame, and the decade and genre shelves
+  show skeleton rows only while their first read is pending. A failed read shows
+  nothing; it never shimmers forever. Collections stay hidden until known.
+- **Validation:**
+  - 650 workspace Rust tests, plus the opt-in harness. 164 frontend tests, including 3
+    new shelf tests. Lint, typecheck and build pass.
+  - SQLx metadata was regenerated against a schema built from current migrations: one
+    query file replaced, and `prepare --check` is clean.
+  - Independent review: placeholders could get stuck on a failed read, and the
+    harness's `ANALYZE` and missing baseline made its numbers unrepresentative. All
+    fixed.
+- **Not yet timed** in the native app on the real library.
+- **Follow-up, not done:** the grid page (77 ms) still computes card JSON facts for
+  every film before sorting; a page-first rewrite of `list_movies` remains possible.
 
 ### Next dependency
 

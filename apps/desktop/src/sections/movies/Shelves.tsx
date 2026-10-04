@@ -32,6 +32,26 @@ function Shelf({
   );
 }
 
+/// Placeholder while a shelf that is almost always present loads, so the page
+/// below it does not jump when it arrives.
+function ShelfSkeleton({
+  id,
+  title,
+  children,
+}: {
+  id: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Shelf id={id} title={title}>
+      <div aria-hidden className="pointer-events-none">
+        {children}
+      </div>
+    </Shelf>
+  );
+}
+
 export const CollectionsShelf = memo(function CollectionsShelf({
   collections,
   onPick,
@@ -95,14 +115,28 @@ export const CollectionsShelf = memo(function CollectionsShelf({
 
 export const DecadesShelf = memo(function DecadesShelf({
   decades,
+  loading = false,
   active,
   onPick,
 }: {
-  decades: DecadeCount[];
+  /** Undefined until loaded (or if the read failed). */
+  decades: DecadeCount[] | undefined;
+  /** True only while the first read is in flight; a failed read shows nothing. */
+  loading?: boolean;
   active: number | null;
   onPick: (decade: number) => void;
 }) {
-  if (decades.length === 0) return null;
+  if (decades === undefined && loading)
+    return (
+      <ShelfSkeleton id="movies-decades" title="By decade">
+        <div className="grid grid-cols-6 gap-4">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div key={i} className="nova-shimmer h-[150px] rounded-[14px] bg-[#111113]" />
+          ))}
+        </div>
+      </ShelfSkeleton>
+    );
+  if (!decades || decades.length === 0) return null;
   return (
     <Shelf id="movies-decades" title="By decade" note="Choose one to see its films">
       <ul className="grid grid-cols-6 gap-4">
@@ -163,14 +197,32 @@ function sizeFor(count: number, max: number): string {
 
 export const GenresShelf = memo(function GenresShelf({
   genres,
+  loading = false,
   active,
   onPick,
 }: {
-  genres: FacetCount[];
+  /** Undefined until loaded (or if the read failed). */
+  genres: FacetCount[] | undefined;
+  /** True only while the first read is in flight; a failed read shows nothing. */
+  loading?: boolean;
   active: string | null;
   onPick: (genre: string) => void;
 }) {
-  if (genres.length === 0) return null;
+  if (genres === undefined && loading)
+    return (
+      <ShelfSkeleton id="movies-genres" title="By genre">
+        <div className="flex flex-wrap gap-x-[26px] gap-y-3">
+          {[96, 72, 120, 64, 88, 110, 76, 92].map((w, i) => (
+            <div
+              key={i}
+              className="nova-shimmer h-7 rounded-md bg-white/[0.05]"
+              style={{ width: w }}
+            />
+          ))}
+        </div>
+      </ShelfSkeleton>
+    );
+  if (!genres || genres.length === 0) return null;
   const max = genres[0]?.count ?? 1;
   return (
     <Shelf id="movies-genres" title="By genre">

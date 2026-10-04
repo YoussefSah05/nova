@@ -1834,3 +1834,57 @@ async fn the_page_marks_each_sources_badges_and_novas_pick() {
     );
     assert_eq!(english.variants.iter().filter(|v| v.picked).count(), 1);
 }
+
+#[tokio::test]
+async fn decade_posters_prefer_real_posters_and_cap_at_four() {
+    let db = db().await;
+    let mut rows = Vec::new();
+    // 1990s: a logo-only film first, then five films with posters.
+    for i in 0..6 {
+        let mut m = movie(
+            db.source_id,
+            &format!("Nineties {i}"),
+            &format!("http://host/movie/u/p/9{i}.mkv"),
+            Some(&format!("xtream:vod:9{i}")),
+        );
+        m.year = Some(1990 + i);
+        if i == 0 {
+            m.logo_url = Some("https://img.invalid/logo-0.png".into());
+        }
+        rows.push(m);
+    }
+    // 1970s: only a logo, which is still shown.
+    let mut old = movie(
+        db.source_id,
+        "Seventies",
+        "http://host/movie/u/p/70.mkv",
+        Some("xtream:vod:70"),
+    );
+    old.year = Some(1975);
+    old.logo_url = Some("https://img.invalid/logo-70.png".into());
+    rows.push(old);
+    import(&db, &rows, false).await;
+    // Posters arrive later, from enrichment (the import stores provider logos).
+    sqlx::query(
+        "UPDATE vod_items SET poster_url = 'https://img.invalid/poster-' || substr(name, 10) || '.jpg'
+         WHERE name LIKE 'Nineties %' AND name <> 'Nineties 0'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let decades = CanonicalRepository::new(&db.pool)
+        .movie_decades(db.source_id)
+        .await
+        .unwrap();
+    let nineties = decades.iter().find(|d| d.decade == 1990).unwrap();
+    assert_eq!(nineties.count, 6);
+    assert_eq!(
+        nineties.poster_urls,
+        (1..=4)
+            .map(|i| format!("https://img.invalid/poster-{i}.jpg"))
+            .collect::<Vec<_>>()
+    );
+    let seventies = decades.iter().find(|d| d.decade == 1970).unwrap();
+    assert_eq!(seventies.poster_urls, ["https://img.invalid/logo-70.png"]);
+}
