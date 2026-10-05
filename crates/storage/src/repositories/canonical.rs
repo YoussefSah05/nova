@@ -188,6 +188,8 @@ impl<'a> CanonicalRepository<'a> {
         // 3. New records: one entity + variant per unclaimed binding key.
         //    Legacy per-row flags seed the entity (upgrade backfill and the
         //    legacy refresh restore); afterwards the entity is authoritative.
+        //    Duplicate rows share a key: a flag on any of them is kept, not
+        //    only the lowest-id row's (series seed the same way).
         let fresh = sqlx::query!(
             r#"SELECT MIN(v.id) as "vod_item_id!: i64",
                       v.binding_key as "binding_key!: String"
@@ -211,9 +213,13 @@ impl<'a> CanonicalRepository<'a> {
             sqlx::query!(
                 r#"INSERT INTO canonical_entities
                        (id, kind, title, year, is_favorite, is_in_watchlist, created_at)
-                   SELECT ?, 'movie', COALESCE(clean_title, name), year,
-                          is_favorite, is_in_watchlist, ?
-                   FROM vod_items WHERE id = ?"#,
+                   SELECT ?, 'movie', COALESCE(v.clean_title, v.name), v.year,
+                          (SELECT MAX(g.is_favorite) FROM vod_items g
+                           WHERE g.source_id = v.source_id AND g.binding_key = v.binding_key),
+                          (SELECT MAX(g.is_in_watchlist) FROM vod_items g
+                           WHERE g.source_id = v.source_id AND g.binding_key = v.binding_key),
+                          ?
+                   FROM vod_items v WHERE v.id = ?"#,
                 entity,
                 now,
                 row.vod_item_id,

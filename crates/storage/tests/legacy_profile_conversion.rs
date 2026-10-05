@@ -447,3 +447,63 @@ async fn invalid_or_unsupported_recovery_never_registers_a_profile() {
     );
     app.close().await;
 }
+
+#[tokio::test]
+async fn merged_duplicates_may_gain_flags_from_their_own_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.db");
+    let output = dir.path().join("output.db");
+    let pool = fixture(&source).await;
+    // A second copy of the same film and episode, without the user's flags:
+    // canonical merging legitimately mirrors the title's flags onto it.
+    sqlx::raw_sql(
+        "INSERT INTO vod_items (id,source_id,name,stream_url,is_favorite,is_in_watchlist)
+           SELECT 2,source_id,name,stream_url,0,0 FROM vod_items WHERE id=1;
+         INSERT INTO series_episodes (id,source_id,series_title,season,episode,stream_url,is_favorite,is_in_watchlist)
+           SELECT 2,source_id,series_title,season,episode,stream_url,0,0 FROM series_episodes WHERE id=1;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    convert(&source, &output).await.unwrap();
+    let pool = open(&output, true).await.unwrap();
+    let flags: Vec<(i64, i64)> =
+        sqlx::query_as("SELECT is_favorite, is_in_watchlist FROM vod_items ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(
+        flags.iter().all(|f| *f == (1, 1)),
+        "the copy carries its title's flags"
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn a_flag_on_a_later_duplicate_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.db");
+    let output = dir.path().join("output.db");
+    let pool = fixture(&source).await;
+    // The user flagged the later copy, not the lowest-id one.
+    sqlx::raw_sql(
+        "INSERT INTO vod_items (id,source_id,name,stream_url,is_favorite,is_in_watchlist)
+           SELECT 2,source_id,name,stream_url,1,1 FROM vod_items WHERE id=1;
+         UPDATE vod_items SET is_favorite = 0, is_in_watchlist = 0 WHERE id = 1;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    convert(&source, &output).await.unwrap();
+    let pool = open(&output, true).await.unwrap();
+    let flags: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT is_favorite, is_in_watchlist FROM canonical_entities WHERE kind = 'movie'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(flags, [(1, 1)], "the film keeps the user's flags");
+    pool.close().await;
+}

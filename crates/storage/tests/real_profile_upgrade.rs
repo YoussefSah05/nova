@@ -78,6 +78,7 @@ async fn real_profile_upgrade_preserves_movie_user_state() {
         }
     );
     let preserved = preserved_rows(&pool).await;
+    let flags = qualification::legacy_flags(&pool).await.unwrap();
     let movies = count(&pool, "SELECT COUNT(*) FROM vod_items").await;
     let favorites = count(
         &pool,
@@ -100,6 +101,9 @@ async fn real_profile_upgrade_preserves_movie_user_state() {
     let upgraded = init_profile_db(copy.to_str().unwrap()).await.unwrap();
     let elapsed = started.elapsed();
     verify_preserved(&upgraded, &preserved).await;
+    qualification::verify_flags(&upgraded, &flags)
+        .await
+        .unwrap_or_else(|reason| panic!("{reason}"));
 
     // Every legacy favourite / watchlisted row's entity carries the flag.
     let lost_favorites = count(
@@ -167,6 +171,9 @@ async fn real_profile_upgrade_preserves_movie_user_state() {
     let reopen = started.elapsed();
     let entities_after_reopen = count(&reopened, "SELECT COUNT(*) FROM canonical_entities").await;
     verify_preserved(&reopened, &preserved).await;
+    qualification::verify_flags(&reopened, &flags)
+        .await
+        .unwrap_or_else(|reason| panic!("{reason}"));
     reopened.close().await;
 
     eprintln!(

@@ -283,7 +283,55 @@ has the same results.
     `app.nova.desktop.validation` and refuses relative or real data roots;
   - the steps are in [`m26-native-recovery-checklist.md`](m26-native-recovery-checklist.md).
 
-Recover the schema-6 migration provenance; it remains refused. Address intentional
-flag promotion for duplicate rows before broadening accepted datasets. Qualify native
-end-to-end recovery and interrupted-process cleanup. M26 remains partial; no later
-milestone started.
+### Duplicate-flag promotion — 2026-10-05
+
+Canonical merging mirrors a title's favourite and watchlist flags onto every copy
+of that film (same binding) or series. The converter used to fingerprint those
+flags exactly, so it refused otherwise valid schema-21 profiles with duplicate
+rows. Film and episode flags are now checked by `verify_flags`
+(`profile_recovery/qualification.rs`):
+
+- A flag that was set may never be cleared.
+- A flag may only appear on a row whose canonical title already carried that flag
+  on another of its rows before conversion. The groups are
+  `stream_variants` by `(source_id, binding_key)` for films, and `series_bindings`
+  for episodes.
+
+All other preserved columns of those tables, and channel flags, stay exact. The
+converter and the opt-in real-profile harness both apply the rule after upgrade and
+after reopen.
+
+Review found that the canonical compiler seeded a new film from its lowest-id row
+only, so a favourite on a later duplicate was dropped. Films now seed from the
+maximum across the binding group, as series already did.
+
+The check trusts the converted grouping. If the resolver wrongly merged two
+different films, a flag spreading between them would look legitimate. Resolution
+correctness is covered by the canonical tests, not by this verifier. Tests cover:
+
+- a duplicate copy gaining its title's flags;
+- a flag on a later duplicate being kept;
+- a lost flag being refused;
+- a flag appearing on a different title being refused.
+
+### Schema-6 lineage: bounded, not supported — 2026-10-05
+
+The real schema-6 profile's migration-6 checksum matches no SQL in available
+history, including whitespace and line-ending variants. Its table shape resembling
+today's migration 6 is not proof of provenance. Accepting it would mean trusting
+an unknown schema, or rewriting an applied checksum, and both are excluded.
+
+**Decision:** this lineage is refused. The profile picker reports recovery as
+unsupported, and the original stays untouched. It would be revisited only if the
+build that created it is identified and its exact migration SQL recovered; that
+would be a new, separately qualified lineage like the schema-21 one. No further
+investigation is planned.
+
+Status of the remaining items:
+
+- Schema-6 provenance: bounded as unsupported (see above).
+- Duplicate-flag promotion: done (see above).
+- Still open: native end-to-end recovery and interrupted-process cleanup, using
+  [`m26-native-recovery-checklist.md`](m26-native-recovery-checklist.md).
+
+M26 remains partial until that native run is recorded.

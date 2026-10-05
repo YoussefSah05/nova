@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO canonical_entities\n                       (id, kind, title, year, is_favorite, is_in_watchlist, created_at)\n                   SELECT ?, 'movie', COALESCE(v.clean_title, v.name), v.year,\n                          (SELECT MAX(g.is_favorite) FROM vod_items g\n                           WHERE g.source_id = v.source_id AND g.binding_key = v.binding_key),\n                          (SELECT MAX(g.is_in_watchlist) FROM vod_items g\n                           WHERE g.source_id = v.source_id AND g.binding_key = v.binding_key),\n                          ?\n                   FROM vod_items v WHERE v.id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "8e8de7f7ed43852ee8130e65c63e6b2b9a9caf23b6f992d1aa040609f34791c5"
+}

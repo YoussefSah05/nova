@@ -11,7 +11,9 @@ use sqlx::{
 };
 use thiserror::Error;
 
-use self::qualification::{fingerprint, lineage, preserved_rows, verify_preserved};
+use self::qualification::{
+    fingerprint, legacy_flags, lineage, preserved_rows, verify_flags, verify_preserved,
+};
 
 #[derive(Debug, Error)]
 pub enum ConversionError {
@@ -215,6 +217,9 @@ async fn convert_staged(path: &Path) -> Result<(), ConversionError> {
     let pool = open(path, false).await?;
     let preparation = async {
         validate_legacy(&pool).await?;
+        let flags = legacy_flags(&pool)
+            .await
+            .map_err(|_| ConversionError::Validation)?;
         let mut baseline = preserved_rows(&pool)
             .await
             .map_err(|_| ConversionError::Validation)?;
@@ -259,17 +264,18 @@ async fn convert_staged(path: &Path) -> Result<(), ConversionError> {
             table: "nova_legacy_migration_ledger_v1",
             ..ledger
         });
-        Ok::<_, ConversionError>(baseline)
+        Ok::<_, ConversionError>((baseline, flags))
     }
     .await;
     pool.close().await;
-    let baseline = preparation?;
+    let (baseline, flags) = preparation?;
     let path = path.to_str().ok_or(ConversionError::Filesystem)?;
     let upgraded = crate::init_profile_db(path)
         .await
         .map_err(|_| ConversionError::Migration)?;
     let check = async {
         verify_preserved(&upgraded, &baseline).await.map_err(|_| ConversionError::Validation)?;
+        verify_flags(&upgraded, &flags).await.map_err(|_| ConversionError::Validation)?;
         integrity(&upgraded).await?;
         catalog_valid(&upgraded).await?;
         // All canonical state, not just counts, must be stable on reopen.
@@ -290,6 +296,9 @@ async fn convert_staged(path: &Path) -> Result<(), ConversionError> {
         .map_err(|_| ConversionError::Migration)?;
     let result = async {
         verify_preserved(&reopened, &baseline)
+            .await
+            .map_err(|_| ConversionError::Validation)?;
+        verify_flags(&reopened, &flags)
             .await
             .map_err(|_| ConversionError::Validation)?;
         integrity(&reopened).await?;
