@@ -1129,6 +1129,45 @@ and [converter usage](../crates/storage/examples/README.md).
 - **Follow-up, not done:** the grid page (77 ms) still computes card JSON facts for
   every film before sorting; a page-first rewrite of `list_movies` remains possible.
 
+### Scroll smoothness under a resting pointer — 2026-10-05
+
+- **Report:** scrolling was not smooth.
+- **Measurement:** a temporary harness, since removed, drove the production build in
+  headless Chromium over the DevTools protocol. It used mock IPC with 6,000 films,
+  1,500 shows and generated JPEG artwork.
+  - Scrolling by script, without a pointer, the grids held 60 fps.
+  - Development builds dropped 18–31 of 300 frames on Movies and Series. That is
+    React development overhead; the shipped build is unaffected.
+- **Cause:** with the pointer resting over a grid while the wheel scrolls it, every
+  card passing under the cursor ran its hover styles (a `shadow-2xl` lift, costly to
+  repaint in WebKit), started hover-preview timers, and fired detail prefetches.
+  - A 4-second scroll fired 63 IPC calls (`get_title_art`, `get_title_facts`,
+    `get_movie`) and 686 style recalculations.
+- **Fix:**
+  - While a screen scrolls, `Screen` toggles `nova-scrolling` on its container
+    directly; there is no React render.
+  - Cards (`[data-card]`: PosterCard and ShowCard) ignore the pointer during that
+    time. Rails, the grid and the screen stay hit-testable, so wheel and sideways
+    swipes keep working.
+  - The class clears 150 ms after the last scroll event, or as soon as the pointer
+    moves 6 px. Positions are compared rather than trusting `movementX`, which some
+    WebKit builds report as 0, and the 6 px tolerance ignores hand jitter during
+    wheel scrolling.
+  - Result: the same scroll makes **0 IPC calls** and **74 style recalculations**.
+- **Validation:** 167 frontend tests pass, including 3 for scroll behaviour.
+  Typecheck, lint and build pass. Independent review found rail-swipe and late-click
+  risks in the first version, so it was narrowed to cards and given the pointer-move
+  release. A re-review's `movementX` and jitter notes were addressed, again with a
+  test.
+  - Not yet measured in the native WKWebView.
+- **Bounded:** a click on a card within 150 ms of the last scroll event, without
+  moving the pointer, lands on the grid.
+- **Not done:** WebKit costs that were noted but not measured:
+  - the full-width top-bar blur over scrolling content;
+  - `VirtualRows` reading `offsetTop` on every commit;
+  - `content-visibility` placeholder heights (280/420 px) that can make the scrollbar
+    jump.
+
 ### Next dependency
 
 **UI-1–UI-7 are implemented.** Earlier phase entries retain their stated device validation

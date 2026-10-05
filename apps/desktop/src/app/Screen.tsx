@@ -16,6 +16,8 @@ import { ScreenScrollContext } from "./screenContext";
 
 /// Quiet time after the last scroll event before the pointer is live again.
 const SCROLL_IDLE_MS = 150;
+/// Pointer travel during a scroll that counts as intent to use the cards.
+const RELEASE_PX = 6;
 
 export const Screen = memo(function Screen({
   active,
@@ -54,19 +56,35 @@ export const Screen = memo(function Screen({
     const onScroll = () => {
       if (!activeRef.current) return;
       savedTop.current = el.scrollTop;
-      if (!idle) el.classList.add("nova-scrolling");
+      if (!idle) {
+        el.classList.add("nova-scrolling");
+        anchor = pointer;
+      }
       window.clearTimeout(idle);
       idle = window.setTimeout(() => {
         idle = 0;
+        anchor = null;
         el.classList.remove("nova-scrolling");
       }, SCROLL_IDLE_MS);
     };
-    // A real pointer move hands the cards back at once (e.g. to click one
-    // while momentum is still settling); synthetic zero-distance moves don't.
+    // Moving the pointer a few pixels hands the cards back at once (e.g. to
+    // click one while momentum settles). Positions, not `movementX`, which
+    // some WebKit builds report as 0; the tolerance ignores hand jitter
+    // during wheel scrolling.
+    let pointer: { x: number; y: number } | null = null;
+    let anchor: { x: number; y: number } | null = null;
     const onPointerMove = (event: PointerEvent) => {
-      if (!idle || !(event.movementX || event.movementY)) return;
+      if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+      pointer = { x: event.clientX, y: event.clientY };
+      if (!idle) return;
+      if (!anchor) {
+        anchor = pointer;
+        return;
+      }
+      if (Math.hypot(pointer.x - anchor.x, pointer.y - anchor.y) < RELEASE_PX) return;
       window.clearTimeout(idle);
       idle = 0;
+      anchor = null;
       el.classList.remove("nova-scrolling");
     };
     el.addEventListener("scroll", onScroll, { passive: true });

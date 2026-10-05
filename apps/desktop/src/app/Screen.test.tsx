@@ -35,15 +35,19 @@ describe("Screen scrolling", () => {
     expect(region).not.toHaveClass("nova-scrolling");
   });
 
-  it("gives the pointer back on a real pointer move, not a synthetic one", () => {
+  it("gives the pointer back after a real move, ignoring jitter", () => {
     mount(true);
     const region = screen.getByRole("region", { name: "Movies" });
+    // jsdom has no PointerEvent; a MouseEvent carries the coordinates.
+    const move = (x: number, y: number) =>
+      region.dispatchEvent(
+        new MouseEvent("pointermove", { bubbles: true, clientX: x, clientY: y })
+      );
+    move(100, 100);
     fireEvent.scroll(region);
-    region.dispatchEvent(new MouseEvent("pointermove", { bubbles: true }));
+    move(102, 101);
     expect(region).toHaveClass("nova-scrolling");
-    const move = new MouseEvent("pointermove", { bubbles: true });
-    Object.defineProperty(move, "movementX", { value: 4 });
-    region.dispatchEvent(move);
+    move(112, 100);
     expect(region).not.toHaveClass("nova-scrolling");
   });
 });
