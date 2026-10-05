@@ -272,6 +272,7 @@ pub(crate) async fn run_source_import(
     app: AppHandle,
     source: Source,
     mode: ImportMode,
+    admission: std::sync::Arc<crate::resource_policy::AdmissionController>,
 ) -> bool {
     let source_id = source.id;
     let url = source.url;
@@ -282,8 +283,8 @@ pub(crate) async fn run_source_import(
     // EPG seeding (Phase 4): record any provider-supplied XMLTV URL alongside
     // the source so a later `epg_refresh` can pull programmes for it. Xtream's
     // is known immediately; M3U's `url-tvg` is only revealed once the parser
-    // has seen the `#EXTM3U` header line, so we wait for the metadata oneshot
-    // in a separate task.
+    // has seen the `#EXTM3U` header line, so it is registered after the
+    // import, before the caller queues the guide refresh that reads it.
     let (rx, m3u_metadata_rx) = match &xtream_creds {
         Some(creds) => {
             let epg_url = creds.xmltv_url();
@@ -301,24 +302,6 @@ pub(crate) async fn run_source_import(
         }
     };
 
-    if let Some(meta_rx) = m3u_metadata_rx {
-        let pool_meta = std::sync::Arc::clone(&pool);
-        tokio::spawn(async move {
-            if let Ok(meta) = meta_rx.await {
-                if let Some(url_tvg) = meta.url_tvg {
-                    if let Err(e) = EpgSourcesRepository::new(&pool_meta)
-                        .upsert(source_id, url_tvg.trim(), "m3u_url_tvg")
-                        .await
-                    {
-                        tracing::warn!(source_id, error = %e, "failed to register M3U url-tvg");
-                    } else {
-                        tracing::info!(source_id, "M3U url-tvg registered");
-                    }
-                }
-            }
-        });
-    }
-
     let published = run_import(
         source_id,
         rx,
@@ -329,8 +312,20 @@ pub(crate) async fn run_source_import(
         mode,
     )
     .await;
+    if let Some(meta_rx) = m3u_metadata_rx {
+        if let Ok(Some(url_tvg)) = meta_rx.await.map(|meta| meta.url_tvg) {
+            if let Err(e) = EpgSourcesRepository::new(&pool)
+                .upsert(source_id, url_tvg.trim(), "m3u_url_tvg")
+                .await
+            {
+                tracing::warn!(source_id, error = %e, "failed to register M3U url-tvg");
+            } else {
+                tracing::info!(source_id, "M3U url-tvg registered");
+            }
+        }
+    }
     if published && mode == ImportMode::Replace {
-        refetch_series_with_parked_history(pool, source_id);
+        refetch_series_with_parked_history(pool, source_id, admission);
     }
     published
 }
@@ -340,8 +335,21 @@ pub(crate) async fn run_source_import(
 /// resume points reappear in Continue Watching without opening each series.
 const MAX_BACKGROUND_SERIES_REFETCH: i64 = 10;
 
-fn refetch_series_with_parked_history(pool: std::sync::Arc<sqlx::SqlitePool>, source_id: i64) {
+/// Metadata-class work in the governor's job lane: it waits while anything
+/// plays and yields to higher-priority jobs between series.
+fn refetch_series_with_parked_history(
+    pool: std::sync::Arc<sqlx::SqlitePool>,
+    source_id: i64,
+    admission: std::sync::Arc<crate::resource_policy::AdmissionController>,
+) {
     tokio::spawn(async move {
+        let cancellation = crate::model_runtime::RuntimeCancellation::default();
+        let Ok(mut slot) = admission
+            .acquire_job_slot(crate::resource_policy::WorkClass::Metadata, &cancellation)
+            .await
+        else {
+            return;
+        };
         let titles = match WatchHistoryRepository::new(&pool)
             .series_with_pending_episodes(source_id, MAX_BACKGROUND_SERIES_REFETCH)
             .await
@@ -353,6 +361,9 @@ fn refetch_series_with_parked_history(pool: std::sync::Arc<sqlx::SqlitePool>, so
             }
         };
         for title in titles {
+            if slot.checkpoint(&cancellation).await.is_err() {
+                return;
+            }
             // Best effort: a failure leaves the history parked until the
             // series is opened.
             if let Err(e) = fetch_series_episodes(&pool, source_id, &title).await {

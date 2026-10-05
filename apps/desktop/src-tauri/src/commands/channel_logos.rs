@@ -7,9 +7,9 @@
 //! result. Nothing leaves the device but those two downloads: channel names are
 //! never sent anywhere. Progress: `artwork:channel-logos`.
 
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use nova_artwork::directory::{
@@ -31,8 +31,96 @@ const MAX_AGE_SECS: i64 = 7 * 24 * 3600;
 const MAX_BODY: usize = 64 * 1024 * 1024;
 const EVENT: &str = "artwork:channel-logos";
 
-/// One match pass at a time, across profiles.
-static RUNNING: AtomicBool = AtomicBool::new(false);
+/// Requests accepted while a profile's pass runs; that pass drains them before
+/// it ends, so a request made while it waits (e.g. for playback) is never lost.
+#[derive(Debug, Default, PartialEq)]
+struct Pending {
+    all: bool,
+    sources: BTreeSet<i64>,
+    force: bool,
+}
+
+impl Pending {
+    fn add(&mut self, source_id: Option<i64>, force: bool) {
+        match source_id {
+            None => self.all = true,
+            Some(id) => {
+                self.sources.insert(id);
+            }
+        }
+        self.force |= force;
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.all && self.sources.is_empty()
+    }
+}
+
+/// A profile's running pass: its identity and the requests not yet served.
+#[derive(Debug, Default)]
+struct Pass {
+    id: u64,
+    pending: Pending,
+}
+
+/// One pass per profile at a time.
+static PASSES: LazyLock<Mutex<HashMap<String, Pass>>> = LazyLock::new(Default::default);
+static NEXT_PASS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn passes() -> std::sync::MutexGuard<'static, HashMap<String, Pass>> {
+    PASSES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Ends a pass however its task ends (a panic, or tokio dropping the task):
+/// removes the profile's entry if it still belongs to this pass, so later
+/// requests can start a new one. A newer pass's entry is never touched.
+struct PassEnd {
+    profile_id: String,
+    id: u64,
+}
+
+impl Drop for PassEnd {
+    fn drop(&mut self) {
+        let mut passes = passes();
+        if passes
+            .get(&self.profile_id)
+            .is_some_and(|p| p.id == self.id)
+        {
+            passes.remove(&self.profile_id);
+        }
+    }
+}
+
+/// Accept a request: `Some(pass id)` if a new pass must start, `None` if the
+/// running pass of this profile will serve it.
+fn accept(profile_id: &str, source_id: Option<i64>, force: bool) -> Option<u64> {
+    let mut passes = passes();
+    if let Some(pass) = passes.get_mut(profile_id) {
+        pass.pending.add(source_id, force);
+        return None;
+    }
+    let id = NEXT_PASS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut pending = Pending::default();
+    pending.add(source_id, force);
+    passes.insert(profile_id.to_owned(), Pass { id, pending });
+    Some(id)
+}
+
+/// The next batch for pass `id`, or `None` (and the pass ends) when no
+/// request is left.
+fn next_batch(profile_id: &str, id: u64) -> Option<Pending> {
+    let mut passes = passes();
+    let pass = passes.get_mut(profile_id).filter(|p| p.id == id)?;
+    let batch = std::mem::take(&mut pass.pending);
+    if batch.is_empty() {
+        passes.remove(profile_id);
+        None
+    } else {
+        Some(batch)
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -210,7 +298,7 @@ async fn match_source(
 }
 
 /// Start a background match for one source (or every source). `false` when the
-/// feature is off or a pass is already running.
+/// feature is off; a request made while this profile's pass runs is served by it.
 #[tauri::command]
 pub async fn match_channel_logos(
     profile_id: String,
@@ -220,69 +308,107 @@ pub async fn match_channel_logos(
     state: State<'_, AppState>,
 ) -> Result<bool, ApiError> {
     let pool = require_profile_pool(&profile_id, &state).await?;
-    if !ProfileSettingsRepository::new(&pool)
-        .get()
-        .await?
-        .logo_directory_enabled
-    {
+    if !enabled(&pool).await? {
         return Ok(false);
     }
-    if RUNNING.swap(true, Ordering::SeqCst) {
-        return Ok(false);
-    }
+    let Some(pass) = accept(&profile_id, source_id, force_refresh.unwrap_or(false)) else {
+        return Ok(true);
+    };
+    let admission = state.model_runtime.resource_admission();
     tauri::async_runtime::spawn(async move {
-        let emit = |p: ChannelLogosProgress| {
-            let _ = app.emit(EVENT, p);
+        let _end = PassEnd {
+            profile_id: profile_id.clone(),
+            id: pass,
         };
-        let outcome = async {
-            let dir = ensure_directory(&app, force_refresh.unwrap_or(false), &emit)
-                .await
-                .map_err(ApiError::Internal)?;
-            let sources = match source_id {
-                Some(id) => vec![id],
-                None => SourceRepository::new(&pool)
-                    .list()
-                    .await?
-                    .into_iter()
-                    .map(|s| s.id)
-                    .collect(),
-            };
-            let (mut matched, mut candidates) = (0, 0);
-            for id in sources {
-                emit(progress(
-                    "matching",
-                    Some(id),
-                    matched,
-                    candidates,
-                    false,
-                    None,
-                ));
-                let (m, c) = match_source(&pool, dir.clone(), id).await?;
-                matched += m;
-                candidates += c;
-            }
-            Ok::<_, ApiError>((matched, candidates))
+        while let Some(batch) = next_batch(&profile_id, pass) {
+            run_pass(&pool, &app, &admission, batch).await;
         }
-        .await;
-        match outcome {
-            Ok((matched, candidates)) => emit(progress(
-                "complete", source_id, matched, candidates, true, None,
-            )),
-            Err(e) => {
-                tracing::warn!(error = ?e, "channel logo matching failed");
-                emit(progress(
-                    "failed",
-                    source_id,
-                    0,
-                    0,
-                    true,
-                    Some("Could not update channel logos".into()),
-                ))
-            }
-        }
-        RUNNING.store(false, Ordering::SeqCst);
     });
     Ok(true)
+}
+
+async fn enabled(pool: &sqlx::SqlitePool) -> Result<bool, ApiError> {
+    Ok(ProfileSettingsRepository::new(pool)
+        .get()
+        .await?
+        .logo_directory_enabled)
+}
+
+/// One batch, as metadata-class work in the governor's job lane: it waits
+/// while anything plays and yields to higher-priority jobs after the
+/// directory download and before each source. The setting is re-checked
+/// before each source, since a pass may wait a long time.
+async fn run_pass(
+    pool: &sqlx::SqlitePool,
+    app: &AppHandle,
+    admission: &Arc<crate::resource_policy::AdmissionController>,
+    batch: Pending,
+) {
+    let emit = |p: ChannelLogosProgress| {
+        let _ = app.emit(EVENT, p);
+    };
+    let single = (!batch.all && batch.sources.len() == 1)
+        .then(|| batch.sources.first().copied())
+        .flatten();
+    let cancelled = || ApiError::Internal("channel logo matching was cancelled".into());
+    let outcome = async {
+        // Turned off while queued: no slot, no download.
+        if !enabled(pool).await? {
+            return Ok((0, 0));
+        }
+        let cancellation = crate::model_runtime::RuntimeCancellation::default();
+        let mut slot = admission
+            .acquire_job_slot(crate::resource_policy::WorkClass::Metadata, &cancellation)
+            .await
+            .map_err(|()| cancelled())?;
+        let dir = ensure_directory(app, batch.force, &emit)
+            .await
+            .map_err(ApiError::Internal)?;
+        let sources: Vec<i64> = if batch.all {
+            SourceRepository::new(pool)
+                .list()
+                .await?
+                .into_iter()
+                .map(|s| s.id)
+                .collect()
+        } else {
+            batch.sources.into_iter().collect()
+        };
+        let (mut matched, mut candidates) = (0, 0);
+        for id in sources {
+            slot.checkpoint(&cancellation).await.map_err(|()| cancelled())?;
+            if !enabled(pool).await? {
+                break;
+            }
+            emit(progress("matching", Some(id), matched, candidates, false, None));
+            // One source failing (e.g. removed meanwhile) does not stop the rest.
+            match match_source(pool, dir.clone(), id).await {
+                Ok((m, c)) => {
+                    matched += m;
+                    candidates += c;
+                }
+                Err(e) => tracing::warn!(source_id = id, error = ?e, "channel logo matching skipped a source"),
+            }
+        }
+        Ok::<_, ApiError>((matched, candidates))
+    }
+    .await;
+    match outcome {
+        Ok((matched, candidates)) => emit(progress(
+            "complete", single, matched, candidates, true, None,
+        )),
+        Err(e) => {
+            tracing::warn!(error = ?e, "channel logo matching failed");
+            emit(progress(
+                "failed",
+                single,
+                0,
+                0,
+                true,
+                Some("Could not update channel logos".into()),
+            ))
+        }
+    }
 }
 
 /// Forget every directory logo of the profile (the feature was turned off).
@@ -398,5 +524,59 @@ mod tests {
                 ("Unknown Local TV".into(), None),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod pass_tests {
+    use super::*;
+
+    #[test]
+    fn requests_during_a_pass_are_merged_and_drained_not_dropped() {
+        let profile = "pass-test-profile";
+        let pass = accept(profile, Some(1), false).expect("first request starts a pass");
+        assert!(
+            accept(profile, Some(2), true).is_none(),
+            "later requests join it"
+        );
+        assert!(accept(profile, Some(1), false).is_none());
+        let mut first = next_batch(profile, pass).unwrap();
+        assert_eq!(std::mem::take(&mut first.sources), BTreeSet::from([1, 2]));
+        assert!(first.force && !first.all);
+        // A request arriving mid-batch is served by the next one.
+        assert!(accept(profile, None, false).is_none());
+        assert!(next_batch(profile, pass).unwrap().all);
+        assert!(
+            next_batch(profile, pass).is_none(),
+            "drained: the pass ends"
+        );
+        let next = accept(profile, Some(3), false).expect("a new request starts a new pass");
+        assert_ne!(next, pass);
+        assert!(
+            next_batch(profile, pass).is_none(),
+            "an old pass never serves a new one"
+        );
+        drop(PassEnd {
+            profile_id: profile.into(),
+            id: pass,
+        });
+        assert!(
+            next_batch(profile, next).is_some(),
+            "an old pass's end leaves the new one"
+        );
+        assert!(next_batch(profile, next).is_none());
+    }
+
+    #[test]
+    fn a_pass_that_dies_frees_its_profile() {
+        let profile = "pass-test-dies";
+        let pass = accept(profile, None, false).unwrap();
+        drop(PassEnd {
+            profile_id: profile.into(),
+            id: pass,
+        });
+        let fresh = accept(profile, None, false).expect("a new pass can start");
+        assert!(next_batch(profile, fresh).is_some());
+        assert!(next_batch(profile, fresh).is_none());
     }
 }

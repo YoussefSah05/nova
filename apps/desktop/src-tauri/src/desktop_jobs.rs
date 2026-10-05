@@ -265,6 +265,7 @@ impl JobHandler for ImportHandler {
         let pool = Arc::clone(&self.pool);
         let app = self.app.clone();
         let epg = Arc::clone(&self.epg);
+        let admission = Arc::clone(&self.admission);
         Box::pin(async move {
             let _slot = take_slot(permit)?;
             let (id, mode) = job
@@ -291,7 +292,7 @@ impl JobHandler for ImportHandler {
                 return Ok(());
             }
             emit_import_stage(&app, source_id, ImportStage::Connecting);
-            if run_source_import(pool, app, source, mode).await {
+            if run_source_import(pool, app, source, mode, admission).await {
                 queue_guide_refresh(&epg, source_id).await;
                 Ok(())
             } else {
