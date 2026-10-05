@@ -129,11 +129,32 @@ impl AppState {
         if let Some(existing) = jobs.get(profile_id) {
             return Arc::clone(existing);
         }
-        let worker = Arc::new(DesktopJobs::new(pool, app, Arc::clone(&self.model_runtime)));
+        let worker = Arc::new(DesktopJobs::new(
+            profile_id,
+            pool,
+            app,
+            Arc::clone(&self.model_runtime),
+        ));
         // First creation in this process: no worker for this profile has run
         // yet, so any `running` row was interrupted by a previous process.
         worker.recover_interrupted().await;
         worker.kick_all();
+        // Automatic playlist refreshes, only while this is the active profile.
+        let scheduler = Arc::downgrade(&worker);
+        let active = Arc::clone(&self.active_profile_id);
+        let owner = profile_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                let Some(worker) = scheduler.upgrade() else {
+                    return;
+                };
+                if active.read().await.as_deref() == Some(owner.as_str()) {
+                    worker.schedule_due_refreshes().await;
+                }
+                drop(worker);
+                tokio::time::sleep(crate::desktop_jobs::SCHEDULE_INTERVAL).await;
+            }
+        });
         jobs.insert(profile_id.to_string(), Arc::clone(&worker));
         worker
     }

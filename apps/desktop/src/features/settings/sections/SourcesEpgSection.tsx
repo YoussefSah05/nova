@@ -141,7 +141,10 @@ export function SourcesEpgSection({
               {busy === s.id ? "Working…" : "Refresh"}
             </SettingsButton>
           </SettingRow>
-          <SettingRow title="Auto-refresh" description="How often to re-fetch this playlist.">
+          <SettingRow
+            title="Auto-refresh"
+            description="Re-fetch this playlist automatically while Nova is open. Paused during playback."
+          >
             <SelectInput
               value={String(s.autoRefreshHours)}
               onChange={(v) => setAutoRefresh(s.id, Number(v))}

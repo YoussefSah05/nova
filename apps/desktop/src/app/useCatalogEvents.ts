@@ -65,6 +65,29 @@ export function useCatalogEvents({
     [qc, profileId, activeSourceId]
   );
 
+  // A scheduled (background) refresh: quietly pick up its new catalog. Its
+  // progress and failures are not shown: the user did not start it, and the
+  // existing catalog stays available when it fails.
+  // Source ids are per profile: a refresh another profile started (before the
+  // user switched) must not touch this one's caches.
+  useTauriEvent<ImportProgress & { profileId: string }>(
+    "playlist:import:background",
+    (p) => {
+      if (p.profileId !== profileId || p.sourceId !== activeSourceId) return;
+      if (!p.done || p.error) return;
+      invalidateSource(qc, profileId, activeSourceId);
+      void invoke("start_enrichment", { profileId, sourceId: activeSourceId }).catch(
+        () => undefined
+      );
+      void invoke("match_channel_logos", {
+        profileId,
+        sourceId: activeSourceId,
+        forceRefresh: false,
+      }).catch(() => undefined);
+    },
+    [qc, profileId, activeSourceId]
+  );
+
   // TMDB matching commits in small, priority-ordered batches: repaint at most
   // every few seconds while it runs, and once when it is done.
   useEffect(() => {

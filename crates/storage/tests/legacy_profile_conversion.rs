@@ -67,7 +67,12 @@ async fn converts_known_branch_preserves_state_and_reopens_without_changing_orig
             .fetch_one(&pool)
             .await
             .unwrap(),
-        42
+        // Converted to this build's head, whatever that is.
+        sqlx::migrate!("./migrations/profile")
+            .iter()
+            .map(|m| m.version)
+            .max()
+            .unwrap()
     );
     for (sql, expected) in [
         ("SELECT COUNT(*) FROM nova_legacy_migration_ledger_v1", 21),

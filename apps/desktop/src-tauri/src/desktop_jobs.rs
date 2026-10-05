@@ -23,15 +23,91 @@ use crate::resource_policy::{AdmissionController, JobSlot, WorkClass};
 
 const EXPLICIT_PRIORITY: i64 = 400;
 const METADATA_PRIORITY: i64 = 300;
+/// Scheduled playlist refreshes: their own metadata-class queue, so they wait
+/// while anything plays and never hold up a user's import. A per-source lock
+/// shared with the import queue keeps one import per source at a time.
+const SCHEDULED_KIND: &str = "desktop_scheduled_refresh";
+/// Where an import reports progress. A user's import: `playlist:import:progress`.
+/// A scheduled (background) refresh: `playlist:import:background`, tagged with
+/// its profile (source ids are per profile), whose data the UI picks up quietly
+/// and whose errors it never shows.
+#[derive(Clone)]
+pub(crate) enum ImportFeed {
+    Manual,
+    Background(Arc<str>),
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackgroundImport<'a> {
+    profile_id: &'a str,
+    #[serde(flatten)]
+    progress: &'a ImportProgress,
+}
+
+impl ImportFeed {
+    pub(crate) fn emit(&self, app: &AppHandle, progress: &ImportProgress) {
+        let _ = match self {
+            Self::Manual => app.emit("playlist:import:progress", progress),
+            Self::Background(profile_id) => app.emit(
+                "playlist:import:background",
+                BackgroundImport {
+                    profile_id,
+                    progress,
+                },
+            ),
+        };
+    }
+}
+
+/// One import per source at a time, across the manual and scheduled queues.
+type SourceLocks = Arc<Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>>;
+
+fn source_lock(locks: &SourceLocks, source_id: i64) -> Arc<tokio::sync::Mutex<()>> {
+    Arc::clone(lock(locks).entry(source_id).or_default())
+}
+/// How often an open profile checks for playlists due a refresh.
+pub(crate) const SCHEDULE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Whether `source` is due its automatic refresh at `now` (seconds).
+/// `auto_refresh_hours <= 0` disables it; a source that never imported
+/// successfully is left to the user.
+fn refresh_due(source: &nova_core::Source, now: i64) -> bool {
+    source.auto_refresh_hours > 0
+        && source
+            .last_refreshed_at
+            .is_some_and(|last| last + source.auto_refresh_hours * 3600 <= now)
+}
+
+/// Sources to enqueue now: due, and not already enqueued automatically within
+/// their own interval (`scheduled` remembers when), so a failing provider is
+/// retried once per interval, not on every check.
+fn due_to_schedule(
+    sources: &[nova_core::Source],
+    now: i64,
+    scheduled: &mut HashMap<i64, i64>,
+) -> Vec<i64> {
+    let mut due = Vec::new();
+    for source in sources.iter().filter(|s| refresh_due(s, now)) {
+        let recent = scheduled
+            .get(&source.id)
+            .is_some_and(|at| at + source.auto_refresh_hours * 3600 > now);
+        if !recent {
+            scheduled.insert(source.id, now);
+            due.push(source.id);
+        }
+    }
+    due
+}
 
 const IMPORT_KIND: &str = "desktop_import";
 pub(crate) const EPG_KIND: &str = "desktop_epg_refresh";
 const ENRICH_KIND: &str = "desktop_enrichment";
 
-fn emit_import_stage(app: &AppHandle, source_id: i64, stage: ImportStage) {
-    let _ = app.emit(
-        "playlist:import:progress",
-        ImportProgress {
+fn emit_import_stage(app: &AppHandle, feed: &ImportFeed, source_id: i64, stage: ImportStage) {
+    feed.emit(
+        app,
+        &ImportProgress {
             source_id,
             stage,
             parsed: 0,
@@ -119,7 +195,12 @@ fn job_ready(admission: &Arc<AdmissionController>, class: WorkClass) -> ReadyFut
 }
 
 pub struct DesktopJobs {
+    pool: Arc<SqlitePool>,
     app: AppHandle,
+    /// Last automatic enqueue per source, so a failing provider is retried at
+    /// most once per refresh interval, not on every check.
+    refresh_attempts: Mutex<HashMap<i64, i64>>,
+    scheduled: Arc<JobQueue>,
     imports: Arc<JobQueue>,
     epg: Arc<JobQueue>,
     enrichment: Arc<JobQueue>,
@@ -127,7 +208,12 @@ pub struct DesktopJobs {
 }
 
 impl DesktopJobs {
-    pub fn new(pool: Arc<SqlitePool>, app: AppHandle, runtime: Arc<ModelRuntimeManager>) -> Self {
+    pub fn new(
+        profile_id: &str,
+        pool: Arc<SqlitePool>,
+        app: AppHandle,
+        runtime: Arc<ModelRuntimeManager>,
+    ) -> Self {
         let admission = runtime.resource_admission();
         let control = Arc::new(JobControl::default());
         let epg = Arc::new(JobQueue::new(
@@ -140,6 +226,7 @@ impl DesktopJobs {
                 control: Arc::clone(&control),
             }),
         ));
+        let locks = SourceLocks::default();
         let imports = Arc::new(JobQueue::new(
             Arc::clone(&pool),
             IMPORT_KIND,
@@ -148,8 +235,25 @@ impl DesktopJobs {
                 app: app.clone(),
                 admission: Arc::clone(&admission),
                 epg: Arc::clone(&epg),
+                locks: Arc::clone(&locks),
+                class: WorkClass::Explicit,
+                feed: ImportFeed::Manual,
             }),
         ));
+        let scheduled = Arc::new(JobQueue::new(
+            Arc::clone(&pool),
+            SCHEDULED_KIND,
+            Arc::new(ImportHandler {
+                pool: Arc::clone(&pool),
+                app: app.clone(),
+                admission: Arc::clone(&admission),
+                epg: Arc::clone(&epg),
+                locks,
+                class: WorkClass::Metadata,
+                feed: ImportFeed::Background(Arc::from(profile_id)),
+            }),
+        ));
+        let scheduler_pool = Arc::clone(&pool);
         let enrichment = Arc::new(JobQueue::new(
             pool.clone(),
             ENRICH_KIND,
@@ -162,7 +266,10 @@ impl DesktopJobs {
             }),
         ));
         Self {
+            pool: scheduler_pool,
             app: app.clone(),
+            refresh_attempts: Mutex::new(HashMap::new()),
+            scheduled,
             imports,
             epg,
             enrichment,
@@ -174,7 +281,7 @@ impl DesktopJobs {
     /// the profile's workers are created, before any queue is kicked. Append
     /// imports stay idempotent through the source's commit stamp.
     pub async fn recover_interrupted(&self) {
-        for queue in [&self.imports, &self.epg, &self.enrichment] {
+        for queue in [&self.imports, &self.scheduled, &self.epg, &self.enrichment] {
             if let Err(error) = queue.recover_interrupted().await {
                 tracing::warn!(%error, "could not requeue interrupted jobs");
             }
@@ -183,8 +290,42 @@ impl DesktopJobs {
 
     pub fn kick_all(&self) {
         self.imports.kick();
+        self.scheduled.kick();
         self.epg.kick();
         self.enrichment.kick();
+    }
+
+    /// Queue an automatic refresh for every playlist that is due one. Called
+    /// when the profile's workers start and every [`SCHEDULE_INTERVAL`].
+    pub async fn schedule_due_refreshes(&self) {
+        let sources = match SourceRepository::new(&self.pool).list().await {
+            Ok(sources) => sources,
+            Err(error) => {
+                tracing::warn!(%error, "could not check playlists due a refresh");
+                return;
+            }
+        };
+        let due = due_to_schedule(
+            &sources,
+            nova_core::now_ts(),
+            &mut lock(&self.refresh_attempts),
+        );
+        let mut queued = false;
+        for source_id in due {
+            match self
+                .scheduled
+                .enqueue_unique(&source_id.to_string(), METADATA_PRIORITY)
+                .await
+            {
+                Ok(_) => queued = true,
+                Err(error) => {
+                    tracing::warn!(source_id, %error, "could not schedule a refresh")
+                }
+            }
+        }
+        if queued {
+            self.scheduled.kick();
+        }
     }
 
     pub(crate) async fn import(&self, source_id: i64, mode: ImportMode) -> Result<(), String> {
@@ -195,7 +336,12 @@ impl DesktopJobs {
         self.imports
             .enqueue_unique(&format!("{source_id}:{mode}"), EXPLICIT_PRIORITY)
             .await?;
-        emit_import_stage(&self.app, source_id, ImportStage::Queued);
+        emit_import_stage(
+            &self.app,
+            &ImportFeed::Manual,
+            source_id,
+            ImportStage::Queued,
+        );
         self.imports.kick();
         Ok(())
     }
@@ -235,6 +381,7 @@ impl DesktopJobs {
         let removals = [
             (&self.imports, format!("{id}:append")),
             (&self.imports, format!("{id}:replace")),
+            (&self.scheduled, id.clone()),
             (&self.epg, id.clone()),
             (&self.enrichment, id),
         ];
@@ -254,11 +401,16 @@ struct ImportHandler {
     /// A successful import refreshes the source's guide: its feeds may be
     /// new (an M3U `url-tvg`), and its channels' tvg-ids may have changed.
     epg: Arc<JobQueue>,
+    locks: SourceLocks,
+    /// `Explicit` for the user's imports; `Metadata` for scheduled refreshes,
+    /// whose payload is the bare source id and which re-check that they are due.
+    class: WorkClass,
+    feed: ImportFeed,
 }
 
 impl JobHandler for ImportHandler {
     fn ready(&self) -> ReadyFuture {
-        job_ready(&self.admission, WorkClass::Explicit)
+        job_ready(&self.admission, self.class)
     }
 
     fn handle(&self, job: Job, permit: JobPermit) -> JobFuture {
@@ -266,34 +418,52 @@ impl JobHandler for ImportHandler {
         let app = self.app.clone();
         let epg = Arc::clone(&self.epg);
         let admission = Arc::clone(&self.admission);
+        let locks = Arc::clone(&self.locks);
+        let scheduled = self.class == WorkClass::Metadata;
+        let feed = self.feed.clone();
         Box::pin(async move {
             let _slot = take_slot(permit)?;
-            let (id, mode) = job
-                .payload
-                .split_once(':')
-                .ok_or_else(|| "invalid import job".to_string())?;
+            let (id, mode) = if scheduled {
+                (job.payload.as_str(), "replace")
+            } else {
+                job.payload
+                    .split_once(':')
+                    .ok_or_else(|| "invalid import job".to_string())?
+            };
             let source_id = id.parse::<i64>().map_err(|_| "invalid import job")?;
             let mode = match mode {
                 "append" => ImportMode::Append,
                 "replace" => ImportMode::Replace,
                 _ => return Err("invalid import job".into()),
             };
+            let source_lock = source_lock(&locks, source_id);
+            let _source = source_lock.lock().await;
             let source = SourceRepository::new(&pool)
                 .get(source_id)
                 .await
                 .map_err(|_| "could not load source")?
                 .ok_or_else(|| "source removed".to_string())?;
+            // A scheduled refresh overtaken by another refresh (e.g. the
+            // user's own) has nothing left to do.
+            if scheduled && !refresh_due(&source, nova_core::now_ts()) {
+                return Ok(());
+            }
+            let guide_priority = if scheduled {
+                METADATA_PRIORITY
+            } else {
+                EXPLICIT_PRIORITY
+            };
             // A recovered append may have committed before the previous
             // process could mark its job done. Replaying it would duplicate
             // catalog rows; a committed import stamps the source atomically.
             if mode == ImportMode::Append && source.last_refreshed_at.is_some() {
                 // Its guide refresh may not have been queued before the stop.
-                queue_guide_refresh(&epg, source_id).await;
+                queue_guide_refresh(&epg, source_id, guide_priority).await;
                 return Ok(());
             }
-            emit_import_stage(&app, source_id, ImportStage::Connecting);
-            if run_source_import(pool, app, source, mode, admission).await {
-                queue_guide_refresh(&epg, source_id).await;
+            emit_import_stage(&app, &feed, source_id, ImportStage::Connecting);
+            if run_source_import(pool, app, source, mode, admission, feed).await {
+                queue_guide_refresh(&epg, source_id, guide_priority).await;
                 Ok(())
             } else {
                 Err("import failed".into())
@@ -304,11 +474,10 @@ impl JobHandler for ImportHandler {
 
 /// Queue a source's guide refresh after its catalog changed: its feeds may be
 /// new (an M3U `url-tvg`) and its channels' tvg-ids may have changed.
-async fn queue_guide_refresh(epg: &Arc<JobQueue>, source_id: i64) {
-    match epg
-        .enqueue_unique(&source_id.to_string(), EXPLICIT_PRIORITY)
-        .await
-    {
+/// `priority` follows the import that asked: a background refresh's guide
+/// download stays background work.
+async fn queue_guide_refresh(epg: &Arc<JobQueue>, source_id: i64, priority: i64) {
+    match epg.enqueue_unique(&source_id.to_string(), priority).await {
         Ok(_) => epg.kick(),
         Err(error) => tracing::warn!(%error, source_id, "could not queue EPG refresh"),
     }
@@ -404,6 +573,81 @@ impl JobHandler for EnrichmentHandler {
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+
+    fn source(hours: i64, last: Option<i64>) -> nova_core::Source {
+        nova_core::Source {
+            id: 1,
+            kind: "m3u".into(),
+            name: "Synthetic".into(),
+            url: "https://example.invalid/list.m3u".into(),
+            last_refreshed_at: last,
+            auto_refresh_hours: hours,
+        }
+    }
+
+    #[test]
+    fn background_progress_names_its_profile_beside_the_usual_fields() {
+        let progress = ImportProgress {
+            source_id: 7,
+            stage: ImportStage::Connecting,
+            parsed: 0,
+            inserted: 0,
+            live_count: 0,
+            movie_count: 0,
+            series_count: 0,
+            failed_count: 0,
+            skipped_count: 0,
+            elapsed_ms: 0,
+            done: false,
+            error: None,
+            warning: None,
+        };
+        let json = serde_json::to_value(BackgroundImport {
+            profile_id: "profile-a",
+            progress: &progress,
+        })
+        .unwrap();
+        assert_eq!(json["profileId"], "profile-a");
+        assert_eq!(json["sourceId"], 7);
+        assert_eq!(json["done"], false);
+    }
+
+    #[test]
+    fn a_playlist_is_due_once_its_interval_has_passed() {
+        let now = 1_000_000;
+        assert!(refresh_due(&source(24, Some(now - 24 * 3600)), now));
+        assert!(!refresh_due(&source(24, Some(now - 23 * 3600)), now));
+        assert!(!refresh_due(&source(0, Some(0)), now), "0 disables it");
+        assert!(
+            !refresh_due(&source(24, None), now),
+            "never imported: left to the user"
+        );
+    }
+
+    #[test]
+    fn a_due_playlist_is_scheduled_once_per_interval_even_if_it_keeps_failing() {
+        let now = 1_000_000;
+        let stale = source(24, Some(now - 30 * 3600));
+        let mut scheduled = HashMap::new();
+        assert_eq!(
+            due_to_schedule(std::slice::from_ref(&stale), now, &mut scheduled),
+            [1]
+        );
+        // Still due an hour later (the refresh failed): not queued again yet.
+        assert!(
+            due_to_schedule(std::slice::from_ref(&stale), now + 3600, &mut scheduled).is_empty()
+        );
+        // A full interval later it is tried again.
+        assert_eq!(
+            due_to_schedule(&[stale], now + 24 * 3600, &mut scheduled),
+            [1]
+        );
     }
 }
 

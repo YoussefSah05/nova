@@ -53,6 +53,11 @@ pub async fn delete_source(
         .map_err(Into::into)
 }
 
+/// Manual (0, the default) or one of the intervals Settings offers, in hours.
+fn valid_auto_refresh(hours: i64) -> bool {
+    [0, 6, 12, 24, 168].contains(&hours)
+}
+
 #[tauri::command]
 pub async fn set_source_auto_refresh(
     profile_id: String,
@@ -60,9 +65,14 @@ pub async fn set_source_auto_refresh(
     hours: i64,
     state: State<'_, AppState>,
 ) -> Result<(), ApiError> {
+    if !valid_auto_refresh(hours) {
+        return Err(ApiError::InvalidInput(
+            "Unsupported refresh interval.".into(),
+        ));
+    }
     let pool = require_profile_pool(&profile_id, &state).await?;
     SourceRepository::new(&pool)
-        .set_auto_refresh(source_id, hours.max(0))
+        .set_auto_refresh(source_id, hours)
         .await
         .map_err(Into::into)
 }
@@ -205,4 +215,17 @@ fn dir_size(dir: &Path) -> u64 {
         }
     }
     total
+}
+
+#[cfg(test)]
+mod auto_refresh_tests {
+    #[test]
+    fn only_manual_and_the_offered_intervals_are_accepted() {
+        for hours in [0, 6, 12, 24, 168] {
+            assert!(super::valid_auto_refresh(hours));
+        }
+        for hours in [-1, 1, 48, 10_000] {
+            assert!(!super::valid_auto_refresh(hours));
+        }
+    }
 }

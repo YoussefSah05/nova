@@ -10,7 +10,7 @@ use nova_storage::{
     SourceRepository, VodRepository, WatchHistoryRepository, WatchSnapshot,
 };
 use serde::Deserialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 use crate::ipc::ApiError;
 use crate::state::AppState;
@@ -89,6 +89,8 @@ pub async fn select_profile(
     let jobs = state.jobs_for_profile(&id, pool, app.clone()).await;
     *state.active_profile_id.write().await = Some(id);
     jobs.kick_all();
+    // Playlists due an automatic refresh, now that this profile is active.
+    tauri::async_runtime::spawn(async move { jobs.schedule_due_refreshes().await });
     Ok(profile)
 }
 
@@ -273,6 +275,9 @@ pub(crate) async fn run_source_import(
     source: Source,
     mode: ImportMode,
     admission: std::sync::Arc<crate::resource_policy::AdmissionController>,
+    // The user's import, or a scheduled refresh (reported on the background
+    // event, whose progress and errors the UI does not show).
+    feed: crate::desktop_jobs::ImportFeed,
 ) -> bool {
     let source_id = source.id;
     let url = source.url;
@@ -306,9 +311,7 @@ pub(crate) async fn run_source_import(
         source_id,
         rx,
         std::sync::Arc::clone(&pool),
-        |progress| {
-            let _ = app.emit("playlist:import:progress", progress);
-        },
+        |progress| feed.emit(&app, &progress),
         mode,
     )
     .await;

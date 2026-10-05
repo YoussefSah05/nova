@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO sources (kind, name, url) VALUES (?, ?, ?) RETURNING id, kind, name, url, last_refreshed_at, auto_refresh_hours",
+  "query": "INSERT INTO sources (kind, name, url, auto_refresh_hours) VALUES (?, ?, ?, 0) RETURNING id, kind, name, url, last_refreshed_at, auto_refresh_hours",
   "describe": {
     "columns": [
       {
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "fc6d01e43f164df777d595810eec4c0a40d172defcf40524f4d1b97d42107d95"
+  "hash": "8ac925d73c1cdddafb48a6b873caee18f8e51a110dde1be8d34d507881aec91c"
 }

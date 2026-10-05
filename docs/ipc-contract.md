@@ -99,7 +99,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `set_profile_settings` | `{ profileId, settings: ProfileSettings }` | `void` | cleanup |
 | `update_profile` | `{ id, name, avatarColor }` | `Profile` | cleanup |
 | `delete_source` | `{ profileId, sourceId }` | `void` (cascades imported content) | cleanup |
-| `set_source_auto_refresh` | `{ profileId, sourceId, hours }` | `void` | cleanup |
+| `set_source_auto_refresh` | `{ profileId, sourceId, hours }` | `void`; `hours` must be `0` (manual, the default) or `6`, `12`, `24`, `168`, else `InvalidInput`. A due playlist refreshes automatically as background work while its profile is active | cleanup, M16 |
 | `remove_whisper_model` | `{}` | `void` | cleanup |
 | `get_transcription_cache_stats` | `{ profileId }` | `{ transcripts, bytes }` | cleanup |
 | `clear_transcription_cache` | `{ profileId }` | `void` | cleanup |
@@ -254,6 +254,7 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | Event | Payload | Phase |
 |---|---|---|
 | `playlist:import:progress` | `{ sourceId, stage, parsed, inserted, liveCount, movieCount, seriesCount, failedCount, skippedCount, elapsedMs, done, error?, warning? }` | 2 |
+| `playlist:import:background` | `playlist:import:progress` payload plus `profileId` (source ids are per profile), for a scheduled (automatic) refresh. The UI picks up its catalog on success and never shows its progress or errors | M16 |
 | `artwork:channel-logos` | `{ stage: 'downloading'\|'matching'\|'complete'\|'failed', sourceId?, matched, candidates, done, error? }` | artwork v1 |
 | `transcription:cues` | `{ mediaKind, mediaId, language, cues: [{start,end,text}] }` (incremental, absolute times) | 6 |
 | `transcription:status` | `{ mediaKind, mediaId, state: 'preparing'\|'streaming'\|'complete'\|'failed', coveredSec?, error? }` | 6 |

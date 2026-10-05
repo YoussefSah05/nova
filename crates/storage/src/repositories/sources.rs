@@ -14,7 +14,8 @@ impl<'a> SourceRepository<'a> {
 
     pub async fn create(&self, kind: &str, name: &str, url: &str) -> Result<Source, StorageError> {
         let row = sqlx::query!(
-            "INSERT INTO sources (kind, name, url) VALUES (?, ?, ?) RETURNING id, kind, name, url, last_refreshed_at, auto_refresh_hours",
+            // Automatic refresh is opt-in per playlist (0 = manual).
+            "INSERT INTO sources (kind, name, url, auto_refresh_hours) VALUES (?, ?, ?, 0) RETURNING id, kind, name, url, last_refreshed_at, auto_refresh_hours",
             kind,
             name,
             url,
@@ -108,5 +109,24 @@ impl<'a> SourceRepository<'a> {
         .execute(&mut **tx)
         .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn new_playlists_start_on_manual_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::init_profile_db(dir.path().join("p.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let source = SourceRepository::new(&pool)
+            .create("m3u", "Synthetic", "https://example.invalid/list.m3u")
+            .await
+            .unwrap();
+        assert_eq!(source.auto_refresh_hours, 0);
+        pool.close().await;
     }
 }

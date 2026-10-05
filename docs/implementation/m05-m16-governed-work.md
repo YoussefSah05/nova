@@ -1,6 +1,6 @@
 # M05 / M16 — governed background work and job scheduling
 
-Date: 2026-10-05. Status: **IN PROGRESS** — slice A implemented; slice B contracted.
+Date: 2026-10-05. Status: **IN PROGRESS** — slice A done; B1 (scheduled refresh, opt-in) implemented; B2 (retry/backoff) contracted.
 
 Builds on the existing governor (`apps/desktop/src-tauri/src/resource_policy.rs`) and
 the persisted per-profile queues (`desktop_jobs.rs`, `crates/jobs`). No new scheduler,
@@ -44,7 +44,66 @@ The governor's existing tests cover the behaviour itself:
 
 This slice only moves the call sites onto it. No IPC, schema or UI change.
 
-## Slice B — retries and scheduled refresh (M16)
+## Slice B1 — scheduled playlist refresh (M16), implemented
+
+Settings already offered a per-playlist auto-refresh interval: Manual, 6 h, 12 h,
+daily or weekly. It was stored, defaulting to 24 hours, but never acted on.
+
+**Decision (user, 2026-10-05):** automatic refresh is opt-in.
+
+- Migration 0043 sets every playlist to Manual. No playlist had ever
+  auto-refreshed, and a deliberate "Daily" cannot be told apart from the old
+  default.
+- New playlists are created on Manual.
+- `set_source_auto_refresh` accepts only Manual or the offered intervals.
+- The Settings description says refresh happens while Nova is open and pauses
+  during playback.
+
+The scheduler:
+
+- **Due rule:** a source is due when `last_refreshed_at + hours * 3600 <= now`.
+  Hours `0` is manual. A source that never imported successfully is left to the
+  user.
+- **When it is checked:** when a profile is selected, then every 15 minutes, and
+  only while that profile is the active one. Each source is enqueued at most once
+  per interval even if its refresh keeps failing. That memory is in-process, so a
+  restart allows one more attempt.
+- **Queue:** scheduled refreshes have their own queue (`desktop_scheduled_refresh`)
+  with metadata admission. They wait while anything plays and never hold up a
+  user's import, which keeps its own explicit queue.
+- **One import per source:** a per-source lock shared by both queues keeps one
+  import per source at a time. Under that lock the scheduled job re-checks the due
+  rule, so a refresh that another refresh overtook does nothing.
+- **Guide refresh:** the follow-up guide refresh is queued at the import's own
+  priority, so a background refresh's guide download stays background work.
+- **Progress:** progress goes to `playlist:import:background`. On success the UI
+  quietly invalidates the active source's caches and starts enrichment and logo
+  matching. It never shows a background refresh's progress or errors.
+- **Bounded:** an import that is already running continues if playback starts. It
+  is one atomic transaction, as with a manual refresh.
+
+Independent review of the first version found three problems, all fixed by this
+design:
+
+- a user import could be parked behind a waiting background job for a whole film;
+- background progress reset the UI and raised errors;
+- background work escalated its guide refresh to explicit priority.
+
+It also found that profiles the user had left kept refreshing; scheduling is now
+limited to the active profile.
+
+A re-review confirmed those fixes and found no deadlock. Since source ids are per
+profile, a background refresh that had already started for a profile the user left
+could match a source of the new profile. Background events now carry `profileId`,
+and the UI ignores other profiles' events.
+
+Accepted, low:
+
+- A background refresh of a non-active playlist does not invalidate Settings'
+  "last refreshed" display until its next load.
+- Per-source lock entries are never removed (one small entry per source).
+
+## Slice B2 — retries with backoff (M16)
 
 Contract, not yet implemented:
 
@@ -55,13 +114,6 @@ Contract, not yet implemented:
   - Attempt count and the next eligible time are persisted, so retries survive
     restart.
   - Startup recovery keeps its current single requeue.
-- **Scheduled refresh:** each source's `auto_refresh_hours` (stored today, never
-  scheduled) enqueues a refresh when `last_refreshed_at + auto_refresh_hours` is due.
-  - It runs as Metadata class, not Explicit, so it never competes with playback or
-    with a user's own import.
-  - Dedup is through the existing unique enqueue.
-  - It is checked at startup and on a coarse timer. Sleep/wake follows the existing
-    lifecycle hooks.
 - **Tests:**
   - a transient failure retries, and a permanent one does not;
   - backoff bounds are respected and survive restart;
