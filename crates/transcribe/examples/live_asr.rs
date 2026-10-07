@@ -28,7 +28,11 @@ fn main() {
     let started = Instant::now();
     let engine = WhisperStreamingEngine::start(WorkerSpec::current_exe(model.into()).unwrap())
         .expect("starting the ASR worker");
-    println!("[{:5.2}s] worker ready on {:?}", started.elapsed().as_secs_f64(), engine.accel());
+    println!(
+        "[{:5.2}s] worker ready on {:?}",
+        started.elapsed().as_secs_f64(),
+        engine.accel()
+    );
 
     let queue = PcmQueue::with_capacity(16_000 * 60);
     let config = AsrSessionConfig {
@@ -45,7 +49,9 @@ fn main() {
             let t = clock.elapsed().as_secs_f64();
             match update {
                 AsrUpdate::Committed(s) => println!("[{t:5.2}s] COMMIT {:?} {}", accel, s[0].text),
-                AsrUpdate::Provisional(s) if !s.text.is_empty() => println!("[{t:5.2}s]   ...  {}", s.text),
+                AsrUpdate::Provisional(s) if !s.text.is_empty() => {
+                    println!("[{t:5.2}s]   ...  {}", s.text)
+                }
                 AsrUpdate::Provisional(_) => {}
             }
         }

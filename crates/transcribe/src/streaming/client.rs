@@ -276,7 +276,8 @@ impl BufferDecoder for WhisperWorker {
             match WorkerProcess::spawn(&self.spec) {
                 Ok(process) => {
                     self.pid.store(process.child.id(), Ordering::Release);
-                    self.accel.store(accel_code(Some(process.accel)), Ordering::Release);
+                    self.accel
+                        .store(accel_code(Some(process.accel)), Ordering::Release);
                     slot.process = Some(process);
                     slot.failures = 0;
                     slot.retry_at = None;
@@ -299,7 +300,8 @@ impl BufferDecoder for WhisperWorker {
         }
         match result {
             Ok(decoded) => {
-                self.accel.store(accel_code(Some(decoded.accel)), Ordering::Release);
+                self.accel
+                    .store(accel_code(Some(decoded.accel)), Ordering::Release);
                 Ok(decoded)
             }
             // A decode error reported by a healthy worker leaves it running.
@@ -437,6 +439,9 @@ echo '{"ready":{"accel":"metal","load_ms":5}}'"#,
             program: PathBuf::from("/nonexistent/nova-asr-worker"),
             model: PathBuf::from("model.bin"),
         };
-        assert!(matches!(WhisperWorker::start(spec), Err(WorkerError::Spawn(_))));
+        assert!(matches!(
+            WhisperWorker::start(spec),
+            Err(WorkerError::Spawn(_))
+        ));
     }
 }

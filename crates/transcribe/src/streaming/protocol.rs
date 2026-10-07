@@ -145,7 +145,10 @@ mod tests {
             panic!("expected a decode request");
         };
         assert_eq!(read, request);
-        assert_eq!(read_samples(&mut input, read.samples).unwrap(), [0.25, -1.0, 0.5]);
+        assert_eq!(
+            read_samples(&mut input, read.samples).unwrap(),
+            [0.25, -1.0, 0.5]
+        );
         assert!(read_line::<Request>(&mut input).unwrap().is_none());
     }
 

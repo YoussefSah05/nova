@@ -107,8 +107,8 @@ fn decode(engine: &mut Loaded, request: &DecodeRequest, pcm: &[f32]) -> Result<D
         .state
         .full(params, pcm)
         .map_err(|e| format!("whisper decode failed: {e}"))?;
-    let language = whisper_rs::get_lang_str(engine.state.full_lang_id_from_state())
-        .map(str::to_string);
+    let language =
+        whisper_rs::get_lang_str(engine.state.full_lang_id_from_state()).map(str::to_string);
 
     // Rebuild words from tokens: a token starting with a space begins a new
     // word. Bytes are joined before decoding, since a multibyte character

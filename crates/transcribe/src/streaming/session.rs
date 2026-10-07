@@ -132,13 +132,13 @@ impl StreamingSession {
             updates.push(AsrUpdate::Committed(vec![segment]));
         }
         // An empty provisional update clears the dimmed tail on screen.
-        updates.push(AsrUpdate::Provisional(self.segment(&out.provisional).unwrap_or(
-            AsrSegment {
+        updates.push(AsrUpdate::Provisional(
+            self.segment(&out.provisional).unwrap_or(AsrSegment {
                 start_ms: self.origin_ms + (self.decoded_until * 1000.0) as u64,
                 end_ms: self.origin_ms + (self.decoded_until * 1000.0) as u64,
                 text: String::new(),
-            },
-        )));
+            }),
+        ));
 
         let received = self.received_until();
         if received - self.buffer_start > MAX_BUFFER_SEC {
@@ -291,10 +291,14 @@ mod tests {
             vec![("bonjour", 0.1), ("à", 0.6), ("tous", 1.2)],
         ]);
         let audio = PcmQueue::with_capacity(16_000 * 60);
-        let mut session = StreamingSession::new(decoder.clone(), config(None), audio.clone()).unwrap();
+        let mut session =
+            StreamingSession::new(decoder.clone(), config(None), audio.clone()).unwrap();
 
         audio.push(&seconds(0.5));
-        assert!(session.poll().unwrap().is_empty(), "less than one step of audio");
+        assert!(
+            session.poll().unwrap().is_empty(),
+            "less than one step of audio"
+        );
         audio.push(&seconds(0.5));
         assert_eq!(texts(&session.poll().unwrap()), ["P:bonjour"]);
         audio.push(&seconds(1.0));
@@ -310,7 +314,8 @@ mod tests {
         let speech = vec![("il", 0.1), ("fait", 0.4), ("beau", 0.7)];
         let decoder = Scripted::new(vec![speech.clone(), speech.clone(), speech.clone(), speech]);
         let audio = PcmQueue::with_capacity(16_000 * 60);
-        let mut session = StreamingSession::new(decoder.clone(), config(None), audio.clone()).unwrap();
+        let mut session =
+            StreamingSession::new(decoder.clone(), config(None), audio.clone()).unwrap();
         for _ in 0..4 {
             audio.push(&seconds(1.0));
             session.poll().unwrap();
@@ -339,7 +344,10 @@ mod tests {
         session.poll().unwrap();
         audio.push(&seconds(0.4));
         session.reset(60_000);
-        assert!(session.flush().unwrap().is_empty(), "nothing from before the seek");
+        assert!(
+            session.flush().unwrap().is_empty(),
+            "nothing from before the seek"
+        );
         audio.push(&seconds(1.0));
         session.poll().unwrap();
         audio.push(&seconds(1.0));
@@ -348,7 +356,10 @@ mod tests {
             panic!("expected a commit");
         };
         assert_eq!(segments[0].text, "new");
-        assert_eq!(segments[0].start_ms, 60_200, "times are in stream ms after the seek");
+        assert_eq!(
+            segments[0].start_ms, 60_200,
+            "times are in stream ms after the seek"
+        );
         let first_after_reset = &decoder.requests.lock().unwrap()[1];
         assert_eq!(first_after_reset.offset_sec, 0.0);
         assert_eq!(first_after_reset.samples, 16_000);
@@ -375,10 +386,7 @@ mod tests {
 
     #[test]
     fn dropped_audio_becomes_a_gap_not_a_time_shift() {
-        let decoder = Scripted::new(vec![
-            vec![("avant", 0.2)],
-            vec![("après", 0.3)],
-        ]);
+        let decoder = Scripted::new(vec![vec![("avant", 0.2)], vec![("après", 0.3)]]);
         // Room for 2 s: pushing 3 s drops the oldest second.
         let audio = PcmQueue::with_capacity(32_000);
         let mut session =
@@ -387,9 +395,17 @@ mod tests {
         session.poll().unwrap();
         audio.push(&seconds(3.0));
         let updates = session.poll().unwrap();
-        assert_eq!(texts(&updates)[0], "C:avant", "pending text committed at the gap");
+        assert_eq!(
+            texts(&updates)[0],
+            "C:avant",
+            "pending text committed at the gap"
+        );
         let last = decoder.requests.lock().unwrap().last().cloned().unwrap();
-        assert!((last.offset_sec - 2.0).abs() < 1e-6, "resumes after the 1 s gap: {}", last.offset_sec);
+        assert!(
+            (last.offset_sec - 2.0).abs() < 1e-6,
+            "resumes after the 1 s gap: {}",
+            last.offset_sec
+        );
         assert_eq!(last.samples, 32_000);
     }
 
@@ -397,12 +413,18 @@ mod tests {
     fn language_is_not_locked_from_a_decode_without_speech() {
         let decoder = Scripted::new(vec![vec![], vec![], vec![], vec![]]);
         let audio = PcmQueue::with_capacity(16_000 * 60);
-        let mut session = StreamingSession::new(decoder.clone(), config(None), audio.clone()).unwrap();
+        let mut session =
+            StreamingSession::new(decoder.clone(), config(None), audio.clone()).unwrap();
         for _ in 0..4 {
             audio.push(&seconds(1.0));
             session.poll().unwrap();
         }
-        assert!(decoder.requests.lock().unwrap().iter().all(|r| r.language.is_none()));
+        assert!(decoder
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| r.language.is_none()));
     }
 
     #[test]
