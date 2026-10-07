@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "models": [
+    {
+      "id": "large-v3-turbo-q5_0",
+      "revision": "unpinned",
+      "capability": "transcription",
+      "backend": "whisper.cpp",
+      "relative_path": "whisper",
+      "probe": "whisper-layout",
+      "languages": ["en", "fr", "ar"],
+      "licence": "MIT",
+      "latency_class": "batch",
+      "est_resident_bytes": 800000000
+    },
+    {
+      "id": "multilingual-e5-small",
+      "revision": "unpinned",
+      "capability": "embedding",
+      "backend": "fastembed",
+      "relative_path": "embeddings",
+      "probe": "fastembed-cache",
+      "licence": "MIT",
+      "latency_class": "batch"
+    }
+  ]
+}

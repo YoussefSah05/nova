@@ -2,8 +2,10 @@
 //! registry does not install, load, unload, or authenticate model artifacts.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use nova_core::{
+    model_manifest::{files_availability, ManifestEntry, ModelManifest, Probe},
     models::{
         ModelAvailability, ModelContractError, ModelDescriptor, ModelId, ModelLibrary,
         ModelLibraryId, ModelLocation, RelativeModelPath,
@@ -22,6 +24,18 @@ use crate::ipc::ApiError;
 // newer one after it has finished.
 static REFRESH_LOCK: Mutex<()> = Mutex::const_new(());
 
+/// The manifest compiled into this build. It is validated by a unit test, so
+/// a parse failure here is a build defect, reported as a contract error.
+pub fn bundled_manifest() -> Result<&'static ModelManifest, ModelContractError> {
+    static MANIFEST: OnceLock<Option<ModelManifest>> = OnceLock::new();
+    MANIFEST
+        .get_or_init(|| {
+            ModelManifest::parse(include_str!("../resources/models.manifest.json")).ok()
+        })
+        .as_ref()
+        .ok_or(ModelContractError::UnknownValue)
+}
+
 pub fn internal_library() -> Result<ModelLibrary, ModelContractError> {
     Ok(ModelLibrary {
         id: ModelLibraryId::new("internal")?,
@@ -31,26 +45,26 @@ pub fn internal_library() -> Result<ModelLibrary, ModelContractError> {
 
 fn registration(
     library: &ModelLibrary,
-    id: &str,
-    capability: &str,
-    backend: &str,
-    relative_path: &str,
+    entry: &ManifestEntry,
     availability: ModelAvailability,
     observed_at: i64,
 ) -> Result<RegisteredModel, ModelContractError> {
-    let id = ModelId::new(id)?;
+    let id = ModelId::new(entry.id.as_str())?;
+    // A revision is reported only for content attested against pinned
+    // checksums; a legacy layout probe or an unverified install has none.
+    let attested = entry.probe == Probe::Files && availability == ModelAvailability::Available;
     Ok(RegisteredModel {
         library: library.clone(),
         descriptor: ModelDescriptor {
             id: id.clone(),
-            capability: capability.to_string(),
-            backend: backend.to_string(),
-            artifact_revision: None,
+            capability: entry.capability.as_str().to_string(),
+            backend: entry.backend.as_str().to_string(),
+            artifact_revision: attested.then(|| entry.revision.clone()),
         },
         location: ModelLocation {
             model_id: id,
             library_id: library.id.clone(),
-            relative_path: RelativeModelPath::new(relative_path)?,
+            relative_path: RelativeModelPath::new(entry.relative_path.as_str())?,
         },
         availability,
         observed_at,
@@ -113,51 +127,32 @@ fn discover_library(
 ) -> Result<(ModelLibrary, Vec<RegisteredModel>), ModelContractError> {
     let root = library.relative_root.resolve(base_dir);
     let observed_at = now_ts();
-    let models = vec![
-        registration(
-            &library,
-            default_model().id,
-            "transcription",
-            "whisper.cpp",
-            "whisper",
-            whisper_availability(&root.join("whisper")),
-            observed_at,
-        )?,
-        registration(
-            &library,
-            nova_enrich::MODEL_ID,
-            "embedding",
-            "fastembed",
-            "embeddings",
-            embedding_availability(&root.join("embeddings")),
-            observed_at,
-        )?,
-    ];
+    let models = bundled_manifest()?
+        .models
+        .iter()
+        .map(|entry| {
+            let dir = root.join(&entry.relative_path);
+            let availability = match entry.probe {
+                Probe::WhisperLayout => whisper_availability(&dir),
+                Probe::FastembedCache => embedding_availability(&dir),
+                // Content attestation (a verified-install record) arrives with
+                // model installation; until then a pinned install that looks
+                // complete is reported as unverified, never available.
+                Probe::Files => files_availability(&dir, &entry.files, false),
+            };
+            registration(&library, entry, availability, observed_at)
+        })
+        .collect::<Result<_, _>>()?;
     Ok((library, models))
 }
 
 fn unavailable_models(library: &ModelLibrary) -> Result<Vec<RegisteredModel>, ModelContractError> {
     let observed_at = now_ts();
-    Ok(vec![
-        registration(
-            library,
-            default_model().id,
-            "transcription",
-            "whisper.cpp",
-            "whisper",
-            ModelAvailability::Unavailable,
-            observed_at,
-        )?,
-        registration(
-            library,
-            nova_enrich::MODEL_ID,
-            "embedding",
-            "fastembed",
-            "embeddings",
-            ModelAvailability::Unavailable,
-            observed_at,
-        )?,
-    ])
+    bundled_manifest()?
+        .models
+        .iter()
+        .map(|entry| registration(library, entry, ModelAvailability::Unavailable, observed_at))
+        .collect()
 }
 
 /// A disconnected root is distinct from an online library lacking artifacts.
@@ -170,16 +165,19 @@ pub(crate) fn observe_external_at(
         return Ok((false, unavailable_models(library)?));
     };
     let models_dir = library.relative_root.resolve(root);
-    let whisper_dir = models_dir.join("whisper");
-    let whisper_paths = model_paths(&whisper_dir, &default_model());
-    let embedding_dir = models_dir.join("embeddings");
-    let linked = [
-        models_dir.as_path(),
-        whisper_dir.as_path(),
-        whisper_paths.ggml.as_path(),
-        whisper_paths.coreml_dir.as_path(),
-        embedding_dir.as_path(),
-    ];
+    let mut linked = vec![models_dir.clone()];
+    for entry in &bundled_manifest()?.models {
+        let dir = models_dir.join(&entry.relative_path);
+        match entry.probe {
+            Probe::WhisperLayout => {
+                let paths = model_paths(&dir, &default_model());
+                linked.extend([paths.ggml, paths.coreml_dir]);
+            }
+            Probe::Files => linked.extend(entry.files.iter().map(|f| dir.join(&f.path))),
+            Probe::FastembedCache => {}
+        }
+        linked.push(dir);
+    }
     if linked.iter().any(|path| is_symlink(path)) {
         return Ok((false, unavailable_models(library)?));
     }
@@ -296,6 +294,34 @@ mod tests {
         assert_eq!(
             whisper.location.resolve(dir.path(), &library),
             Some(dir.path().join("models/whisper"))
+        );
+    }
+
+    /// Registry rows persist the capability and backend strings; moving the
+    /// two shipped models into the manifest must not change them.
+    #[test]
+    fn manifest_keeps_the_persisted_identity_of_shipped_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, models) = discover_internal(dir.path()).unwrap();
+        let row = |id: &str| {
+            let m = models
+                .iter()
+                .find(|m| m.descriptor.id.as_str() == id)
+                .unwrap();
+            (
+                m.descriptor.capability.as_str(),
+                m.descriptor.backend.as_str(),
+                m.location.relative_path.as_str(),
+                m.descriptor.artifact_revision.clone(),
+            )
+        };
+        assert_eq!(
+            row(default_model().id),
+            ("transcription", "whisper.cpp", "whisper", None)
+        );
+        assert_eq!(
+            row(nova_enrich::MODEL_ID),
+            ("embedding", "fastembed", "embeddings", None)
         );
     }
 

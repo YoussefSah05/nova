@@ -6,6 +6,8 @@ pub mod artwork;
 pub mod catalog;
 pub mod classify;
 pub mod clean;
+pub mod intelligence;
+pub mod model_manifest;
 pub mod models;
 pub mod naming;
 pub mod provider_facts;

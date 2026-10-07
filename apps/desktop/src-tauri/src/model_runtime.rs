@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use nova_core::model_manifest::BackendKind;
 use nova_core::models::{ModelAvailability, ModelId, ModelLibraryId};
 use nova_enrich::{Embedder, FastEmbedder};
 use nova_storage::{ModelRepository, RegisteredModel};
@@ -449,15 +450,21 @@ impl ModelRuntimeManager {
     }
 
     pub fn with_budget(registry_pool: Arc<SqlitePool>, budget: ResourceBudget) -> Self {
+        // One adapter per manifest model whose backend this build can load.
+        // A model with no adapter yet stays registered but is never loaded.
         let mut adapters: HashMap<ModelId, Arc<dyn BackendAdapter>> = HashMap::new();
-        for (id, adapter) in [
-            (
-                default_model().id,
-                Arc::new(WhisperAdapter) as Arc<dyn BackendAdapter>,
-            ),
-            (nova_enrich::MODEL_ID, Arc::new(EmbeddingAdapter)),
-        ] {
-            if let Ok(id) = ModelId::new(id) {
+        let manifest = model_registry::bundled_manifest()
+            .map(|m| m.models.as_slice())
+            .unwrap_or_default();
+        for entry in manifest {
+            let adapter: Arc<dyn BackendAdapter> = match entry.backend {
+                BackendKind::WhisperCpp => Arc::new(WhisperAdapter),
+                BackendKind::FastEmbed => Arc::new(EmbeddingAdapter),
+                BackendKind::OnnxSeq2Seq | BackendKind::LlamaServer | BackendKind::Apple => {
+                    continue
+                }
+            };
+            if let Ok(id) = ModelId::new(entry.id.as_str()) {
                 adapters.insert(id, adapter);
             }
         }

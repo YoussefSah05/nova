@@ -61,7 +61,7 @@
 |---|---|---|
 | AI01 Model domain / libraries | COMPLETE | = M02 |
 | AI02 External storage | COMPLETE (unqualified) | = M03 |
-| AI03 Registry / discovery | PARTIAL | Fixed descriptor set; no revision/digest. |
+| AI03 Registry / discovery | PARTIAL | Discovery and the runtime adapter map are driven by a bundled, validated model manifest (`resources/models.manifest.json`, `nova_core::model_manifest`): capability, backend, files with sha256 and size, languages, pairs, NC licence flag, latency class, fallback. Backend-neutral engine traits and a disabled cloud seam live in `nova_core::intelligence` (2026-10-07). | Only the two shipped models are listed; benchmark winners are added after report review. Pinned installs report `unverified` until a verified-install record exists (slice 3); no `corrupt` state yet. |
 | AI04 Runtime / leases | COMPLETE | = M04 |
 | AI05 Governor integration | COMPLETE for ASR/embeddings | Reasoner would bypass it if wired as-is. |
 | AI06 ASR baseline | COMPLETE | Whisper subprocess, Core ML, DTW timestamps. |
