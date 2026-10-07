@@ -10,6 +10,7 @@ use nova_core::model_manifest::BackendKind;
 use nova_core::models::{ModelAvailability, ModelId, ModelLibraryId};
 use nova_enrich::{Embedder, FastEmbedder};
 use nova_storage::{ModelRepository, RegisteredModel};
+use nova_transcribe::streaming::{WhisperStreamingEngine, WorkerSpec};
 use nova_transcribe::{default_model, model_paths};
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, Notify, Semaphore};
@@ -85,7 +86,16 @@ impl RuntimeCancellation {
 
 enum Backend {
     Embedding(Box<dyn Embedder>),
-    Whisper(PathBuf),
+    Whisper(WhisperBackend),
+}
+
+/// One whisper.cpp model: the GGML path for batch `whisper-cli` runs, and the
+/// resident streaming worker, started on first use (ADR-0011). The worker
+/// process lives exactly as long as this backend: eviction or unload kills it.
+struct WhisperBackend {
+    ggml: PathBuf,
+    worker_program: Option<PathBuf>,
+    streaming: std::sync::Mutex<Option<Arc<WhisperStreamingEngine>>>,
 }
 
 trait BackendAdapter: Send + Sync {
@@ -110,7 +120,12 @@ impl BackendAdapter for EmbeddingAdapter {
     }
 }
 
-struct WhisperAdapter;
+struct WhisperAdapter {
+    /// The executable that serves `--asr-worker`: Nova itself. None when it
+    /// cannot be determined, which leaves only batch transcription.
+    worker_program: Option<PathBuf>,
+    estimated_bytes: Option<u64>,
+}
 impl BackendAdapter for WhisperAdapter {
     fn load(&self, path: &Path) -> Result<Backend, RuntimeError> {
         let model = default_model();
@@ -118,11 +133,16 @@ impl BackendAdapter for WhisperAdapter {
         if !paths.ggml.is_file() {
             return Err(RuntimeError::Unavailable);
         }
-        Ok(Backend::Whisper(paths.ggml))
+        Ok(Backend::Whisper(WhisperBackend {
+            ggml: paths.ggml,
+            worker_program: self.worker_program.clone(),
+            streaming: std::sync::Mutex::new(None),
+        }))
     }
-    /// Whisper weights live in the per-window subprocess, not in Nova.
-    fn resident(&self) -> bool {
-        false
+    /// The streaming worker holds the weights resident (in its own process,
+    /// on Nova's behalf), so the model counts against the resident budget.
+    fn estimated_resident_bytes(&self) -> Option<u64> {
+        self.estimated_bytes
     }
 }
 
@@ -404,9 +424,38 @@ impl ModelLease {
 
     pub fn whisper_path(&self) -> Option<&Path> {
         match &self.loaded.backend {
-            Backend::Whisper(path) => Some(path),
+            Backend::Whisper(whisper) => Some(&whisper.ggml),
             _ => None,
         }
+    }
+
+    /// The resident streaming engine, starting its worker on first use.
+    /// Blocking (up to a model load): call it from `run_blocking_at`.
+    pub fn speech_engine(&self) -> Result<Arc<WhisperStreamingEngine>, RuntimeError> {
+        let Backend::Whisper(whisper) = &self.loaded.backend else {
+            return Err(RuntimeError::InvalidModel);
+        };
+        let mut slot = whisper
+            .streaming
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(engine) = slot.as_ref() {
+            return Ok(Arc::clone(engine));
+        }
+        let program = whisper
+            .worker_program
+            .clone()
+            .ok_or(RuntimeError::Unavailable)?;
+        let spec = WorkerSpec {
+            program,
+            model: whisper.ggml.clone(),
+        };
+        let engine = Arc::new(WhisperStreamingEngine::start(spec).map_err(|error| {
+            tracing::warn!(%error, "ASR worker failed to start");
+            RuntimeError::LoadFailed
+        })?);
+        *slot = Some(Arc::clone(&engine));
+        Ok(engine)
     }
 }
 
@@ -460,7 +509,10 @@ impl ModelRuntimeManager {
             .unwrap_or_default();
         for entry in manifest {
             let adapter: Arc<dyn BackendAdapter> = match entry.backend {
-                BackendKind::WhisperCpp => Arc::new(WhisperAdapter),
+                BackendKind::WhisperCpp => Arc::new(WhisperAdapter {
+                    worker_program: std::env::current_exe().ok(),
+                    estimated_bytes: entry.est_resident_bytes,
+                }),
                 BackendKind::FastEmbed => Arc::new(EmbeddingAdapter),
                 BackendKind::OnnxSeq2Seq | BackendKind::LlamaServer | BackendKind::Apple => {
                     continue
@@ -758,6 +810,28 @@ impl ModelRuntimeManager {
         );
         drop(slot);
         Ok(ModelLease { entry, loaded })
+    }
+
+    /// Intent-driven warm-up, for when captions are about to be needed (the
+    /// player opens with captions on, or the caption picker opens): load the
+    /// model and start its streaming worker at interactive priority, then
+    /// release the lease. The model stays resident until evicted, so the
+    /// caption session that follows starts without a load. Never call this
+    /// speculatively (on hover): a worker costs about 900 MB.
+    pub async fn prewarm_speech(
+        &self,
+        app_data_dir: &Path,
+        model_id: &str,
+        cancellation: &RuntimeCancellation,
+    ) -> Result<(), RuntimeError> {
+        let lease = self
+            .acquire_at(app_data_dir, model_id, WorkClass::Interactive, cancellation)
+            .await?;
+        lease
+            .run_blocking_at(WorkClass::Interactive, cancellation, |lease| {
+                lease.speech_engine().map(|_| ())
+            })
+            .await?
     }
 
     pub async fn unload(&self, model_id: &str) -> Result<bool, RuntimeError> {

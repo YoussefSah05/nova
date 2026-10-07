@@ -1010,3 +1010,87 @@ async fn subprocess_backends_do_not_consume_the_resident_budget() {
     assert_eq!(snapshot.resident_models, 1);
     drop((embed, transient));
 }
+
+/// A stand-in ASR worker that speaks the protocol and records its pid.
+#[cfg(unix)]
+fn script_worker(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let program = dir.join("asr-worker.sh");
+    std::fs::write(
+        &program,
+        r#"#!/bin/sh
+echo $$ >> "$(dirname "$0")/spawns"
+echo '{"ready":{"accel":"metal","load_ms":1}}'
+while read header; do
+  echo '{"decoded":{"words":[],"language":null,"accel":"coreml","decode_ms":1}}'
+done
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    program
+}
+
+#[cfg(unix)]
+fn alive(pid: &str) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", pid])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn prewarm_starts_one_resident_worker_that_unload_stops() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = nova_storage::init_app_db(dir.path().join("app.db").to_str().unwrap())
+        .await
+        .unwrap();
+    whisper_fixture(dir.path());
+    let program = script_worker(dir.path());
+    let mut runtime = ModelRuntimeManager::new(Arc::new(pool));
+    let id = default_model().id;
+    runtime.adapters.insert(
+        ModelId::new(id).unwrap(),
+        Arc::new(WhisperAdapter {
+            worker_program: Some(program),
+            estimated_bytes: Some(800_000_000),
+        }),
+    );
+    let cancel = RuntimeCancellation::default();
+    runtime
+        .prewarm_speech(dir.path(), id, &cancel)
+        .await
+        .unwrap();
+    let snapshot = runtime.snapshot().await;
+    assert_eq!((snapshot.loaded_models, snapshot.active_leases), (1, 0));
+    assert_eq!(snapshot.estimated_resident_bytes, 800_000_000);
+
+    // The caption session that follows reuses the warm worker.
+    let lease = runtime
+        .acquire_at(dir.path(), id, WorkClass::Realtime, &cancel)
+        .await
+        .unwrap();
+    let engine = lease
+        .clone()
+        .run_blocking_at(WorkClass::Realtime, &cancel, |lease| lease.speech_engine())
+        .await
+        .unwrap()
+        .unwrap();
+    let spawns = std::fs::read_to_string(dir.path().join("spawns")).unwrap();
+    let pids: Vec<&str> = spawns.lines().collect();
+    assert_eq!(pids.len(), 1, "prewarm and use share one worker");
+    assert!(alive(pids[0]));
+
+    drop((engine, lease));
+    assert!(runtime.unload(id).await.unwrap());
+    assert!(!alive(pids[0]), "unloading the model stops its worker");
+}
+
+#[tokio::test]
+async fn speech_engine_is_only_offered_by_whisper_backends() {
+    let fixture = Fixture::new();
+    let lease = fixture.acquire().await;
+    assert!(matches!(lease.speech_engine(), Err(RuntimeError::InvalidModel)));
+}

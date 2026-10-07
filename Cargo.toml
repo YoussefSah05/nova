@@ -65,7 +65,10 @@ fastembed = "4"
 # Read the existing FastEmbed cache without constructing a network client.
 hf-hub = { version = "0.4", default-features = false }
 
-# Local translation (NLLB-200 via CTranslate2 + Metal, bundled tokenizers)
+# Resident speech recognition (whisper.cpp), run in the ASR worker process.
+# Metal and Core ML are enabled per target in nova-transcribe.
+whisper-rs = "0.16"
+unicode-normalization = "0.1"
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }
