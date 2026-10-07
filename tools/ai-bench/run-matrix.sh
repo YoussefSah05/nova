@@ -34,6 +34,15 @@ asr() { # name binary model step [extra args...]
 }
 
 if [[ $WHAT == asr || $WHAT == all ]]; then
+  # Warm-up: the first Core ML load compiles each encoder for the Neural
+  # Engine (tens of seconds). Record that cold load separately, outside the
+  # summary, so the measured runs reflect a warm system.
+  mkdir -p "$OUT/warmup"
+  for model in ggml-large-v3-turbo-q5_0 ggml-medium-q5_0 ggml-small-q5_1; do
+    echo "== warm-up $model"
+    "$COREML" asr --name "cold-$model" --model "$W/$model.bin" --data "$DATA" --langs en_us \
+      --offline-limit 1 --streams 0 --out "$OUT/warmup/$model.json" 2>>"$OUT/log.txt"
+  done
   asr turbo-q5-coreml-s1.0   "$COREML" "$W/ggml-large-v3-turbo-q5_0.bin" 1.0
   asr turbo-q5-coreml-s0.5   "$COREML" "$W/ggml-large-v3-turbo-q5_0.bin" 0.5
   asr turbo-q8-coreml-s1.0   "$COREML" "$W/ggml-large-v3-turbo-q8_0.bin" 1.0

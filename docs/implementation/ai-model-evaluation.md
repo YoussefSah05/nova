@@ -1,6 +1,7 @@
 # AI model evaluation: rubric (AI22)
 
-Date: 2026-10-07. Status: **harness built; first full matrix pending.**
+Date: 2026-10-07. Status: **first (partial) matrix recorded; v1 defaults chosen** — see
+`docs/evaluations/ai22-2026-10-07.md`.
 
 Nova's local speech recognition (ASR) and translation engines are chosen by
 measurement. The harness is `tools/ai-bench`; see its README for how to run it. Results
