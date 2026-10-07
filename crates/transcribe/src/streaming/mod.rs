@@ -45,6 +45,12 @@ impl WhisperStreamingEngine {
     pub fn accel(&self) -> Option<Accel> {
         self.worker.accel()
     }
+
+    /// Stop the worker process for good (model unloaded or evicted).
+    /// Sessions still holding the engine then fail their steps.
+    pub fn shutdown(&self) {
+        self.worker.shutdown();
+    }
 }
 
 impl SpeechToTextEngine for WhisperStreamingEngine {

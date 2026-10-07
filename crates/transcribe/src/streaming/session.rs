@@ -21,6 +21,9 @@ const PROMPT_WORDS: usize = 24;
 /// Detected language is trusted (and then kept) only from a buffer this
 /// long: on a second of audio whisper's detection flips between decodes.
 const LANGUAGE_LOCK_SEC: f64 = 3.0;
+/// ...and only from a decode with real speech: on music or silence whisper
+/// still names a language, usually a wrong one.
+const LANGUAGE_LOCK_WORDS: usize = 3;
 
 pub struct StreamingSession {
     decoder: Arc<dyn BufferDecoder>,
@@ -35,6 +38,8 @@ pub struct StreamingSession {
     /// Stream time, in ms, that session second 0 corresponds to.
     origin_ms: u64,
     policy: LocalAgreement,
+    /// `audio.dropped()` already accounted for as a gap.
+    dropped_seen: u64,
 }
 
 impl StreamingSession {
@@ -48,7 +53,6 @@ impl StreamingSession {
         }
         Ok(Self {
             decoder,
-            audio,
             step_sec: (config.step_ms.max(100) as f64) / 1000.0,
             language: config.language.clone(),
             requested_language: config.language,
@@ -57,6 +61,8 @@ impl StreamingSession {
             decoded_until: 0.0,
             origin_ms: 0,
             policy: LocalAgreement::default(),
+            dropped_seen: audio.dropped(),
+            audio,
         })
     }
 
@@ -102,7 +108,10 @@ impl StreamingSession {
         };
         let decoded = self.decoder.decode(&request, &self.buffer)?;
         self.decoded_until = self.received_until();
-        if self.language.is_none() && self.buffer.len() as f64 / SAMPLE_RATE >= LANGUAGE_LOCK_SEC {
+        if self.language.is_none()
+            && self.buffer.len() as f64 / SAMPLE_RATE >= LANGUAGE_LOCK_SEC
+            && decoded.words.len() >= LANGUAGE_LOCK_WORDS
+        {
             self.language = decoded.language.clone();
         }
 
@@ -146,13 +155,37 @@ impl StreamingSession {
     }
 }
 
+impl StreamingSession {
+    /// The queue dropped audio because decoding fell behind: what arrives
+    /// next starts after a gap. Commit the pending tail and restart the
+    /// buffer after the gap, so later timestamps stay on the media clock and
+    /// whisper never decodes across a splice.
+    fn skip_dropped_audio(&mut self) -> Vec<AsrUpdate> {
+        let dropped = self.audio.dropped();
+        let gap = dropped.saturating_sub(self.dropped_seen);
+        self.dropped_seen = dropped;
+        if gap == 0 {
+            return Vec::new();
+        }
+        let resume = self.received_until() + gap as f64 / SAMPLE_RATE;
+        self.buffer.clear();
+        self.buffer_start = resume;
+        self.decoded_until = resume;
+        let pending = self.policy.flush();
+        self.segment(&pending)
+            .map(|segment| vec![AsrUpdate::Committed(vec![segment])])
+            .unwrap_or_default()
+    }
+}
+
 impl AsrSession for StreamingSession {
     fn poll(&mut self) -> Result<Vec<AsrUpdate>, EngineError> {
+        let mut updates = self.skip_dropped_audio();
         self.audio.drain_into(&mut self.buffer);
-        if self.received_until() - self.decoded_until < self.step_sec {
-            return Ok(Vec::new());
+        if self.received_until() - self.decoded_until >= self.step_sec {
+            updates.extend(self.step()?);
         }
-        self.step()
+        Ok(updates)
     }
 
     fn flush(&mut self) -> Result<Vec<AsrUpdate>, EngineError> {
@@ -172,6 +205,7 @@ impl AsrSession for StreamingSession {
 
     fn reset(&mut self, restart_ms: u64) {
         self.audio.clear();
+        self.dropped_seen = self.audio.dropped();
         self.buffer.clear();
         self.buffer_start = 0.0;
         self.decoded_until = 0.0;
@@ -273,7 +307,8 @@ mod tests {
 
     #[test]
     fn detected_language_is_kept_once_the_buffer_is_long_enough() {
-        let decoder = Scripted::new(vec![]);
+        let speech = vec![("il", 0.1), ("fait", 0.4), ("beau", 0.7)];
+        let decoder = Scripted::new(vec![speech.clone(), speech.clone(), speech.clone(), speech]);
         let audio = PcmQueue::with_capacity(16_000 * 60);
         let mut session = StreamingSession::new(decoder.clone(), config(None), audio.clone()).unwrap();
         for _ in 0..4 {
@@ -336,6 +371,38 @@ mod tests {
         let last = decoder.requests.lock().unwrap().last().cloned().unwrap();
         assert!((last.offset_sec - 0.5).abs() < 1e-3, "{}", last.offset_sec);
         assert_eq!(last.prompt, "one.");
+    }
+
+    #[test]
+    fn dropped_audio_becomes_a_gap_not_a_time_shift() {
+        let decoder = Scripted::new(vec![
+            vec![("avant", 0.2)],
+            vec![("après", 0.3)],
+        ]);
+        // Room for 2 s: pushing 3 s drops the oldest second.
+        let audio = PcmQueue::with_capacity(32_000);
+        let mut session =
+            StreamingSession::new(decoder.clone(), config(Some("fr")), audio.clone()).unwrap();
+        audio.push(&seconds(1.0));
+        session.poll().unwrap();
+        audio.push(&seconds(3.0));
+        let updates = session.poll().unwrap();
+        assert_eq!(texts(&updates)[0], "C:avant", "pending text committed at the gap");
+        let last = decoder.requests.lock().unwrap().last().cloned().unwrap();
+        assert!((last.offset_sec - 2.0).abs() < 1e-6, "resumes after the 1 s gap: {}", last.offset_sec);
+        assert_eq!(last.samples, 32_000);
+    }
+
+    #[test]
+    fn language_is_not_locked_from_a_decode_without_speech() {
+        let decoder = Scripted::new(vec![vec![], vec![], vec![], vec![]]);
+        let audio = PcmQueue::with_capacity(16_000 * 60);
+        let mut session = StreamingSession::new(decoder.clone(), config(None), audio.clone()).unwrap();
+        for _ in 0..4 {
+            audio.push(&seconds(1.0));
+            session.poll().unwrap();
+        }
+        assert!(decoder.requests.lock().unwrap().iter().all(|r| r.language.is_none()));
     }
 
     #[test]

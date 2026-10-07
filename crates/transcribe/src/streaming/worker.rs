@@ -71,15 +71,17 @@ pub fn coreml_encoder_path(model: &Path) -> PathBuf {
 /// model and (built with WHISPER_COREML_ALLOW_FALLBACK) keeps the GPU path.
 /// The weights are read during the load, so the link is removed right after.
 fn load_metal_first(model: &Path) -> Result<Loaded, String> {
-    let dir = std::env::temp_dir().join(format!("nova-asr-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-    let link = dir.join("metal-only.bin");
-    let _ = std::fs::remove_file(&link);
+    // A private, unpredictable directory (mkdtemp): nobody else can plant
+    // a link there.
+    let dir = tempfile::Builder::new()
+        .prefix("nova-asr-")
+        .tempdir()
+        .map_err(|e| format!("creating a temporary directory: {e}"))?;
+    let link = dir.path().join("metal-only.bin");
     #[cfg(unix)]
     std::os::unix::fs::symlink(model, &link).map_err(|e| format!("linking model: {e}"))?;
-    let loaded = load(&link, Accel::Metal);
-    let _ = std::fs::remove_dir_all(&dir);
-    loaded
+    load(&link, Accel::Metal)
+    // `dir` is removed here; the weights were read during the load.
 }
 
 fn decode(engine: &mut Loaded, request: &DecodeRequest, pcm: &[f32]) -> Result<Decoded, String> {
@@ -234,6 +236,10 @@ fn serve(model: &Path) -> io::Result<()> {
     if coreml {
         let model = model.to_path_buf();
         std::thread::spawn(move || {
+            // whisper.cpp falls back to Metal if the encoder fails to load
+            // (WHISPER_COREML_ALLOW_FALLBACK), so `coreml` means "Core ML
+            // load attempted after its compile"; its log on stderr says
+            // whether the encoder actually loaded.
             match load(&model, Accel::Coreml) {
                 Ok(loaded) => {
                     let _ = upgrade_tx.send(loaded);

@@ -98,6 +98,20 @@ struct WhisperBackend {
     streaming: std::sync::Mutex<Option<Arc<WhisperStreamingEngine>>>,
 }
 
+impl Drop for WhisperBackend {
+    /// Unload or eviction ends the worker even if a caption session still
+    /// holds the engine: its memory is only used while it is accounted for.
+    fn drop(&mut self) {
+        let slot = self
+            .streaming
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(engine) = slot.take() {
+            engine.shutdown();
+        }
+    }
+}
+
 trait BackendAdapter: Send + Sync {
     fn load(&self, path: &Path) -> Result<Backend, RuntimeError>;
     /// A resource-policy hook, not an admission decision. None means unknown.

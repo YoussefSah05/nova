@@ -5,9 +5,10 @@
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nova_core::intelligence::EngineError;
 use thiserror::Error;
@@ -36,6 +37,8 @@ impl From<WorkerError> for EngineError {
     fn from(error: WorkerError) -> Self {
         match error {
             WorkerError::Spawn(_) => EngineError::LoadFailed,
+            // Decode-time failures; start-time ones are mapped to LoadFailed
+            // where the worker is started.
             WorkerError::Exited | WorkerError::Failed(_) => EngineError::InferenceFailed,
         }
     }
@@ -156,9 +159,42 @@ pub trait BufferDecoder: Send + Sync {
 /// A resident whisper.cpp worker shared by every session of one model.
 /// Requests are serialized: one decode at a time per model, which is also
 /// what the runtime's per-model admission allows.
+///
+/// The worker is owned by the runtime's model backend, which calls
+/// [`WhisperWorker::shutdown`] when the model is unloaded or evicted. After
+/// that no process runs and none is started, even if a session still holds
+/// this worker: memory is only used while the runtime accounts for it.
 pub struct WhisperWorker {
     spec: WorkerSpec,
-    process: Mutex<Option<WorkerProcess>>,
+    slot: Mutex<Slot>,
+    /// The running worker's pid (0: none). Written only under `slot`.
+    pid: AtomicU32,
+    /// [`Accel`] of the latest decode, readable without waiting on a decode.
+    accel: AtomicU8,
+    closed: AtomicBool,
+}
+
+#[derive(Default)]
+struct Slot {
+    process: Option<WorkerProcess>,
+    /// Consecutive failed starts, for backoff.
+    failures: u32,
+    retry_at: Option<Instant>,
+}
+
+/// Wait before restarting a worker that failed to start: 2, 4, 8 … 60 s.
+/// A model that crashes whisper.cpp on load is not reloaded on every step.
+fn restart_backoff(failures: u32) -> Duration {
+    Duration::from_secs((1u64 << failures.min(6)).min(60))
+}
+
+fn accel_code(accel: Option<Accel>) -> u8 {
+    match accel {
+        None => 0,
+        Some(Accel::Metal) => 1,
+        Some(Accel::Coreml) => 2,
+        Some(Accel::Cpu) => 3,
+    }
 }
 
 impl WhisperWorker {
@@ -166,39 +202,112 @@ impl WhisperWorker {
     /// Core ML upgrade continues inside the worker).
     pub fn start(spec: WorkerSpec) -> Result<Self, WorkerError> {
         let process = WorkerProcess::spawn(&spec)?;
-        Ok(Self {
+        let worker = Self {
             spec,
-            process: Mutex::new(Some(process)),
-        })
+            pid: AtomicU32::new(process.child.id()),
+            accel: AtomicU8::new(accel_code(Some(process.accel))),
+            slot: Mutex::new(Slot {
+                process: Some(process),
+                ..Slot::default()
+            }),
+            closed: AtomicBool::new(false),
+        };
+        Ok(worker)
     }
 
-    /// The encoder the last decode ran on, if a worker is running.
+    /// The encoder the latest decode ran on, if a worker is running.
     pub fn accel(&self) -> Option<Accel> {
-        self.lock().as_ref().map(|p| p.accel)
+        match self.accel.load(Ordering::Acquire) {
+            1 => Some(Accel::Metal),
+            2 => Some(Accel::Coreml),
+            3 => Some(Accel::Cpu),
+            _ => None,
+        }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<WorkerProcess>> {
-        self.process.lock().unwrap_or_else(|e| e.into_inner())
+    /// Stop the worker for good. Safe while a decode is running: that
+    /// decode fails, and no new worker is started afterwards.
+    pub fn shutdown(&self) {
+        self.closed.store(true, Ordering::Release);
+        match self.slot.try_lock() {
+            Ok(mut slot) => {
+                // Dropping the process kills and reaps it.
+                slot.process = None;
+                self.pid.store(0, Ordering::Release);
+                self.accel.store(0, Ordering::Release);
+            }
+            Err(_) => {
+                // A decode holds the slot, so its child is alive and not yet
+                // reaped: signalling the pid cannot hit a reused one. The
+                // decode then sees `closed` and drops the process.
+                let pid = self.pid.load(Ordering::Acquire);
+                #[cfg(unix)]
+                if pid != 0 {
+                    // SAFETY: see above; the pid belongs to our live child.
+                    unsafe {
+                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Slot> {
+        self.slot.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn clear(&self, slot: &mut Slot) {
+        slot.process = None;
+        self.pid.store(0, Ordering::Release);
+        self.accel.store(0, Ordering::Release);
     }
 }
 
 impl BufferDecoder for WhisperWorker {
     fn decode(&self, request: &DecodeRequest, pcm: &[f32]) -> Result<Decoded, EngineError> {
-        let mut slot = self.lock();
-        if slot.is_none() {
-            *slot = Some(WorkerProcess::spawn(&self.spec)?);
-        }
-        let Some(process) = slot.as_mut() else {
+        if self.closed.load(Ordering::Acquire) {
             return Err(EngineError::LoadFailed);
+        }
+        let mut slot = self.lock();
+        if slot.process.is_none() {
+            if slot.retry_at.is_some_and(|at| Instant::now() < at) {
+                return Err(EngineError::LoadFailed);
+            }
+            match WorkerProcess::spawn(&self.spec) {
+                Ok(process) => {
+                    self.pid.store(process.child.id(), Ordering::Release);
+                    self.accel.store(accel_code(Some(process.accel)), Ordering::Release);
+                    slot.process = Some(process);
+                    slot.failures = 0;
+                    slot.retry_at = None;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "ASR worker restart failed");
+                    slot.failures += 1;
+                    slot.retry_at = Some(Instant::now() + restart_backoff(slot.failures));
+                    return Err(EngineError::LoadFailed);
+                }
+            }
+        }
+        let result = match slot.process.as_mut() {
+            Some(process) => process.decode(request, pcm),
+            None => return Err(EngineError::LoadFailed),
         };
-        match process.decode(request, pcm) {
-            Ok(decoded) => Ok(decoded),
+        if self.closed.load(Ordering::Acquire) {
+            self.clear(&mut slot);
+            return Err(EngineError::LoadFailed);
+        }
+        match result {
+            Ok(decoded) => {
+                self.accel.store(accel_code(Some(decoded.accel)), Ordering::Release);
+                Ok(decoded)
+            }
             // A decode error reported by a healthy worker leaves it running.
             Err(WorkerError::Failed(_)) => Err(EngineError::InferenceFailed),
-            Err(error) => {
-                // Dead or hung: drop (and kill) it; the next step respawns.
-                *slot = None;
-                Err(error.into())
+            Err(_) => {
+                // Dead or hung: drop (and kill) it; the next step restarts it.
+                self.clear(&mut slot);
+                Err(EngineError::InferenceFailed)
             }
         }
     }
@@ -254,6 +363,63 @@ echo '{"decoded":{"words":[{"text":"hi","start":0.0,"end":0.4}],"language":"en",
         assert!(worker.accel().is_none());
         // ...and the next step starts a fresh one.
         assert!(worker.decode(&request(2), &[0.0, 0.0]).is_ok());
+    }
+
+    #[test]
+    fn shutdown_stops_the_worker_and_prevents_restarts() {
+        let (dir, spec) = script_worker(
+            r#"echo $$ >> "$(dirname "$0")/spawns"
+echo '{"ready":{"accel":"metal","load_ms":5}}'
+while read header; do head -c 8 > /dev/null; echo '{"decoded":{"words":[],"language":null,"accel":"metal","decode_ms":1}}'; done"#,
+        );
+        let worker = WhisperWorker::start(spec).unwrap();
+        assert!(worker.decode(&request(2), &[0.0, 0.0]).is_ok());
+        let pid = std::fs::read_to_string(dir.path().join("spawns")).unwrap();
+        worker.shutdown();
+        assert!(worker.accel().is_none());
+        let alive = std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(!alive, "the worker process is gone");
+        assert_eq!(
+            worker.decode(&request(2), &[0.0, 0.0]),
+            Err(EngineError::LoadFailed)
+        );
+        let spawns = std::fs::read_to_string(dir.path().join("spawns")).unwrap();
+        assert_eq!(spawns.lines().count(), 1, "no restart after shutdown");
+    }
+
+    #[test]
+    fn failed_restarts_back_off() {
+        // Ready once, then exits; every later start fails at load.
+        let (dir, spec) = script_worker(
+            r#"if [ -e "$(dirname "$0")/started" ]; then echo '{"failed":"bad model"}'; exit 0; fi
+touch "$(dirname "$0")/started"
+echo '{"ready":{"accel":"metal","load_ms":5}}'"#,
+        );
+        let worker = WhisperWorker::start(spec).unwrap();
+        assert_eq!(
+            worker.decode(&request(2), &[0.0, 0.0]),
+            Err(EngineError::InferenceFailed),
+            "the first worker exited"
+        );
+        assert_eq!(
+            worker.decode(&request(2), &[0.0, 0.0]),
+            Err(EngineError::LoadFailed),
+            "its restart fails to load"
+        );
+        let before = std::fs::metadata(dir.path().join("started")).unwrap();
+        assert_eq!(
+            worker.decode(&request(2), &[0.0, 0.0]),
+            Err(EngineError::LoadFailed),
+            "backing off: no new start"
+        );
+        assert!(before.is_file());
+        assert_eq!(restart_backoff(1), Duration::from_secs(2));
+        assert_eq!(restart_backoff(30), Duration::from_secs(60));
     }
 
     #[test]

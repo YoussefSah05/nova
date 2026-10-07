@@ -40,7 +40,8 @@ before Tauri starts.
 **Lifecycle:**
 - The worker belongs to the whisper backend in `ModelRuntimeManager`, which starts it on
   the first `ModelLease::speech_engine()`.
-- The worker dies when the model is unloaded or evicted, so leases, admission and the
+- Unloading or evicting the model shuts the worker down, even if a caption session still
+  holds the engine. A closed worker is never restarted, so leases, admission and the
   resident budget all apply unchanged.
 - The whisper model now counts against the resident budget.
 - `prewarm_speech` starts the worker at interactive priority when the user signals
@@ -50,6 +51,8 @@ before Tauri starts.
 - A worker that dies, hangs past a deadline (90 s to become ready, 20 s per decode) or
   sends malformed output is killed.
 - The current step fails, and the next step starts a fresh worker.
+- Failed restarts back off (2 s doubling to 60 s), so a model that crashes on load is not
+  reloaded on every step.
 - Playback is never affected.
 
 **Streaming policy:** `StreamingSession` runs the benchmarked LocalAgreement-2 policy:
@@ -59,7 +62,12 @@ before Tauri starts.
 - the detected language locked once the buffer reaches 3 s.
 
 Audio arrives through a bounded `PcmQueue`. When the queue is full, the oldest audio is
-dropped and counted. Provisional updates are ephemeral; only committed updates are final.
+dropped and counted, and the session treats the drop as a gap:
+- it commits the pending text;
+- it resumes after the gap, so timestamps stay on the media clock.
+
+The detected language is locked only from a decode that contains words. Provisional
+updates are ephemeral; only committed updates are final.
 
 **Batch path:** `whisper-cli` keeps serving batch (VOD window) transcription until the
 streaming caption pipeline (M17-b) replaces it.
@@ -92,4 +100,11 @@ streaming caption pipeline (M17-b) replaces it.
   security-scoped access to the worker, or pass the file itself.
 - **Memory:** while Core ML compiles, both encoders are loaded (about 1.8 GB for turbo
   q5) until the switch. The steady state is about 900 MB.
+- **Batch captions count against the budget too.** Batch `whisper-cli` windows take a
+  resident slot even when no worker is running, until M17-b moves captions onto the
+  worker. In the low-resource mode (one slot), a batch window can therefore evict the
+  search embedder.
+- **What the `coreml` label means:** the worker reports `coreml` after its Core ML load
+  attempt. whisper.cpp falls back to Metal if the encoder fails to load, and only its log
+  shows which happened.
 - **Numbering:** the playback audio tap moves to ADR 0012.

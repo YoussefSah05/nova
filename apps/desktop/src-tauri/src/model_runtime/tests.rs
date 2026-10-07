@@ -1083,9 +1083,11 @@ async fn prewarm_starts_one_resident_worker_that_unload_stops() {
     assert_eq!(pids.len(), 1, "prewarm and use share one worker");
     assert!(alive(pids[0]));
 
-    drop((engine, lease));
+    // A session may outlive its lease; unloading still stops the worker.
+    drop(lease);
     assert!(runtime.unload(id).await.unwrap());
     assert!(!alive(pids[0]), "unloading the model stops its worker");
+    assert!(engine.accel().is_none());
 }
 
 #[tokio::test]
