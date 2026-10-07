@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -292,12 +292,60 @@ impl ModelManifest {
         })
     }
 
+    /// How to translate `source` → `target`: a direct model if one exists,
+    /// otherwise two hops through English. Among candidates, streaming
+    /// models beat batch ones and freely licensed ones beat non-commercial
+    /// ones; the manifest order breaks ties.
+    pub fn translation_route(&self, source: &str, target: &str) -> Option<TranslationRoute<'_>> {
+        let best = |from: &str, to: &str| {
+            self.models
+                .iter()
+                .filter(|entry| {
+                    entry.capability == Capability::Translation
+                        && entry.fallback_of.is_none()
+                        && entry
+                            .pairs
+                            .iter()
+                            .any(|p| p.source == from && p.target == to)
+                })
+                .min_by_key(|entry| {
+                    (
+                        entry.latency_class != LatencyClass::Streaming,
+                        entry.non_commercial,
+                    )
+                })
+        };
+        if source == target {
+            return None;
+        }
+        if let Some(direct) = best(source, target) {
+            return Some(TranslationRoute::Direct(direct));
+        }
+        if source == PIVOT_LANGUAGE || target == PIVOT_LANGUAGE {
+            return None;
+        }
+        Some(TranslationRoute::Pivot(
+            best(source, PIVOT_LANGUAGE)?,
+            best(PIVOT_LANGUAGE, target)?,
+        ))
+    }
+
     /// Fallbacks registered for `id`, in manifest order.
     pub fn fallbacks_of<'a>(&'a self, id: &'a str) -> impl Iterator<Item = &'a ManifestEntry> + 'a {
         self.models
             .iter()
             .filter(move |entry| entry.fallback_of.as_deref() == Some(id))
     }
+}
+
+/// The language indirect translations go through.
+pub const PIVOT_LANGUAGE: &str = "en";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranslationRoute<'a> {
+    Direct(&'a ManifestEntry),
+    /// source → English, then English → target.
+    Pivot(&'a ManifestEntry, &'a ManifestEntry),
 }
 
 /// Cheap, offline availability for a `files` probe: presence and pinned size
@@ -371,6 +419,80 @@ pub fn verify_files(model_dir: &Path, files: &[ManifestFile]) -> Result<(), Veri
             .collect();
         if total != file.bytes || digest != file.sha256 {
             return Err(VerifyError::Mismatch(file.path.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// The marker [`attest`] leaves in a verified model directory.
+pub const ATTESTATION_FILE: &str = ".nova-verified";
+
+/// What was verified: the revision, and each file's size and modification
+/// time at that moment. A later change to any file voids the attestation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Attestation {
+    revision: String,
+    files: Vec<AttestedFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct AttestedFile {
+    path: String,
+    bytes: u64,
+    modified_ns: u64,
+}
+
+fn observe(model_dir: &Path, entry: &ManifestEntry) -> Option<Attestation> {
+    let files = entry
+        .files
+        .iter()
+        .map(|file| {
+            let meta = model_dir.join(&file.path).metadata().ok()?;
+            let modified = meta
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?;
+            Some(AttestedFile {
+                path: file.path.clone(),
+                bytes: meta.len(),
+                modified_ns: u64::try_from(modified.as_nanos()).ok()?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Attestation {
+        revision: entry.revision.clone(),
+        files,
+    })
+}
+
+/// Whether the files in `model_dir` are the ones [`attest`] verified: a
+/// metadata comparison, cheap enough for every status poll.
+pub fn is_attested(model_dir: &Path, entry: &ManifestEntry) -> bool {
+    let Ok(text) = std::fs::read_to_string(model_dir.join(ATTESTATION_FILE)) else {
+        return false;
+    };
+    let Ok(recorded) = serde_json::from_str::<Attestation>(&text) else {
+        return false;
+    };
+    observe(model_dir, entry).is_some_and(|current| current == recorded)
+}
+
+/// Verify every pinned checksum, then record the attestation. Blocking and
+/// proportional to model size: run once per install, off the executor. A
+/// read-only library cannot keep the marker; the model then verifies again
+/// on its next load, which is slower but still correct.
+pub fn attest(model_dir: &Path, entry: &ManifestEntry) -> Result<(), VerifyError> {
+    let before = observe(model_dir, entry);
+    verify_files(model_dir, &entry.files)?;
+    // Files that changed while being hashed are not attested.
+    let Some(attestation) = before.filter(|b| observe(model_dir, entry).as_ref() == Some(b)) else {
+        return Err(VerifyError::Unreadable(entry.id.clone()));
+    };
+    if let Ok(json) = serde_json::to_vec(&attestation) {
+        let staging = model_dir.join(format!("{ATTESTATION_FILE}.partial"));
+        if std::fs::write(&staging, json).is_ok() {
+            let _ = std::fs::rename(&staging, model_dir.join(ATTESTATION_FILE));
         }
     }
     Ok(())
@@ -491,6 +613,31 @@ mod tests {
         ModelManifest::parse(json).unwrap();
     }
 
+    /// The v1 defaults (docs/evaluations/ai22-2026-10-07.md): Opus-MT per
+    /// direction, French and Arabic through English.
+    #[test]
+    fn bundled_manifest_routes_every_en_fr_ar_direction() {
+        let json = include_str!("../../../apps/desktop/src-tauri/resources/models.manifest.json");
+        let manifest = ModelManifest::parse(json).unwrap();
+        let id = |route: Option<TranslationRoute<'_>>| match route {
+            Some(TranslationRoute::Direct(e)) => e.id.clone(),
+            Some(TranslationRoute::Pivot(a, b)) => format!("{}+{}", a.id, b.id),
+            None => "none".into(),
+        };
+        assert_eq!(id(manifest.translation_route("en", "fr")), "opus-mt-en-fr");
+        assert_eq!(id(manifest.translation_route("ar", "en")), "opus-mt-ar-en");
+        assert_eq!(
+            id(manifest.translation_route("fr", "ar")),
+            "opus-mt-fr-en+opus-mt-en-ar"
+        );
+        assert_eq!(
+            id(manifest.translation_route("ar", "fr")),
+            "opus-mt-ar-en+opus-mt-en-fr"
+        );
+        assert_eq!(id(manifest.translation_route("en", "en")), "none");
+        assert_eq!(id(manifest.translation_route("en", "de")), "none");
+    }
+
     #[test]
     fn availability_is_cheap_and_never_claims_unattested_content() {
         let dir = tempfile::tempdir().unwrap();
@@ -517,6 +664,26 @@ mod tests {
             files_availability(dir.path(), &files, true),
             ModelAvailability::Available
         );
+    }
+
+    #[test]
+    fn attestation_survives_polls_and_is_voided_by_any_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = ModelManifest::parse(&entry_json("")).unwrap();
+        let entry = &manifest.models[0];
+        std::fs::write(dir.path().join("model.onnx"), b"jello").unwrap();
+        assert!(attest(dir.path(), entry).is_err(), "wrong content");
+        assert!(!is_attested(dir.path(), entry));
+
+        std::fs::write(dir.path().join("model.onnx"), b"hello").unwrap();
+        attest(dir.path(), entry).unwrap();
+        assert!(is_attested(dir.path(), entry));
+        assert!(is_attested(dir.path(), entry), "a poll does not consume it");
+
+        // Same size, new content: the modification time voids it.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.path().join("model.onnx"), b"hellp").unwrap();
+        assert!(!is_attested(dir.path(), entry));
     }
 
     #[test]

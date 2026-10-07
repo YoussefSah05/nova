@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use nova_core::model_manifest::BackendKind;
+use nova_core::intelligence::Translator;
+use nova_core::model_manifest::{attest, is_attested, BackendKind, ManifestEntry};
 use nova_core::models::{ModelAvailability, ModelId, ModelLibraryId};
 use nova_enrich::{Embedder, FastEmbedder};
 use nova_storage::{ModelRepository, RegisteredModel};
 use nova_transcribe::streaming::{WhisperStreamingEngine, WorkerSpec};
 use nova_transcribe::{default_model, model_paths};
+use nova_translate::MarianTranslator;
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, Notify, Semaphore};
 
@@ -87,6 +89,7 @@ impl RuntimeCancellation {
 enum Backend {
     Embedding(Box<dyn Embedder>),
     Whisper(WhisperBackend),
+    Translation(Arc<dyn Translator>),
 }
 
 /// One whisper.cpp model: the GGML path for batch `whisper-cli` runs, and the
@@ -121,6 +124,41 @@ trait BackendAdapter: Send + Sync {
     /// Whether a loaded backend keeps heavyweight weights in this process and
     /// therefore counts against the resident-model budget.
     fn resident(&self) -> bool {
+        true
+    }
+    /// Whether `load` verifies the pinned checksums itself, so an
+    /// `unverified` install may be offered to it.
+    fn verifies_content(&self) -> bool {
+        false
+    }
+}
+
+/// One Marian/Opus-MT direction on the app's single ONNX Runtime. The first
+/// load of a fresh install verifies its pinned checksums (about 0.3 s per
+/// model) and records the attestation, so later loads and polls skip it.
+struct TranslationAdapter {
+    entry: ManifestEntry,
+}
+impl BackendAdapter for TranslationAdapter {
+    fn load(&self, path: &Path) -> Result<Backend, RuntimeError> {
+        if !is_attested(path, &self.entry) {
+            attest(path, &self.entry).map_err(|error| {
+                tracing::warn!(%error, model = %self.entry.id, "model files failed verification");
+                RuntimeError::Unavailable
+            })?;
+        }
+        let pair = self.entry.pairs.first().ok_or(RuntimeError::InvalidModel)?;
+        let translator =
+            MarianTranslator::load(path, &pair.source, &pair.target).map_err(|error| {
+                tracing::warn!(%error, model = %self.entry.id, "translation model failed to load");
+                RuntimeError::LoadFailed
+            })?;
+        Ok(Backend::Translation(Arc::new(translator)))
+    }
+    fn estimated_resident_bytes(&self) -> Option<u64> {
+        self.entry.est_resident_bytes
+    }
+    fn verifies_content(&self) -> bool {
         true
     }
 }
@@ -436,6 +474,14 @@ impl ModelLease {
         }
     }
 
+    /// The translator of a translation model's lease.
+    pub fn translator(&self) -> Option<Arc<dyn Translator>> {
+        match &self.loaded.backend {
+            Backend::Translation(translator) => Some(Arc::clone(translator)),
+            _ => None,
+        }
+    }
+
     pub fn whisper_path(&self) -> Option<&Path> {
         match &self.loaded.backend {
             Backend::Whisper(whisper) => Some(&whisper.ggml),
@@ -528,9 +574,10 @@ impl ModelRuntimeManager {
                     estimated_bytes: entry.est_resident_bytes,
                 }),
                 BackendKind::FastEmbed => Arc::new(EmbeddingAdapter),
-                BackendKind::OnnxSeq2Seq | BackendKind::LlamaServer | BackendKind::Apple => {
-                    continue
-                }
+                BackendKind::OnnxSeq2Seq => Arc::new(TranslationAdapter {
+                    entry: entry.clone(),
+                }),
+                BackendKind::LlamaServer | BackendKind::Apple => continue,
             };
             if let Ok(id) = ModelId::new(entry.id.as_str()) {
                 adapters.insert(id, adapter);
@@ -674,6 +721,7 @@ impl ModelRuntimeManager {
     }
 
     async fn resolve(&self, app_data_dir: &Path, id: &ModelId) -> Result<Resolved, RuntimeError> {
+        let verifies = self.adapters.get(id).is_some_and(|a| a.verifies_content());
         let pool = &*self.registry_pool;
         model_registry::refresh_internal(app_data_dir.to_path_buf(), pool)
             .await
@@ -685,7 +733,7 @@ impl ModelRuntimeManager {
             .map_err(|_| RuntimeError::RegistryFailed)?;
         if let Some(model) = internal
             .into_iter()
-            .find(|m| m.descriptor.id == *id && usable(m.availability))
+            .find(|m| m.descriptor.id == *id && usable(m.availability, verifies))
         {
             return Ok(Resolved {
                 model,
@@ -708,7 +756,9 @@ impl ModelRuntimeManager {
         for candidate in external {
             offline |= candidate.model.descriptor.id == *id
                 && candidate.model.availability == ModelAvailability::Unavailable;
-            if candidate.model.descriptor.id != *id || !usable(candidate.model.availability) {
+            if candidate.model.descriptor.id != *id
+                || !usable(candidate.model.availability, verifies)
+            {
                 continue;
             }
             if let Some(library) = libraries
@@ -955,8 +1005,14 @@ impl ModelRuntimeManager {
 #[cfg(test)]
 mod tests;
 
-fn usable(availability: ModelAvailability) -> bool {
-    matches!(availability, ModelAvailability::Available)
+/// Whether a registered model may be loaded: verified, or present and about
+/// to be verified by an adapter that checks the pinned checksums itself.
+fn usable(availability: ModelAvailability, adapter_verifies: bool) -> bool {
+    match availability {
+        ModelAvailability::Available => true,
+        ModelAvailability::Unverified => adapter_verifies,
+        ModelAvailability::Missing | ModelAvailability::Unavailable => false,
+    }
 }
 
 fn load_resolved(
@@ -991,9 +1047,10 @@ fn load_resolved(
             model_registry::observe_external_at(&resolved.model.library, Some(root))
                 .map_err(|_| RuntimeError::RegistryFailed)?;
         if !online
-            || !observed
-                .iter()
-                .any(|m| m.descriptor.id == resolved.model.descriptor.id && usable(m.availability))
+            || !observed.iter().any(|m| {
+                m.descriptor.id == resolved.model.descriptor.id
+                    && usable(m.availability, adapter.verifies_content())
+            })
         {
             return Err(RuntimeError::Unavailable);
         }

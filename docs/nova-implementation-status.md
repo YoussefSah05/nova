@@ -42,7 +42,7 @@
 | M15 Recovery / QoE | PARTIAL | Bounded recovery (same item once, then other sources, ≤ 5 per 10 min per title) and per-source health (`variant_health`, 0039). | No decoder fallback; no QoE metrics (startup latency, rebuffering); buffering stalls aren't failures. |
 | M16 Jobs / bounded queues | PARTIAL | Persisted `JobQueue` for import, EPG, enrichment and scheduled refresh: dedup, cancel, startup recovery. Opt-in per-playlist auto-refresh (migration 0043) runs as background work for the active profile, one import per source (2026-10-05, `implementation/m05-m16-governed-work.md`). | No retry/backoff (slice B2 contracted). |
 | M17 Streaming transcription | PARTIAL | VOD caption sessions: segment-aligned windows, Realtime leases, subprocess kill on cancel. Resident streaming engine (2026-10-07, ADR-0011): whisper.cpp in a worker process of Nova's binary, Metal first then Core ML, LocalAgreement-2 sessions over a bounded `PcmQueue`, runtime-owned lifecycle and `prewarm_speech`. | Not yet wired to captions: no playback audio tap (ADR 0012), VOD still uses `whisper-cli` windows. |
-| M18 Timed translation | MISSING | Engine removed (protobuf clash); legacy rows readable. | Engine choice pending. |
+| M18 Timed translation | PARTIAL | Engine chosen by AI22: Opus-MT (Marian ONNX) per direction in `crates/translate` on the single ORT, English pivot for fr↔ar (`ModelManifest::translation_route`). Runtime `TranslationAdapter` verifies pinned checksums on first load (`.nova-verified`) and serves `lease.translator()` (2026-10-07). | Not wired to captions: no committed-segment translation worker, cache provenance (migration 0044) or UI. fr→en / ar→en unmeasured. |
 | M19 Embeddings / dialogue search | PARTIAL | Per-title dialogue search seeks playback (`TranscriptPanel` → `seekTo`). | Entity vectors belong to provider rows, not entities; no cross-library dialogue search. |
 | M20 Command-K typed intents | MISSING | `CommandPalette` is search + navigation. | No intent model or validator. |
 | M21 Smart discovery / personalization | PARTIAL | TMDB related/collections/trending intersected with the library. | No embedding similarity or history-based personalization. |
@@ -66,7 +66,7 @@
 | AI05 Governor integration | COMPLETE for ASR/embeddings | Reasoner would bypass it if wired as-is. |
 | AI06 ASR baseline | COMPLETE | Whisper subprocess, Core ML, DTW timestamps. |
 | AI07 Streaming transcription | PARTIAL | = M17 |
-| AI08 / AI09 Translation | MISSING | = M18 |
+| AI08 / AI09 Translation | PARTIAL | = M18 |
 | AI10 Entity embeddings | PARTIAL | Provider-row owners; lost on refresh. |
 | AI11 Transcript embeddings | COMPLETE (per title) | Lazy segment embedding, model-keyed. |
 | AI12 Semantic search | PARTIAL | Optional leg with lexical fallback; vectors on provider rows (AI10). |

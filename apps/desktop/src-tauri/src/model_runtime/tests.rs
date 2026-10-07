@@ -1094,5 +1094,87 @@ async fn prewarm_starts_one_resident_worker_that_unload_stops() {
 async fn speech_engine_is_only_offered_by_whisper_backends() {
     let fixture = Fixture::new();
     let lease = fixture.acquire().await;
-    assert!(matches!(lease.speech_engine(), Err(RuntimeError::InvalidModel)));
+    assert!(matches!(
+        lease.speech_engine(),
+        Err(RuntimeError::InvalidModel)
+    ));
+}
+
+/// Lay out the opus-mt-en-fr files, either copied from a real install or as
+/// sparse files of the pinned sizes (right size, wrong content).
+fn opus_fixture(app_data: &Path, real: Option<&Path>) -> PathBuf {
+    let manifest = model_registry::bundled_manifest().unwrap();
+    let entry = manifest.get("opus-mt-en-fr").unwrap();
+    let dir = app_data.join("models").join(&entry.relative_path);
+    for file in &entry.files {
+        let path = dir.join(&file.path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        match real {
+            Some(source) => {
+                std::fs::copy(source.join(&file.path), &path).unwrap();
+            }
+            None => std::fs::File::create(&path)
+                .unwrap()
+                .set_len(file.bytes)
+                .unwrap(),
+        }
+    }
+    dir
+}
+
+#[tokio::test]
+async fn a_pinned_install_with_wrong_content_is_refused_and_not_attested() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = nova_storage::init_app_db(dir.path().join("app.db").to_str().unwrap())
+        .await
+        .unwrap();
+    let model_dir = opus_fixture(dir.path(), None);
+    let runtime = ModelRuntimeManager::new(Arc::new(pool));
+    let result = runtime
+        .acquire(dir.path(), "opus-mt-en-fr", &RuntimeCancellation::default())
+        .await;
+    assert!(matches!(result, Err(RuntimeError::Unavailable)));
+    assert!(!model_dir
+        .join(nova_core::model_manifest::ATTESTATION_FILE)
+        .exists());
+}
+
+/// Real weights: `NOVA_TEST_OPUS_DIR=/path/to/models/opus`.
+#[tokio::test]
+async fn a_real_translation_model_verifies_once_then_translates() {
+    let Some(opus) = std::env::var_os("NOVA_TEST_OPUS_DIR") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let pool = nova_storage::init_app_db(dir.path().join("app.db").to_str().unwrap())
+        .await
+        .unwrap();
+    opus_fixture(dir.path(), Some(&PathBuf::from(opus).join("opus-mt-en-fr")));
+    let pool = Arc::new(pool);
+    let runtime = ModelRuntimeManager::new(pool.clone());
+    let lease = runtime
+        .acquire(dir.path(), "opus-mt-en-fr", &RuntimeCancellation::default())
+        .await
+        .unwrap();
+    let translator = lease.translator().unwrap();
+    let segments = vec!["Good evening, and welcome.".to_string()];
+    let out = translator
+        .translate(nova_core::intelligence::TranslateBatch {
+            source: "en",
+            target: "fr",
+            context: &[],
+            segments: &segments,
+        })
+        .unwrap();
+    assert!(out[0].to_lowercase().contains("bonsoir"), "{out:?}");
+
+    let models = model_registry::refresh_internal(dir.path().to_path_buf(), &pool)
+        .await
+        .unwrap();
+    let opus = models
+        .iter()
+        .find(|m| m.descriptor.id.as_str() == "opus-mt-en-fr")
+        .unwrap();
+    assert_eq!(opus.availability, ModelAvailability::Available);
+    assert!(opus.descriptor.artifact_revision.is_some());
 }

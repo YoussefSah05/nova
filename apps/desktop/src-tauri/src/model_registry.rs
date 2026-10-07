@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use nova_core::{
-    model_manifest::{files_availability, ManifestEntry, ManifestError, ModelManifest, Probe},
+    model_manifest::{
+        files_availability, is_attested, ManifestEntry, ManifestError, ModelManifest, Probe,
+    },
     models::{
         ModelAvailability, ModelContractError, ModelDescriptor, ModelId, ModelLibrary,
         ModelLibraryId, ModelLocation, RelativeModelPath,
@@ -159,10 +161,9 @@ fn discover_library(
             let availability = match entry.probe {
                 Probe::WhisperLayout => whisper_availability(&dir),
                 Probe::FastembedCache => embedding_availability(&dir),
-                // Content attestation (a verified-install record) arrives with
-                // model installation; until then a pinned install that looks
-                // complete is reported as unverified, never available.
-                Probe::Files => files_availability(&dir, &entry.files, false),
+                // A complete-looking pinned install is unverified until its
+                // checksums are attested (on first load, by its adapter).
+                Probe::Files => files_availability(&dir, &entry.files, is_attested(&dir, entry)),
             };
             registration(&library, entry, availability, observed_at)
         })
@@ -316,7 +317,7 @@ mod tests {
     fn discovery_is_offline_and_preserves_existing_internal_paths() {
         let dir = tempfile::tempdir().unwrap();
         let (library, missing) = discover_internal(dir.path()).unwrap();
-        assert_eq!(missing.len(), 2);
+        assert_eq!(missing.len(), bundled_manifest().unwrap().models.len());
         assert!(missing
             .iter()
             .all(|m| m.availability == ModelAvailability::Missing));

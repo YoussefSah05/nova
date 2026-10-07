@@ -29,6 +29,7 @@ nova-hls-proxy = { path = "../../../crates/hls-proxy" }
 nova-mpv-player = { path = "../../../crates/mpv-player" }
 nova-media = { path = "../../../crates/media" }
 nova-transcribe = { path = "../../../crates/transcribe" }
+nova-translate = { path = "../../../crates/translate" }
 nova-search = { path = "../../../crates/search" }
 nova-enrich = { path = "../../../crates/enrich" }
 nova-jobs = { path = "../../../crates/jobs" }

@@ -8,7 +8,11 @@
       "backend": "whisper.cpp",
       "relative_path": "whisper",
       "probe": "whisper-layout",
-      "languages": ["en", "fr", "ar"],
+      "languages": [
+        "en",
+        "fr",
+        "ar"
+      ],
       "licence": "MIT",
       "latency_class": "batch",
       "est_resident_bytes": 800000000
@@ -22,6 +26,162 @@
       "probe": "fastembed-cache",
       "licence": "MIT",
       "latency_class": "batch"
+    },
+    {
+      "id": "opus-mt-en-fr",
+      "revision": "Xenova/opus-mt-en-fr@main, pinned 2026-10-07",
+      "capability": "translation",
+      "backend": "onnx-seq2seq",
+      "relative_path": "opus/opus-mt-en-fr",
+      "probe": "files",
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "b522b73fcc86f77981349c1df2a2e041eed0dbcbea4acf2635019cf21d51ffc0",
+          "bytes": 1411
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "8391785c1a2139e7af4678571ccd8dc654ecbb72e4be186940f65d7c604f0246",
+          "bytes": 5637839
+        },
+        {
+          "path": "onnx/encoder_model_quantized.onnx",
+          "sha256": "0a81bdba62f53223740a8c6c6f58e716eba8ea1f92dfa569caf27ed5e3b6a0f7",
+          "bytes": 50090398
+        },
+        {
+          "path": "onnx/decoder_model_merged_quantized.onnx",
+          "sha256": "333b244bce16023df04541c8cf9fd60aec9b0569da393c4b831d561897b0bda8",
+          "bytes": 57381512
+        }
+      ],
+      "pairs": [
+        {
+          "source": "en",
+          "target": "fr"
+        }
+      ],
+      "licence": "CC-BY-4.0",
+      "latency_class": "streaming",
+      "est_resident_bytes": 700000000
+    },
+    {
+      "id": "opus-mt-fr-en",
+      "revision": "Xenova/opus-mt-fr-en@main, pinned 2026-10-07",
+      "capability": "translation",
+      "backend": "onnx-seq2seq",
+      "relative_path": "opus/opus-mt-fr-en",
+      "probe": "files",
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "6c2851f154d7b88c7767e4fdcf8a5694a36a456bfa6cbcde1b13fdbade3b56f6",
+          "bytes": 1411
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "8391785c1a2139e7af4678571ccd8dc654ecbb72e4be186940f65d7c604f0246",
+          "bytes": 5637839
+        },
+        {
+          "path": "onnx/encoder_model_quantized.onnx",
+          "sha256": "e727cb26ac6bf816394c49671af69c9ae5798868fed1e40849872415dffc1772",
+          "bytes": 50090398
+        },
+        {
+          "path": "onnx/decoder_model_merged_quantized.onnx",
+          "sha256": "73bc7ac8e29c42e6f212ebcc29a2991d3646a04aabb642c0036aa54b40e4e1a9",
+          "bytes": 57381512
+        }
+      ],
+      "pairs": [
+        {
+          "source": "fr",
+          "target": "en"
+        }
+      ],
+      "licence": "CC-BY-4.0",
+      "latency_class": "streaming",
+      "est_resident_bytes": 700000000
+    },
+    {
+      "id": "opus-mt-en-ar",
+      "revision": "Xenova/opus-mt-en-ar@main, pinned 2026-10-07",
+      "capability": "translation",
+      "backend": "onnx-seq2seq",
+      "relative_path": "opus/opus-mt-en-ar",
+      "probe": "files",
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "8135d646cd810090349e8833b7ba593ac3b72d632f8858cb34925bdbcb6a1bea",
+          "bytes": 1389
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "109bb62e1c598287f5960616c869e15be54785a3c2906903dafe044241d50b61",
+          "bytes": 6748848
+        },
+        {
+          "path": "onnx/encoder_model_quantized.onnx",
+          "sha256": "53c354d87ced44b39085fe8a46a25f09ea4578d442dbce9663f3977228f8a04e",
+          "bytes": 51773854
+        },
+        {
+          "path": "onnx/decoder_model_merged_quantized.onnx",
+          "sha256": "c0e553b0c26611780c70417c9b4c1ca7169e9cdb18ba9e649197efb017af9f02",
+          "bytes": 59078120
+        }
+      ],
+      "pairs": [
+        {
+          "source": "en",
+          "target": "ar"
+        }
+      ],
+      "licence": "CC-BY-4.0",
+      "latency_class": "streaming",
+      "est_resident_bytes": 700000000
+    },
+    {
+      "id": "opus-mt-ar-en",
+      "revision": "Xenova/opus-mt-ar-en@main, pinned 2026-10-07",
+      "capability": "translation",
+      "backend": "onnx-seq2seq",
+      "relative_path": "opus/opus-mt-ar-en",
+      "probe": "files",
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "451ee0da95b01fe58d78f05c47e9ad89f0a17a4c03dcecb389136a12248ef9aa",
+          "bytes": 1376
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "86c78b55d2428e4479e21ce4c27266f7c5e1d52bcabcadff29bfda77f6ad3200",
+          "bytes": 6734647
+        },
+        {
+          "path": "onnx/encoder_model_quantized.onnx",
+          "sha256": "d9b0d612acff86cf87634b49bda566d1ef39b312837de549786ea18fecefc708",
+          "bytes": 51790238
+        },
+        {
+          "path": "onnx/decoder_model_merged_quantized.onnx",
+          "sha256": "cdb25ae736afe9d48035b0ea311ab4b25f315810fab7f3c6f6cb0d8d87af35fa",
+          "bytes": 59094632
+        }
+      ],
+      "pairs": [
+        {
+          "source": "ar",
+          "target": "en"
+        }
+      ],
+      "licence": "CC-BY-4.0",
+      "latency_class": "streaming",
+      "est_resident_bytes": 700000000
     }
   ]
 }

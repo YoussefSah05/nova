@@ -3075,6 +3075,7 @@ dependencies = [
  "nova-search",
  "nova-storage",
  "nova-transcribe",
+ "nova-translate",
  "nova-xtream",
  "objc2",
  "objc2-app-kit",
@@ -3270,6 +3271,22 @@ dependencies = [
  "unicode-normalization",
  "whisper-rs",
  "zip",
+]
+
+[[package]]
+name = "nova-translate"
+version = "0.1.0"
+dependencies = [
+ "ndarray",
+ "nova-core",
+ "ort",
+ "ort-sys",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokenizers",
+ "tracing",
 ]
 
 [[package]]

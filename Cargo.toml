@@ -21,6 +21,7 @@ members = [
     "crates/mcp",
     "crates/enrich",
     "crates/artwork",
+    "crates/translate",
 ]
 
 [workspace.dependencies]
@@ -69,6 +70,14 @@ hf-hub = { version = "0.4", default-features = false }
 # Metal and Core ML are enabled per target in nova-transcribe.
 whisper-rs = "0.16"
 unicode-normalization = "0.1"
+
+# Local translation: Marian/Opus-MT on the ONNX Runtime fastembed already
+# links (pinned to the same release), with the pure-Rust tokenizers crate.
+# No sentencepiece and no second protobuf (see the Phase 7 removal).
+ort = { version = "=2.0.0-rc.9", default-features = false, features = ["ndarray"] }
+ort-sys = { version = "=2.0.0-rc.9", default-features = false }
+ndarray = { version = "0.16", default-features = false }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }

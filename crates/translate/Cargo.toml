@@ -1,0 +1,20 @@
+[package]
+name = "nova-translate"
+version = "0.1.0"
+edition = "2021"
+description = "On-device translation: Marian (Opus-MT) on the app's single ONNX Runtime"
+
+[dependencies]
+nova-core = { path = "../core" }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+# Same pins as fastembed's: one ONNX Runtime in the process, no protobuf.
+ort = { workspace = true, features = ["download-binaries"] }
+ort-sys = { workspace = true }
+ndarray = { workspace = true, features = ["std"] }
+tokenizers = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
