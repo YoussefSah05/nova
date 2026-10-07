@@ -116,7 +116,7 @@ pub struct ManifestFile {
     pub bytes: u64,
 }
 
-/// A translation direction, as ISO 639-1 codes ("en", "fr", "ar").
+/// A translation direction, as ISO 639 codes ("en", "fr", "ar").
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LanguagePair {
@@ -228,6 +228,14 @@ impl ModelManifest {
                     return fail("file size must be positive");
                 }
             }
+            let probe_fits = match entry.probe {
+                Probe::Files => true,
+                Probe::WhisperLayout => entry.backend == BackendKind::WhisperCpp,
+                Probe::FastembedCache => entry.backend == BackendKind::FastEmbed,
+            };
+            if !probe_fits {
+                return fail("probe does not match the backend");
+            }
             if !entry.languages.iter().all(|l| valid_language(l)) {
                 return fail("invalid language code");
             }
@@ -249,10 +257,18 @@ impl ModelManifest {
             if primary == &entry.id {
                 return fail("a model cannot be its own fallback");
             }
-            match self.get(primary) {
-                Some(p) if p.capability == entry.capability => {}
-                Some(_) => return fail("fallback has a different capability"),
-                None => return fail("fallback_of names an unknown model"),
+            let Some(p) = self.get(primary) else {
+                return fail("fallback_of names an unknown model");
+            };
+            if p.capability != entry.capability {
+                return fail("fallback has a different capability");
+            }
+            // One level only: a resolver never walks a chain or a cycle.
+            if p.fallback_of.is_some() {
+                return fail("a fallback cannot stand in for another fallback");
+            }
+            if !p.pairs.iter().all(|pair| entry.pairs.contains(pair)) {
+                return fail("fallback does not cover the primary's language pairs");
             }
         }
         Ok(())
@@ -405,6 +421,55 @@ mod tests {
         assert!(matches!(
             ModelManifest::parse(&entry_json("").replace("opus/en-fr", "../escape")),
             Err(ManifestError::Entry(_, "invalid relative_path"))
+        ));
+    }
+
+    #[test]
+    fn fallbacks_are_one_level_and_cover_the_primary() {
+        let two = |second: &str| {
+            entry_json("").replace(
+                r#""streaming"}]}"#,
+                &format!(
+                    r#""streaming"}},{{"id":"b","revision":"r","capability":"translation",
+                    "backend":"onnx-seq2seq","relative_path":"b","probe":"files",
+                    "files":[{{"path":"m","sha256":"{HELLO_SHA}","bytes":5}}],
+                    "licence":"x","latency_class":"batch",{second}}}]}}"#
+                ),
+            )
+        };
+        let covering =
+            two(r#""pairs":[{"source":"en","target":"fr"}],"fallback_of":"opus-mt-en-fr""#);
+        assert!(ModelManifest::parse(&covering).is_ok(), "{covering}");
+        let narrow =
+            two(r#""pairs":[{"source":"fr","target":"en"}],"fallback_of":"opus-mt-en-fr""#);
+        assert!(matches!(
+            ModelManifest::parse(&narrow),
+            Err(ManifestError::Entry(
+                _,
+                "fallback does not cover the primary's language pairs"
+            ))
+        ));
+        let cycle = two(r#""pairs":[{"source":"en","target":"fr"}],"fallback_of":"opus-mt-en-fr""#)
+            .replace(
+                r#""latency_class":"streaming""#,
+                r#""latency_class":"streaming","fallback_of":"b""#,
+            );
+        assert!(matches!(
+            ModelManifest::parse(&cycle),
+            Err(ManifestError::Entry(
+                _,
+                "a fallback cannot stand in for another fallback"
+            ))
+        ));
+    }
+
+    #[test]
+    fn legacy_probes_only_fit_their_backend() {
+        let json = entry_json("")
+            .replace(r#""probe":"files","files":[{"path":"model.onnx","sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824","bytes":5}]"#, r#""probe":"whisper-layout""#);
+        assert!(matches!(
+            ModelManifest::parse(&json),
+            Err(ManifestError::Entry(_, "probe does not match the backend"))
         ));
     }
 

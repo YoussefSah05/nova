@@ -453,6 +453,8 @@ impl ModelRuntimeManager {
         // One adapter per manifest model whose backend this build can load.
         // A model with no adapter yet stays registered but is never loaded.
         let mut adapters: HashMap<ModelId, Arc<dyn BackendAdapter>> = HashMap::new();
+        // A rejected manifest is logged where it is parsed; the runtime then
+        // has no adapters and every acquire fails as an invalid model.
         let manifest = model_registry::bundled_manifest()
             .map(|m| m.models.as_slice())
             .unwrap_or_default();

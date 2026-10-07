@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use nova_core::{
-    model_manifest::{files_availability, ManifestEntry, ModelManifest, Probe},
+    model_manifest::{files_availability, ManifestEntry, ManifestError, ModelManifest, Probe},
     models::{
         ModelAvailability, ModelContractError, ModelDescriptor, ModelId, ModelLibrary,
         ModelLibraryId, ModelLocation, RelativeModelPath,
@@ -25,15 +25,39 @@ use crate::ipc::ApiError;
 static REFRESH_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// The manifest compiled into this build. It is validated by a unit test, so
-/// a parse failure here is a build defect, reported as a contract error.
+/// a failure here is a build defect: logged once, then reported as a
+/// contract error on every use.
 pub fn bundled_manifest() -> Result<&'static ModelManifest, ModelContractError> {
     static MANIFEST: OnceLock<Option<ModelManifest>> = OnceLock::new();
     MANIFEST
         .get_or_init(|| {
-            ModelManifest::parse(include_str!("../resources/models.manifest.json")).ok()
+            parse_manifest(include_str!("../resources/models.manifest.json"))
+                .inspect_err(|e| tracing::error!("bundled model manifest rejected: {e}"))
+                .ok()
         })
         .as_ref()
         .ok_or(ModelContractError::UnknownValue)
+}
+
+/// Core validation plus this build's own rule: a legacy layout probe detects
+/// exactly one model, so only that model may use it. Any other model must
+/// pin its files.
+fn parse_manifest(json: &str) -> Result<ModelManifest, ManifestError> {
+    let manifest = ModelManifest::parse(json)?;
+    for entry in &manifest.models {
+        let only = match entry.probe {
+            Probe::WhisperLayout => default_model().id,
+            Probe::FastembedCache => nova_enrich::MODEL_ID,
+            Probe::Files => continue,
+        };
+        if entry.id != only {
+            return Err(ManifestError::Entry(
+                entry.id.clone(),
+                "a legacy probe detects only the model it was written for",
+            ));
+        }
+    }
+    Ok(manifest)
 }
 
 pub fn internal_library() -> Result<ModelLibrary, ModelContractError> {
@@ -178,7 +202,7 @@ pub(crate) fn observe_external_at(
         }
         linked.push(dir);
     }
-    if linked.iter().any(|path| is_symlink(path)) {
+    if linked.iter().any(|path| links_out(root, path)) {
         return Ok((false, unavailable_models(library)?));
     }
     let (_, models) = discover_library(root, library.clone())?;
@@ -188,6 +212,20 @@ pub(crate) fn observe_external_at(
 fn is_symlink(path: &Path) -> bool {
     path.symlink_metadata()
         .is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+/// Whether `path`, or any directory between `base` and it, is a symlink: a
+/// linked intermediate folder would lead discovery out of the library too.
+fn links_out(base: &Path, path: &Path) -> bool {
+    let Ok(rest) = path.strip_prefix(base) else {
+        return true;
+    };
+    let mut current = base.to_path_buf();
+    is_symlink(&current)
+        || rest.components().any(|part| {
+            current.push(part);
+            is_symlink(&current)
+        })
 }
 
 fn probe_external(
@@ -323,6 +361,30 @@ mod tests {
             row(nova_enrich::MODEL_ID),
             ("embedding", "fastembed", "embeddings", None)
         );
+    }
+
+    #[test]
+    fn legacy_probes_are_pinned_to_the_model_they_detect() {
+        let json = include_str!("../resources/models.manifest.json").replace(
+            r#""id": "multilingual-e5-small""#,
+            r#""id": "another-embedder""#,
+        );
+        assert!(parse_manifest(&json).is_err());
+        assert!(parse_manifest(include_str!("../resources/models.manifest.json")).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_intermediate_folder_counts_as_leaving_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(root.join("models")).unwrap();
+        std::fs::create_dir_all(outside.join("en-fr")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("models/opus")).unwrap();
+        assert!(links_out(&root, &root.join("models/opus/en-fr/model.onnx")));
+        assert!(!links_out(&root, &root.join("models/whisper/model.bin")));
+        assert!(links_out(&root, Path::new("/elsewhere")));
     }
 
     #[test]

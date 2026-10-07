@@ -10,6 +10,9 @@
 //! cloud engines below refuse every request with `ProviderNotConfigured`
 //! and send nothing anywhere.
 
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
 use thiserror::Error;
 
 use crate::model_manifest::Capability;
@@ -68,8 +71,6 @@ pub enum EngineError {
     LoadFailed,
     #[error("the engine failed during inference")]
     InferenceFailed,
-    #[error("the request was cancelled")]
-    Cancelled,
 }
 
 /// Audio every speech engine accepts: mono f32 PCM at this rate.
@@ -103,20 +104,87 @@ pub enum AsrUpdate {
     Committed(Vec<AsrSegment>),
 }
 
-pub trait SpeechToTextEngine: Send + Sync {
-    fn provider(&self) -> ProviderKind;
-    /// Open a streaming session. The model stays resident across sessions,
-    /// so opening one is cheap compared with loading the engine.
-    fn open_session(&self, config: AsrSessionConfig) -> Result<Box<dyn AsrSession>, EngineError>;
+/// The hand-off between the audio tap and a speech session. The tap pushes
+/// from its own thread; the session drains on the inference worker. The lock
+/// is held only to copy samples, never during inference, so pushing audio
+/// never waits for a decode. Bounded: when the worker falls behind, the
+/// oldest audio is dropped and counted (live captions skip ahead rather
+/// than drift further behind).
+#[derive(Debug, Clone)]
+pub struct PcmQueue {
+    inner: Arc<Mutex<PcmQueueInner>>,
 }
 
+#[derive(Debug)]
+struct PcmQueueInner {
+    samples: VecDeque<f32>,
+    capacity: usize,
+    dropped: u64,
+}
+
+impl PcmQueue {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(PcmQueueInner {
+                samples: VecDeque::with_capacity(capacity),
+                capacity: capacity.max(1),
+                dropped: 0,
+            })),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, PcmQueueInner> {
+        // A panic while copying samples leaves the queue structurally valid.
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn push(&self, samples: &[f32]) {
+        let mut q = self.lock();
+        let capacity = q.capacity;
+        let keep = samples.len().min(capacity);
+        let overflow = (q.samples.len() + keep).saturating_sub(capacity);
+        q.samples.drain(..overflow);
+        q.dropped += (overflow + samples.len() - keep) as u64;
+        q.samples.extend(&samples[samples.len() - keep..]);
+    }
+
+    /// Move everything queued into `out`.
+    pub fn drain_into(&self, out: &mut Vec<f32>) {
+        out.extend(self.lock().samples.drain(..));
+    }
+
+    pub fn clear(&self) {
+        self.lock().samples.clear();
+    }
+
+    /// Samples dropped because the consumer fell behind, since creation.
+    pub fn dropped(&self) -> u64 {
+        self.lock().dropped
+    }
+}
+
+pub trait SpeechToTextEngine: Send + Sync {
+    fn provider(&self) -> ProviderKind;
+    /// Open a streaming session reading from `audio`. The model stays
+    /// resident across sessions, so opening one is cheap compared with
+    /// loading the engine.
+    fn open_session(
+        &self,
+        config: AsrSessionConfig,
+        audio: PcmQueue,
+    ) -> Result<Box<dyn AsrSession>, EngineError>;
+}
+
+/// Driven by one inference worker thread.
 pub trait AsrSession: Send {
-    /// Append audio in arrival order; this never blocks on inference.
-    fn push_pcm(&mut self, samples: &[f32]) -> Result<(), EngineError>;
     /// Decode if enough new audio has arrived; returns any new updates.
     fn poll(&mut self) -> Result<Vec<AsrUpdate>, EngineError>;
-    /// Commit everything still pending (end of stream, seek or stop).
+    /// End of stream or stop: commit everything still pending.
     fn flush(&mut self) -> Result<Vec<AsrUpdate>, EngineError>;
+    /// A seek or channel change: discard pending audio and the provisional
+    /// tail without committing them. `restart_ms` is the stream time the next
+    /// audio starts at.
+    fn reset(&mut self, restart_ms: u64);
 }
 
 /// Committed lines to translate, with the lines just before them as context.
@@ -124,8 +192,9 @@ pub trait AsrSession: Send {
 pub struct TranslateBatch<'a> {
     pub source: &'a str,
     pub target: &'a str,
-    /// Already-translated preceding source lines, for engines that use context.
-    pub context: &'a [String],
+    /// The preceding lines as (source, translation), for engines that use
+    /// context.
+    pub context: &'a [(String, String)],
     pub segments: &'a [String],
 }
 
@@ -148,7 +217,11 @@ impl SpeechToTextEngine for CloudSpeechToText {
         ProviderKind::Cloud
     }
 
-    fn open_session(&self, _: AsrSessionConfig) -> Result<Box<dyn AsrSession>, EngineError> {
+    fn open_session(
+        &self,
+        _: AsrSessionConfig,
+        _: PcmQueue,
+    ) -> Result<Box<dyn AsrSession>, EngineError> {
         Err(EngineError::ProviderNotConfigured)
     }
 }
@@ -199,7 +272,7 @@ mod tests {
         };
         assert_eq!(engine.provider(), ProviderKind::Cloud);
         assert!(matches!(
-            engine.open_session(config),
+            engine.open_session(config, PcmQueue::with_capacity(16)),
             Err(EngineError::ProviderNotConfigured)
         ));
     }
@@ -221,6 +294,27 @@ mod tests {
             engine.translate(batch),
             Err(EngineError::ProviderNotConfigured)
         );
+    }
+
+    #[test]
+    fn queue_drops_the_oldest_audio_when_full() {
+        let q = PcmQueue::with_capacity(4);
+        q.push(&[1.0, 2.0, 3.0]);
+        q.push(&[4.0, 5.0]);
+        let mut out = Vec::new();
+        q.drain_into(&mut out);
+        assert_eq!(out, [2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(q.dropped(), 1);
+        q.push(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        out.clear();
+        q.drain_into(&mut out);
+        assert_eq!(out, [3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(q.dropped(), 3);
+        q.push(&[7.0]);
+        q.clear();
+        out.clear();
+        q.drain_into(&mut out);
+        assert!(out.is_empty());
     }
 
     #[test]
