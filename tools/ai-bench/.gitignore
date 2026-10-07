@@ -1,0 +1,5 @@
+# Build outputs of the standalone benchmark workspace
+/target/
+/target-coreml/
+/swift-helper/.build/
+/swift-helper/.swiftpm/

@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
+# Standalone benchmark workspace (builds whisper.cpp with Core ML); see its Cargo.toml.
+exclude = ["tools/ai-bench"]
 members = [
     "crates/catalog-reasoner",
     "crates/catalog-ingest",

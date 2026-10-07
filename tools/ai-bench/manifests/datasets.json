@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "note": "Evaluation data for tools/ai-bench (AI22). Downloaded outside the repo; never committed.",
+  "flores200": {
+    "url": "https://dl.fbaipublicfiles.com/nllb/flores200_dataset.tar.gz",
+    "sha256": "b8b0b76783024b85797e5cc75064eb83fc5288b41e9654dabc7be6ae944011f6",
+    "bytes": 25585843,
+    "licence": "CC-BY-SA-4.0",
+    "devtest": ["eng_Latn", "fra_Latn", "arb_Arab"]
+  },
+  "fleurs": {
+    "licence": "CC-BY-4.0",
+    "languages": {
+      "en_us": {
+        "tsv": {"url": "https://huggingface.co/datasets/google/fleurs/resolve/main/data/en_us/test.tsv", "git_sha1": "bcd7e3e4ecb8ad2a4d9754fc6be14dd6d3364b54"},
+        "audio": {"url": "https://huggingface.co/datasets/google/fleurs/resolve/main/data/en_us/audio/test.tar.gz", "sha256": "d9c2e37b41aacd41bc283554a0a82b5476b36887049774ecb2819dcaaa55a356", "bytes": 289851356}
+      },
+      "fr_fr": {
+        "tsv": {"url": "https://huggingface.co/datasets/google/fleurs/resolve/main/data/fr_fr/test.tsv", "git_sha1": "9f5c1fd360b1bf9a73924591ede7f13f9edaf9a3"},
+        "audio": {"url": "https://huggingface.co/datasets/google/fleurs/resolve/main/data/fr_fr/audio/test.tar.gz", "sha256": "d23690e102f373554d1b544cd2ff1e76e4fedeb04953c0b72751a1b7c518cfdd", "bytes": 349036055}
+      },
+      "ar_eg": {
+        "tsv": {"url": "https://huggingface.co/datasets/google/fleurs/resolve/main/data/ar_eg/test.tsv", "git_sha1": "2ba16a9f43f6fee262819f2bee5fd6662a748d98"},
+        "audio": {"url": "https://huggingface.co/datasets/google/fleurs/resolve/main/data/ar_eg/audio/test.tar.gz", "sha256": "787dc348725c0924ff58c8e379d4ef41a7e488dc2ab2990a0eba4a063856edb1", "bytes": 243532527}
+      }
+    }
+  }
+}

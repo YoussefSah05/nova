@@ -1,0 +1,312 @@
+{
+  "version": 1,
+  "note": "Pinned candidate artifacts for tools/ai-bench (AI22). Large files: LFS sha256; small files: git blob sha1.",
+  "models": [
+    {
+      "id": "whisper-large-v3-turbo-q5_0",
+      "capability": "asr",
+      "backend": "whisper.cpp",
+      "languages": [
+        "en",
+        "fr",
+        "ar"
+      ],
+      "licence": "MIT",
+      "nc": false,
+      "files": [
+        {
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+          "path": "whisper/ggml-large-v3-turbo-q5_0.bin",
+          "bytes": 574041195,
+          "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
+        },
+        {
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-encoder.mlmodelc.zip",
+          "path": "whisper/ggml-large-v3-turbo-encoder.mlmodelc.zip",
+          "bytes": 1173393014,
+          "sha256": "84bedfe895bd7b5de6e8e89a0803dfc5addf8c0c5bc4c937451716bf7cf7988a"
+        }
+      ]
+    },
+    {
+      "id": "whisper-large-v3-turbo-q8_0",
+      "capability": "asr",
+      "backend": "whisper.cpp",
+      "languages": [
+        "en",
+        "fr",
+        "ar"
+      ],
+      "licence": "MIT",
+      "nc": false,
+      "files": [
+        {
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
+          "path": "whisper/ggml-large-v3-turbo-q8_0.bin",
+          "bytes": 874188075,
+          "sha256": "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1"
+        }
+      ]
+    },
+    {
+      "id": "whisper-medium-q5_0",
+      "capability": "asr",
+      "backend": "whisper.cpp",
+      "languages": [
+        "en",
+        "fr",
+        "ar"
+      ],
+      "licence": "MIT",
+      "nc": false,
+      "files": [
+        {
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
+          "path": "whisper/ggml-medium-q5_0.bin",
+          "bytes": 539212467,
+          "sha256": "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f"
+        },
+        {
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-encoder.mlmodelc.zip",
+          "path": "whisper/ggml-medium-encoder.mlmodelc.zip",
+          "bytes": 567829413,
+          "sha256": "79b0b8d436d47d3f24dd3afc91f19447dd686a4f37521b2f6d9c30a642133fbd"
+        }
+      ]
+    },
+    {
+      "id": "whisper-small-q5_1",
+      "capability": "asr",
+      "backend": "whisper.cpp",
+      "languages": [
+        "en",
+        "fr",
+        "ar"
+      ],
+      "licence": "MIT",
+      "nc": false,
+      "files": [
+        {
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+          "path": "whisper/ggml-small-q5_1.bin",
+          "bytes": 190085487,
+          "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"
+        },
+        {
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-encoder.mlmodelc.zip",
+          "path": "whisper/ggml-small-encoder.mlmodelc.zip",
+          "bytes": 163083239,
+          "sha256": "de43fb9fed471e95c19e60ae67575c2bf09e8fb607016da171b06ddad313988b"
+        }
+      ]
+    },
+    {
+      "id": "opus-mt-en-fr",
+      "capability": "mt",
+      "backend": "onnx-marian",
+      "pairs": [
+        "en-fr"
+      ],
+      "licence": "CC-BY-4.0",
+      "nc": false,
+      "files": [
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-en-fr/resolve/main/config.json",
+          "path": "opus/opus-mt-en-fr/config.json",
+          "bytes": 1411,
+          "git_sha1": "0384b144d7dd05ba622f17ffb3e77a76f0dba743"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-en-fr/resolve/main/tokenizer.json",
+          "path": "opus/opus-mt-en-fr/tokenizer.json",
+          "bytes": 5637839,
+          "git_sha1": "75a7ff0cd7f07b02bf1bada7aaebb78a3df6ab0c"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-en-fr/resolve/main/onnx/encoder_model_quantized.onnx",
+          "path": "opus/opus-mt-en-fr/onnx/encoder_model_quantized.onnx",
+          "bytes": 50090398,
+          "sha256": "0a81bdba62f53223740a8c6c6f58e716eba8ea1f92dfa569caf27ed5e3b6a0f7"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-en-fr/resolve/main/onnx/decoder_model_merged_quantized.onnx",
+          "path": "opus/opus-mt-en-fr/onnx/decoder_model_merged_quantized.onnx",
+          "bytes": 57381512,
+          "sha256": "333b244bce16023df04541c8cf9fd60aec9b0569da393c4b831d561897b0bda8"
+        }
+      ]
+    },
+    {
+      "id": "opus-mt-fr-en",
+      "capability": "mt",
+      "backend": "onnx-marian",
+      "pairs": [
+        "fr-en"
+      ],
+      "licence": "CC-BY-4.0",
+      "nc": false,
+      "files": [
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-fr-en/resolve/main/config.json",
+          "path": "opus/opus-mt-fr-en/config.json",
+          "bytes": 1411,
+          "git_sha1": "c313d87894f90a99ec40f30eccd85c1210d84ae9"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-fr-en/resolve/main/tokenizer.json",
+          "path": "opus/opus-mt-fr-en/tokenizer.json",
+          "bytes": 5637839,
+          "git_sha1": "75a7ff0cd7f07b02bf1bada7aaebb78a3df6ab0c"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-fr-en/resolve/main/onnx/encoder_model_quantized.onnx",
+          "path": "opus/opus-mt-fr-en/onnx/encoder_model_quantized.onnx",
+          "bytes": 50090398,
+          "sha256": "e727cb26ac6bf816394c49671af69c9ae5798868fed1e40849872415dffc1772"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-fr-en/resolve/main/onnx/decoder_model_merged_quantized.onnx",
+          "path": "opus/opus-mt-fr-en/onnx/decoder_model_merged_quantized.onnx",
+          "bytes": 57381512,
+          "sha256": "73bc7ac8e29c42e6f212ebcc29a2991d3646a04aabb642c0036aa54b40e4e1a9"
+        }
+      ]
+    },
+    {
+      "id": "opus-mt-en-ar",
+      "capability": "mt",
+      "backend": "onnx-marian",
+      "pairs": [
+        "en-ar"
+      ],
+      "licence": "CC-BY-4.0",
+      "nc": false,
+      "files": [
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-en-ar/resolve/main/config.json",
+          "path": "opus/opus-mt-en-ar/config.json",
+          "bytes": 1389,
+          "git_sha1": "c4756a24ae0f5ceae268ac6c4d43ee8d4ffdd259"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-en-ar/resolve/main/tokenizer.json",
+          "path": "opus/opus-mt-en-ar/tokenizer.json",
+          "bytes": 6748848,
+          "git_sha1": "074a6b5ead40759fdbbe61ce5ccaf194e073e35d"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-en-ar/resolve/main/onnx/encoder_model_quantized.onnx",
+          "path": "opus/opus-mt-en-ar/onnx/encoder_model_quantized.onnx",
+          "bytes": 51773854,
+          "sha256": "53c354d87ced44b39085fe8a46a25f09ea4578d442dbce9663f3977228f8a04e"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-en-ar/resolve/main/onnx/decoder_model_merged_quantized.onnx",
+          "path": "opus/opus-mt-en-ar/onnx/decoder_model_merged_quantized.onnx",
+          "bytes": 59078120,
+          "sha256": "c0e553b0c26611780c70417c9b4c1ca7169e9cdb18ba9e649197efb017af9f02"
+        }
+      ]
+    },
+    {
+      "id": "opus-mt-ar-en",
+      "capability": "mt",
+      "backend": "onnx-marian",
+      "pairs": [
+        "ar-en"
+      ],
+      "licence": "CC-BY-4.0",
+      "nc": false,
+      "files": [
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-ar-en/resolve/main/config.json",
+          "path": "opus/opus-mt-ar-en/config.json",
+          "bytes": 1376,
+          "git_sha1": "82cd89d073952adcb4e56c229e4c1006e3fe432a"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-ar-en/resolve/main/tokenizer.json",
+          "path": "opus/opus-mt-ar-en/tokenizer.json",
+          "bytes": 6734647,
+          "git_sha1": "3efa97e355ff9bf8abc2bdb4e948affba012389e"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-ar-en/resolve/main/onnx/encoder_model_quantized.onnx",
+          "path": "opus/opus-mt-ar-en/onnx/encoder_model_quantized.onnx",
+          "bytes": 51790238,
+          "sha256": "d9b0d612acff86cf87634b49bda566d1ef39b312837de549786ea18fecefc708"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/opus-mt-ar-en/resolve/main/onnx/decoder_model_merged_quantized.onnx",
+          "path": "opus/opus-mt-ar-en/onnx/decoder_model_merged_quantized.onnx",
+          "bytes": 59094632,
+          "sha256": "cdb25ae736afe9d48035b0ea311ab4b25f315810fab7f3c6f6cb0d8d87af35fa"
+        }
+      ]
+    },
+    {
+      "id": "nllb-200-distilled-600M",
+      "capability": "mt",
+      "backend": "onnx-nllb",
+      "pairs": [
+        "en-fr",
+        "fr-en",
+        "en-ar",
+        "ar-en",
+        "fr-ar",
+        "ar-fr"
+      ],
+      "licence": "CC-BY-NC-4.0",
+      "nc": true,
+      "files": [
+        {
+          "url": "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/config.json",
+          "path": "nllb/config.json",
+          "bytes": 873,
+          "git_sha1": "6a498b9686cbb3a8f4bdb7b9111579a8b68d9a77"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/tokenizer.json",
+          "path": "nllb/tokenizer.json",
+          "bytes": 17331224,
+          "sha256": "8ac789ad7dabea44d41537822d48c516ba358374c51813e2cba78c006e150c94"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/encoder_model_quantized.onnx",
+          "path": "nllb/onnx/encoder_model_quantized.onnx",
+          "bytes": 419120483,
+          "sha256": "5cde664eacba07a62f198857ec6c06e09572b1ebb77c8137f1fa99ac604a3a28"
+        },
+        {
+          "url": "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/decoder_model_merged_quantized.onnx",
+          "path": "nllb/onnx/decoder_model_merged_quantized.onnx",
+          "bytes": 475505771,
+          "sha256": "dd66608c2a4194e78f95548fa0e64f24302303698c5b09fa8e1f9e16ec00676b"
+        }
+      ]
+    },
+    {
+      "id": "translategemma-4b-it-q4_k_m",
+      "capability": "mt",
+      "backend": "llama.cpp",
+      "pairs": [
+        "en-fr",
+        "fr-en",
+        "en-ar",
+        "ar-en",
+        "fr-ar",
+        "ar-fr"
+      ],
+      "licence": "Gemma",
+      "nc": false,
+      "files": [
+        {
+          "url": "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.Q4_K_M.gguf",
+          "path": "llm/translategemma-4b-it.Q4_K_M.gguf",
+          "bytes": 2489909760,
+          "sha256": "81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330"
+        }
+      ]
+    }
+  ]
+}

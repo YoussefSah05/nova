@@ -1,0 +1,31 @@
+# Standalone workspace: compiles whisper.cpp (Core ML + Metal) and other
+# heavy native engines, so it stays out of the app workspace's CI builds.
+[package]
+name = "nova-ai-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Benchmark harness for Nova's local ASR and translation candidates (AI22)"
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+unicode-normalization = "0.1"
+regex = "1"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+# Metal always; Core ML encoder is a feature so both variants can be measured.
+whisper-rs = { version = "0.16", features = ["metal"] }
+# Same ONNX Runtime as the app (via fastembed): one runtime, no second protobuf.
+ort = "=2.0.0-rc.9"
+ort-sys = "=2.0.0-rc.9"
+ndarray = "0.16"
+# Pure-Rust tokenizers reading tokenizer.json (no sentencepiece/protobuf).
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+
+[features]
+coreml = ["whisper-rs/coreml"]
