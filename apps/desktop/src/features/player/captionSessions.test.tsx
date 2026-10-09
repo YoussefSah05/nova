@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type Event } from "@tauri-apps/api/event";
-import { useSourceCaptions } from "./useSourceCaptions";
+import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 const mockInvoke = vi.mocked(invoke);
@@ -123,4 +123,53 @@ describe("source caption session", () => {
     expect(seen[before]).toEqual({ count: 0, transcript: null });
     await act(async () => {});
   });
+});
+
+it("reports current-stage time and first-batch data readiness, clearing them on stop", async () => {
+  const handlers = new Map<string, (event: Event<unknown>) => void>();
+  vi.mocked(listen).mockImplementation(async (name, handler) => {
+    handlers.set(name, handler as (event: Event<unknown>) => void);
+    return () => {};
+  });
+  mockInvoke.mockResolvedValue({ installed: true });
+  const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+  const { result, rerender, unmount } = renderHook(
+    ({ active }) => useSourceCaptions("fixture", media, active, time, time, null),
+    { initialProps: { active: true } }
+  );
+  try {
+    await act(async () => {});
+    const session = mockInvoke.mock.calls
+      .filter(([command]) => command === "start_caption_session")
+      .at(-1)?.[1] as { sessionId: string };
+    const emit = (event: string, extra: Record<string, unknown>) =>
+      handlers.get(event)?.({
+        event,
+        id: 1,
+        payload: { sessionId: session.sessionId, mediaKind: "vod", mediaId: 1, ...extra },
+      });
+    now.mockReturnValue(6000);
+    act(() =>
+      emit("transcription:status", { state: "streaming", phase: "Recognizing and aligning speech" })
+    );
+    expect(sourceCaptionNote(result.current)).toBe("Recognizing and aligning speech · 0s");
+    act(() =>
+      emit("transcription:cues", {
+        language: "en",
+        transcriptId: 7,
+        cues: [{ segmentId: 1, start: 0, end: 1, text: "fixture" }],
+      })
+    );
+    act(() => emit("transcription:status", { state: "streaming", phase: null }));
+    expect(sourceCaptionNote(result.current)).toBe("Caption data ready · first batch 5.0s");
+    now.mockReturnValue(601000);
+    act(() => emit("transcription:status", { state: "streaming", phase: "Extracting audio" }));
+    expect(sourceCaptionNote(result.current)).toBe("Extracting audio · 0s");
+    rerender({ active: false });
+    expect(result.current.phase).toBeNull();
+    expect(result.current.firstCuesSec).toBeNull();
+  } finally {
+    now.mockRestore();
+    unmount();
+  }
 });

@@ -83,6 +83,8 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `get_proxy_port` | `{}` | `number` (deprecated - use `resolve_stream`) | 5 |
 | `get_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | 6 / M2 |
 | `list_internal_models` | `{}` | `{ modelId, capability, backend, availability: 'missing'\|'unverified'\|'available', artifactRevision, observedAt }[]`; never includes an absolute path | M2 |
+| `list_model_controls` | `{}` | Generated `LocalModelStatus[]`: `{ modelId, capability, availability, library: 'internal'\|'external', enabled, activity: 'idle'\|'loading'\|'prepared'\|'loaded'\|'inUse' }`; effective runtime location precedence, discovery only | Model controls |
+| `set_model_enabled` | `{ modelId: string, enabled: boolean }` | `void`; persistent app-wide permission, idle-only change, disable unloads and blocks new acquisitions, enable never eagerly loads/downloads | Model controls |
 | `add_external_model_library` | `{}` | `libraryId \| null` (`null` if the native folder picker is cancelled); accepts no path from the webview | M2.3 |
 | `list_external_model_libraries` | `{}` | `{ libraryId, displayName, availability: 'available'\|'unavailable', observedAt, models: { modelId, capability, availability: 'missing'\|'unverified'\|'available'\|'unavailable' }[] }[]`; no paths or bookmark data | M2.3 |
 | `unload_model` | `{ modelId: string }` | `boolean`: whether a loaded backend was released; `Conflict` while loading, mutating or leased; does not delete artifacts | M2.5 |
@@ -258,7 +260,7 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | `playlist:import:background` | `playlist:import:progress` payload plus `profileId` (source ids are per profile), for a scheduled (automatic) refresh. The UI picks up its catalog on success and never shows its progress or errors | M16 |
 | `artwork:channel-logos` | `{ stage: 'downloading'\|'matching'\|'complete'\|'failed', sourceId?, matched, candidates, done, error? }` | artwork v1 |
 | `transcription:cues` | `{ sessionId, mediaKind, mediaId, transcriptId, language, cues: [{segmentId,start,end,text}] }` (committed, incremental, absolute times) | 6/M18 |
-| `transcription:status` | `{ mediaKind, mediaId, state: 'preparing'\|'streaming'\|'complete'\|'failed', coveredSec?, error? }` | 6 |
+| `transcription:status` | Generated `CaptionStatusEvent`: `{ sessionId, mediaKind, mediaId, state: 'preparing'\|'streaming'\|'complete'\|'failed', phase: string\|null, coveredSec: number\|null, error: string\|null }`; phase reports preparation/extraction/model waiting/recognition, null clears active work | 6 / Model controls |
 | `model:download:progress` | `{ artifact: 'weights'\|'coreml', downloadedBytes, totalBytes? }` | 6 |
 | `translation:progress` | `{ job_id: number, pct: number }` | 7 |
 | `translation:complete` | `{ job_id: number, transcript_id: number, target_lang: string }` | 7 |

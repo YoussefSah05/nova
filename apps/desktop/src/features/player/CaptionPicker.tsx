@@ -67,7 +67,7 @@ export function CaptionPicker({
       ref={ref}
       role="menu"
       className={cn(
-        "nova-glass nova-panel-enter absolute bottom-12 right-0 z-30 w-64 overflow-hidden rounded-xl",
+        "nova-glass nova-panel-enter absolute bottom-12 right-0 z-30 w-80 max-h-[70vh] overflow-y-auto rounded-xl",
         "text-sm text-white"
       )}
     >
@@ -75,7 +75,6 @@ export function CaptionPicker({
       <ul role="group" aria-label="Caption display mode" className="pb-1">
         {OPTIONS.map((opt) => {
           const isActive = mode === opt.value;
-          const liveNote = opt.value === "source" ? sourceNote : null;
           return (
             <li key={opt.value}>
               <button
@@ -94,11 +93,9 @@ export function CaptionPicker({
                 )}
               >
                 <span>{opt.label}</span>
-                {liveNote ? (
-                  <span className="text-[11px] text-[var(--color-accent)]">{liveNote}</span>
-                ) : isActive ? (
+                {isActive && (
                   <span className="text-[11px] text-[var(--color-accent)]">Selected</span>
-                ) : null}
+                )}
               </button>
             </li>
           );
@@ -109,6 +106,16 @@ export function CaptionPicker({
           <p className="text-xs text-white/55">Live AI captions are not available yet.</p>
         ) : (
           <>
+            {sourceNote && (
+              <p role="status" className="mb-2 text-xs text-white/65">
+                {sourceNote}
+              </p>
+            )}
+            <p className="mb-3 text-xs leading-relaxed text-white/55">
+              Captions process 30-second audio windows. First text needs audio extraction and speech
+              recognition; translations follow. Model status and enable/disable controls are in
+              Settings → Models.
+            </p>
             <p className="text-xs text-primary">Translate to · on this Mac</p>
             <div role="group" aria-label="Translation target" className="mt-2 flex gap-1">
               {[

@@ -3,6 +3,7 @@
 //! plain text search uses the hybrid (meaning + words) commands; facets use
 //! the filtered lists, with the remaining words as their text filter.
 
+import type { LocalModelStatus } from "@/types/generated/LocalModelStatus";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -171,13 +172,16 @@ export function useSearchMoments(profileId: string, sourceId: number | null, pla
   });
 }
 
-/// Whether meaning-based search can run (its model is installed).
+/// Whether meaning-based search can run (its model is installed and enabled).
 export function useSemanticSearchAvailable() {
   return useQuery({
     subscribed: useScreenActive(),
     queryKey: ["capability", "semanticSearch"] as const,
     queryFn: async () =>
-      (await invoke<{ installed: boolean }>("get_enrich_model_status")).installed,
+      (await invoke<LocalModelStatus[]>("list_model_controls")).some(
+        (model) =>
+          model.capability === "embedding" && model.availability === "available" && model.enabled
+      ),
     staleTime: 5 * 60_000,
     retry: false,
   });

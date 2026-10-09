@@ -4,7 +4,7 @@
 //! *session*: it ensures the model is present (prompting an explicit one-time
 //! download), starts the session at the current playhead, then accumulates the
 //! `transcription:cues` that stream in window-by-window. The first caption
-//! appears within seconds; captions roll forward as playback advances. It also
+//! appears after an audio window is extracted and transcribed. It also
 //! pushes the playhead so the backend prioritises/throttles correctly.
 //!
 //! Cues render through the React `CaptionOverlay`, never mpv's native renderer.
@@ -15,6 +15,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invokeSession } from "./sessionCommands";
 
 import type { Cue } from "./CaptionOverlay";
+import type { CaptionStatusEvent } from "@/types/generated/CaptionStatusEvent";
 import type { CuesEvent } from "@/types/generated/CuesEvent";
 
 export type SourceCaptionStatus =
@@ -33,20 +34,15 @@ export interface SourceCaptionsState {
   status: SourceCaptionStatus;
   /// Model-download progress (0..100) when known, else null.
   modelPct: number | null;
+  phase?: string | null;
+  stageSec?: number;
+  firstCuesSec?: number | null;
   language: string | null;
   error: string | null;
   /// Called by the UI to confirm the one-time model download.
   downloadModel: () => void;
 }
 
-interface StatusEvent {
-  sessionId: string;
-  mediaKind: string;
-  mediaId: number;
-  state: "preparing" | "streaming" | "complete" | "failed";
-  coveredSec?: number | null;
-  error?: string | null;
-}
 interface ModelProgress {
   artifact: string;
   downloadedBytes: number;
@@ -100,6 +96,11 @@ export function useSourceCaptions(
   const [status, setStatus] = useState<SourceCaptionStatus>("idle");
   const [modelPct, setModelPct] = useState<number | null>(null);
   const [language, setLanguage] = useState<string | null>(null);
+  const [phase, setPhase] = useState<string | null>(null);
+  const [stageSec, setStageSec] = useState(0);
+  const [firstCuesSec, setFirstCuesSec] = useState<number | null>(null);
+  const startedAt = useRef(0);
+  const phaseStartedAt = useRef(0);
   const [error, setError] = useState<string | null>(null);
 
   const trackIndex = audioTrack?.index ?? 0;
@@ -121,6 +122,11 @@ export function useSourceCaptions(
     async (sessionId: string) => {
       if (sessionRef.current !== sessionId) return;
       setStatus("preparing");
+      setPhase("Preparing model");
+      startedAt.current = performance.now();
+      phaseStartedAt.current = startedAt.current;
+      setFirstCuesSec(null);
+      setStageSec(0);
       try {
         const dur = durationRef.current();
         await invokeSession("caption", "start_caption_session", {
@@ -162,6 +168,9 @@ export function useSourceCaptions(
   // Reset everything when the media or selected audio track changes.
   useEffect(() => {
     setCues([]);
+    setPhase(null);
+    setStageSec(0);
+    setFirstCuesSec(null);
     setTranscriptId(null);
     setStateKey(null);
     setStatus("idle");
@@ -188,19 +197,26 @@ export function useSourceCaptions(
           const p = ev.payload;
           if (p.sessionId !== sessionId || p.mediaKind !== media.kind || p.mediaId !== media.id)
             return;
+          if (p.cues.length > 0)
+            setFirstCuesSec(
+              (previous) => previous ?? (performance.now() - startedAt.current) / 1000
+            );
           setLanguage(p.language);
           setTranscriptId(p.transcriptId);
           setCues((prev) => mergeCues(prev, p.cues));
         }),
-        listen<StatusEvent>("transcription:status", (ev) => {
+        listen<CaptionStatusEvent>("transcription:status", (ev) => {
           if (cancelled) return;
           const p = ev.payload;
           if (p.sessionId !== sessionId || p.mediaKind !== media.kind || p.mediaId !== media.id)
             return;
+          phaseStartedAt.current = performance.now();
+          setStageSec(0);
+          setPhase(p.phase ?? null);
           if (p.state === "failed") {
             setStatus("failed");
             setError(p.error ?? "transcription failed");
-          } else {
+          } else if (p.state === "preparing" || p.state === "streaming" || p.state === "complete") {
             setStatus(p.state);
           }
         }),
@@ -255,6 +271,14 @@ export function useSourceCaptions(
     };
   }, [eligible, profileId, sessionKey, startSession, media.kind, media.id]);
 
+  useEffect(() => {
+    if (!eligible || !phase || status === "failed") return;
+    const tick = () => setStageSec(Math.floor((performance.now() - phaseStartedAt.current) / 1000));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [eligible, phase, status]);
+
   // Media/track changes must hide preceding dialogue during the very first
   // render, before the lifecycle effects reset their stored state.
   const current = eligible && stateKey === sessionKey;
@@ -264,6 +288,9 @@ export function useSourceCaptions(
     transcriptId: current ? transcriptId : null,
     status: current ? status : "idle",
     modelPct: current ? modelPct : null,
+    phase: current ? phase : null,
+    stageSec: current ? stageSec : 0,
+    firstCuesSec: current ? firstCuesSec : null,
     language: current ? language : null,
     error: current ? error : null,
     downloadModel,
@@ -271,8 +298,10 @@ export function useSourceCaptions(
 }
 
 /// Short status label for the caption menu / banner, or null when nothing needs
-/// surfacing (idle / streaming-with-cues / complete).
+/// surfacing (idle / complete). First-batch timing describes data readiness,
+/// not the first visible caption at the playhead.
 export function sourceCaptionNote(s: SourceCaptionsState): string | null {
+  if (s.phase && s.status !== "failed") return `${s.phase} · ${s.stageSec ?? 0}s`;
   switch (s.status) {
     case "needsModel":
       return "Download model (~500MB)";
@@ -280,8 +309,13 @@ export function sourceCaptionNote(s: SourceCaptionsState): string | null {
       return s.modelPct != null ? `Downloading model… ${s.modelPct}%` : "Downloading model…";
     case "preparing":
       return "Preparing…";
+    case "complete":
     case "streaming":
-      return s.cues.length === 0 ? "Preparing…" : null;
+      return s.cues.length === 0
+        ? "Waiting for caption data…"
+        : s.firstCuesSec != null
+          ? `Caption data ready · first batch ${s.firstCuesSec.toFixed(1)}s`
+          : null;
     case "failed":
       return "Failed — try again";
     default:

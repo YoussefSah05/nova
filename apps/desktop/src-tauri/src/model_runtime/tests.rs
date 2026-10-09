@@ -1178,3 +1178,67 @@ async fn a_real_translation_model_verifies_once_then_translates() {
     assert_eq!(opus.availability, ModelAvailability::Available);
     assert!(opus.descriptor.artifact_revision.is_some());
 }
+
+#[tokio::test]
+async fn model_permission_survives_restart_and_never_disables_active_leases() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        nova_storage::init_app_db(dir.path().join("app.db").to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    whisper_fixture(dir.path());
+    let id = default_model().id;
+    let adapter = Arc::new(FakeAdapter::default());
+    let mut runtime = ModelRuntimeManager::new(pool.clone());
+    runtime
+        .adapters
+        .insert(ModelId::new(id).unwrap(), adapter.clone());
+    let cancel = RuntimeCancellation::default();
+    assert_eq!(runtime.model_activity(id).await.unwrap(), (true, "idle"));
+    let lease = runtime
+        .acquire_at(dir.path(), id, WorkClass::Realtime, &cancel)
+        .await
+        .unwrap();
+    assert_eq!(runtime.model_activity(id).await.unwrap(), (true, "inUse"));
+    assert_eq!(
+        runtime.set_enabled(id, false).await,
+        Err(RuntimeError::Busy)
+    );
+    assert!(
+        nova_storage::repositories::model_preferences::ModelPreferencesRepository::new(&pool)
+            .enabled(id)
+            .await
+            .unwrap()
+    );
+    drop(lease);
+    runtime.set_enabled(id, false).await.unwrap();
+    assert_eq!(runtime.model_activity(id).await.unwrap(), (false, "idle"));
+    assert_eq!(adapter.drops.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        runtime
+            .acquire_at(dir.path(), id, WorkClass::Realtime, &cancel)
+            .await,
+        Err(RuntimeError::Disabled)
+    ));
+    let mut restarted = ModelRuntimeManager::new(pool);
+    restarted
+        .adapters
+        .insert(ModelId::new(id).unwrap(), adapter.clone());
+    assert!(matches!(
+        restarted
+            .acquire_at(dir.path(), id, WorkClass::Realtime, &cancel)
+            .await,
+        Err(RuntimeError::Disabled)
+    ));
+    assert_eq!(adapter.loads.load(Ordering::SeqCst), 1);
+    restarted.set_enabled(id, true).await.unwrap();
+    assert_eq!(adapter.loads.load(Ordering::SeqCst), 1); // Enable is permission, not eager load.
+    drop(
+        restarted
+            .acquire_at(dir.path(), id, WorkClass::Realtime, &cancel)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(adapter.loads.load(Ordering::SeqCst), 2);
+}

@@ -111,7 +111,9 @@ export function SettingsButton({
   onClick,
   variant = "default",
   disabled,
+  "aria-label": ariaLabel,
 }: {
+  "aria-label"?: string;
   children: React.ReactNode;
   onClick: () => void;
   variant?: "default" | "primary" | "danger";
@@ -120,6 +122,7 @@ export function SettingsButton({
   return (
     <button
       type="button"
+      aria-label={ariaLabel}
       onClick={onClick}
       disabled={disabled}
       className={cn(

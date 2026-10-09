@@ -8,6 +8,26 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Model controls and caption readiness — 2026-10-09
+
+Settings now shows all six supported models with effective internal/external availability,
+persistent app-wide enable/disable state, per-model activity and idle memory release.
+Disabling refuses busy loads/leases and prevents new inference; enabling is lazy and never
+downloads. Semantic-search availability includes enabled state. Installation badges describe
+files, while Whisper distinguishes a prepared adapter from loaded speech weights.
+
+The player's CC menu reports preparation, extraction, model waiting and speech alignment,
+time in the current stage, and measured first-batch data readiness. Existing 30-second VOD
+windowing remains; this is not the evaluated resident streaming engine. Settings explains
+translation routing, startup uncertainty, word timing/overlap stitching and quality limits.
+Generated IPC DTOs expose no paths/bookmarks; preferences reuse app_settings without a migration.
+
+`just lint`, `just typecheck`, `just test` (728 Rust tests/doctests and 187 frontend tests),
+and the frontend production build pass. Independent review findings were fixed and re-reviewed.
+Internal Whisper files were structurally present; all four internal Opus directories were absent.
+External-library inference, native startup latency and real speech synchronization remain
+unqualified. See [the implementation contract](implementation/model-controls.md).
+
 ### M18 committed translated captions — 2026-10-09
 
 The local engine now has a VOD/episode player consumer: Translation and Source +

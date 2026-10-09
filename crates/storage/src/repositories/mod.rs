@@ -9,6 +9,7 @@ pub mod epg_sources;
 pub mod external_matches;
 pub mod jobs;
 pub mod library_history;
+pub mod model_preferences;
 pub mod models;
 pub mod playback;
 pub mod profile_settings;

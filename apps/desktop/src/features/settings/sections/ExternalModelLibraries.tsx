@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ExternalLibraryStatus } from "@/types/generated/ExternalLibraryStatus";
 import { Skeleton } from "@/components/ui/skeleton";
+import { modelKeys } from "../modelData";
 import { SettingRow, SettingsButton, SettingsCard, SettingsError } from "../SettingsUI";
 
 const key = ["settings-external-model-libraries"];
@@ -15,13 +16,19 @@ export function ExternalModelLibraries() {
   });
   const add = useMutation({
     mutationFn: () => invoke<string | null>("add_external_model_library"),
-    onSuccess: () => client.invalidateQueries({ queryKey: key }),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: key }),
+        client.invalidateQueries({ queryKey: modelKeys.all }),
+        client.invalidateQueries({ queryKey: ["capability", "semanticSearch"] }),
+      ]);
+    },
   });
   return (
     <SettingsCard title="External model folders">
       <SettingRow
         title="Connect a model folder"
-        description="Choose a folder containing models/whisper or models/embeddings. Nova only reads it."
+        description="Choose the parent folder containing models/whisper, models/embeddings or models/opus. Models stay in that folder."
       >
         <SettingsButton onClick={() => add.mutate()} disabled={add.isPending}>
           {add.isPending ? "Opening…" : "Choose folder"}
@@ -56,7 +63,7 @@ export function ExternalModelLibraries() {
       )}
       <SettingRow
         title="Folder status"
-        description="Disconnected folders stay registered. Current AI jobs use Nova’s internal models."
+        description="Disconnected folders stay registered. Nova uses an available internal copy first, then a connected external copy."
       >
         <SettingsButton onClick={() => void libraries.refetch()} disabled={libraries.isFetching}>
           Refresh folders

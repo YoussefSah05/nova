@@ -232,6 +232,8 @@ pub fn run() {
             // Phase 6 — Transcription (VOD), streaming caption sessions
             commands::transcription::get_model_status,
             commands::models::list_internal_models,
+            commands::models::list_model_controls,
+            commands::models::set_model_enabled,
             commands::models::unload_model,
             commands::models::model_runtime_status,
             commands::models::add_external_model_library,

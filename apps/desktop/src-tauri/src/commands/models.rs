@@ -1,4 +1,4 @@
-//! Read-only IPC view of the internal model registry. Discovery only inspects
+//! IPC views and controls for shared local models. Discovery only inspects
 //! local files and refreshes app-wide metadata; it never starts a download.
 
 use nova_core::{
@@ -234,4 +234,142 @@ pub(crate) async fn observe_internal_model(
         .into_iter()
         .find(|model| model.descriptor.id.as_str() == model_id)
         .ok_or_else(|| ApiError::NotFound("model not registered".into()))
+}
+
+/// Effective model location and activity, without filesystem paths or access grants.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
+#[serde(rename_all = "camelCase")]
+pub struct LocalModelStatus {
+    pub model_id: String,
+    pub capability: String,
+    pub availability: String,
+    pub library: String,
+    pub enabled: bool,
+    /// idle | loading | prepared (Whisper adapter only) | loaded | inUse
+    pub activity: String,
+}
+
+fn effective_model<'a>(
+    internal: &'a RegisteredModel,
+    external: &'a [nova_storage::ExternalRegisteredModel],
+) -> &'a RegisteredModel {
+    use nova_core::models::ModelAvailability;
+    let usable = |model: &RegisteredModel| {
+        model.availability == ModelAvailability::Available
+            || (model.descriptor.capability == "translation"
+                && model.availability == ModelAvailability::Unverified)
+    };
+    if usable(internal) {
+        return internal;
+    }
+    external
+        .iter()
+        .filter(|m| m.model.descriptor.id == internal.descriptor.id)
+        .find(|m| usable(&m.model))
+        .map(|m| &m.model)
+        .or_else(|| {
+            external
+                .iter()
+                .find(|m| {
+                    m.model.descriptor.id == internal.descriptor.id
+                        && m.model.availability == ModelAvailability::Unavailable
+                })
+                .map(|m| &m.model)
+        })
+        .unwrap_or(internal)
+}
+
+#[tauri::command]
+pub async fn list_model_controls(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<LocalModelStatus>, ApiError> {
+    let internal = observe_internal_models(&app, &state.pool).await?;
+    refresh_external(&state.pool).await?;
+    let external = ModelRepository::new(&state.pool)
+        .list_external_models()
+        .await?;
+    let mut statuses = Vec::with_capacity(internal.len());
+    for internal in &internal {
+        let model = effective_model(internal, &external);
+        let model_id = model.descriptor.id.as_str();
+        let (enabled, activity) = state
+            .model_runtime
+            .model_activity(model_id)
+            .await
+            .map_err(runtime_api_error)?;
+        statuses.push(LocalModelStatus {
+            model_id: model_id.to_string(),
+            capability: model.descriptor.capability.clone(),
+            availability: model.availability.as_str().to_string(),
+            library: if model.library.id.as_str() == "internal" {
+                "internal"
+            } else {
+                "external"
+            }
+            .into(),
+            enabled,
+            activity: activity.into(),
+        });
+    }
+    Ok(statuses)
+}
+
+#[tauri::command]
+pub async fn set_model_enabled(
+    model_id: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    state
+        .model_runtime
+        .set_enabled(&model_id, enabled)
+        .await
+        .map_err(runtime_api_error)
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+    use nova_core::models::ModelAvailability;
+
+    #[test]
+    fn effective_status_matches_runtime_location_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, models) = crate::model_registry::discover_internal(dir.path()).unwrap();
+        let mut internal = models
+            .into_iter()
+            .find(|m| m.descriptor.capability == "translation")
+            .unwrap();
+        let mut external_model = internal.clone();
+        external_model.library.id = ModelLibraryId::new("external-fixture").unwrap();
+        let mut external = vec![nova_storage::ExternalRegisteredModel {
+            model: external_model,
+            display_name: "Fixture".into(),
+        }];
+        external[0].model.availability = ModelAvailability::Unavailable;
+        assert_eq!(
+            effective_model(&internal, &external).library.id.as_str(),
+            "external-fixture"
+        );
+        external[0].model.availability = ModelAvailability::Unverified;
+        assert_eq!(
+            effective_model(&internal, &external).library.id.as_str(),
+            "external-fixture"
+        );
+        internal.availability = ModelAvailability::Available;
+        assert_eq!(
+            effective_model(&internal, &external).library.id.as_str(),
+            "internal"
+        );
+        internal.descriptor.capability = "transcription".into();
+        external[0].model.descriptor.capability = "transcription".into();
+        internal.availability = ModelAvailability::Missing;
+        assert_eq!(
+            effective_model(&internal, &external).library.id.as_str(),
+            "internal"
+        );
+    }
 }

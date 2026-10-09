@@ -1,4 +1,4 @@
-//! What Nova can understand on this Mac, read from the real model registry before
+//! Installed model files on this Mac, read from the real model registry before
 //! any profile opens. Derived capability, so neutral and dashed — never amber,
 //! which marks a profile's own things. Planned capabilities say so plainly.
 
@@ -15,7 +15,7 @@ type State = "ready" | "missing" | "unknown" | "planned" | "checking";
 
 const STATE_LABEL: Record<State, string> = {
   // The model is installed; per-profile indexes may still be building.
-  ready: "Model ready",
+  ready: "Model installed",
   missing: "Not installed",
   unknown: "Couldn’t check",
   planned: "Coming with intelligence",

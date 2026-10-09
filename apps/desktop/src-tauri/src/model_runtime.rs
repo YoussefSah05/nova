@@ -25,6 +25,7 @@ use crate::resource_policy::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeError {
     InvalidModel,
+    Disabled,
     Unavailable,
     LibraryOffline,
     Busy,
@@ -38,6 +39,7 @@ impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self {
             Self::InvalidModel => "unknown model",
+            Self::Disabled => "model disabled in Settings → Models",
             Self::Unavailable => "model is unavailable",
             Self::LibraryOffline => "model library is offline",
             Self::Busy => "model is loading, unloading or in use",
@@ -266,6 +268,7 @@ fn lock_count(mutex: &std::sync::Mutex<usize>) -> std::sync::MutexGuard<'_, usiz
 
 #[derive(Default)]
 struct Slot {
+    disabled: bool,
     loaded: Option<Arc<Loaded>>,
 }
 
@@ -712,6 +715,27 @@ impl ModelRuntimeManager {
         if cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled);
         }
+        // Refresh persisted permission under the same entry lock used by toggles.
+        let entry = {
+            let mut entries = self.entries.lock().await;
+            self.entry_for(&mut entries, &id)
+        };
+        {
+            let mut slot = tokio::select! {
+                _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
+                slot = entry.state.lock() => slot,
+            };
+            slot.disabled =
+                !nova_storage::repositories::model_preferences::ModelPreferencesRepository::new(
+                    &self.registry_pool,
+                )
+                .enabled(model_id)
+                .await
+                .map_err(|_| RuntimeError::RegistryFailed)?;
+            if slot.disabled {
+                return Err(RuntimeError::Disabled);
+            }
+        }
         let resolved = tokio::select! {
             _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
             resolved = self.resolve(app_data_dir, &id) => resolved?,
@@ -813,6 +837,9 @@ impl ModelRuntimeManager {
         if cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled);
         }
+        if slot.disabled {
+            return Err(RuntimeError::Disabled);
+        }
         let location = &resolved.model.location;
         let expected_path = location
             .resolve(&resolved.app_data_dir, &resolved.model.library)
@@ -896,6 +923,82 @@ impl ModelRuntimeManager {
                 lease.speech_engine().map(|_| ())
             })
             .await?
+    }
+
+    /// Only idle models may change permission. Existing work retains its lease.
+    pub async fn set_enabled(&self, model_id: &str, enabled: bool) -> Result<(), RuntimeError> {
+        let id = ModelId::new(model_id).map_err(|_| RuntimeError::InvalidModel)?;
+        if !self.adapters.contains_key(&id) {
+            return Err(RuntimeError::InvalidModel);
+        }
+        let entry = {
+            let mut entries = self.entries.lock().await;
+            self.entry_for(&mut entries, &id)
+        };
+        let mut slot = entry
+            .state
+            .clone()
+            .try_lock_owned()
+            .map_err(|_| RuntimeError::Busy)?;
+        if entry.leases.load(Ordering::Acquire) > 0 {
+            return Err(RuntimeError::Busy);
+        }
+        nova_storage::repositories::model_preferences::ModelPreferencesRepository::new(
+            &self.registry_pool,
+        )
+        .set_enabled(model_id, enabled)
+        .await
+        .map_err(|_| RuntimeError::RegistryFailed)?;
+        slot.disabled = !enabled;
+        if !enabled {
+            tokio::task::spawn_blocking(move || {
+                slot.loaded = None;
+            })
+            .await
+            .map_err(|_| RuntimeError::WorkerFailed)?;
+        }
+        Ok(())
+    }
+
+    /// A prepared Whisper adapter need not have loaded speech weights: VOD uses a subprocess.
+    pub async fn model_activity(
+        &self,
+        model_id: &str,
+    ) -> Result<(bool, &'static str), RuntimeError> {
+        let id = ModelId::new(model_id).map_err(|_| RuntimeError::InvalidModel)?;
+        let enabled =
+            nova_storage::repositories::model_preferences::ModelPreferencesRepository::new(
+                &self.registry_pool,
+            )
+            .enabled(model_id)
+            .await
+            .map_err(|_| RuntimeError::RegistryFailed)?;
+        let entry = self.entries.lock().await.get(&id).cloned();
+        let Some(entry) = entry else {
+            return Ok((enabled, "idle"));
+        };
+        let Ok(slot) = entry.state.try_lock() else {
+            return Ok((enabled, "loading"));
+        };
+        let activity = if entry.leases.load(Ordering::Acquire) > 0 {
+            "inUse"
+        } else if let Some(loaded) = &slot.loaded {
+            match &loaded.backend {
+                Backend::Whisper(whisper)
+                    if whisper
+                        .streaming
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .is_none() =>
+                {
+                    "prepared"
+                }
+                _ => "loaded",
+            }
+        } else {
+            "idle"
+        };
+        Ok((enabled, activity))
     }
 
     pub async fn unload(&self, model_id: &str) -> Result<bool, RuntimeError> {

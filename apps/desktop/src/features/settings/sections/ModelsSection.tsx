@@ -5,6 +5,7 @@ import type { ModelDownloadEvent } from "@/types/generated/ModelDownloadEvent";
 import { SettingsButton, SettingsCard, SettingsError, SettingRow } from "../SettingsUI";
 import { useModelAction, useModelStatus } from "../modelData";
 import { formatBytes } from "../format";
+import { ModelControls } from "./ModelControls";
 import { ExternalModelLibraries } from "./ExternalModelLibraries";
 
 export function ModelsSection() {
@@ -52,7 +53,7 @@ export function ModelsSection() {
         ) : (
           <SettingRow
             title="Whisper"
-            description={`${whisper.data.modelId} · ${whisper.data.installed ? "Ready for captions" : whisper.data.availability === "missing" ? "Not downloaded" : "Not ready — download to repair"}`}
+            description={`${whisper.data.modelId} · ${whisper.data.installed ? "Installed · see model controls below" : whisper.data.availability === "missing" ? "Not downloaded" : "Not ready — download to repair"}`}
           >
             {whisper.data.installed ? (
               <SettingsButton
@@ -118,11 +119,11 @@ export function ModelsSection() {
         ) : (
           <SettingRow
             title="Embedding model"
-            description={`${embedding.data.modelId} · ${embedding.data.installed ? "Ready for catalog enrichment and search" : "Not downloaded or needs repair"}`}
+            description={`${embedding.data.modelId} · ${embedding.data.installed ? "Installed · see model controls below" : "Not downloaded or needs repair"}`}
           >
             {embedding.data.installed ? (
               <span className="rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">
-                Ready
+                Installed
               </span>
             ) : (
               <SettingsButton
@@ -143,6 +144,7 @@ export function ModelsSection() {
           </p>
         )}
       </SettingsCard>
+      <ModelControls />
       <SettingsCard title="Activity on this Mac">
         {runtime.isError ? (
           <div className="py-4">
@@ -156,10 +158,8 @@ export function ModelsSection() {
         ) : (
           <>
             <SettingRow
-              title={
-                runtime.data.activeJobs || runtime.data.busyModels ? "Working" : "Ready when needed"
-              }
-              description={`${runtime.data.activeJobs} active jobs · ${runtime.data.queuedJobs} queued jobs · ${runtime.data.loadedModels} loaded models`}
+              title={runtime.data.activeJobs || runtime.data.busyModels ? "Working" : "Idle"}
+              description={`${runtime.data.activeJobs} active jobs · ${runtime.data.queuedJobs} queued jobs · ${runtime.data.loadedModels} prepared or loaded models`}
             />
             <SettingRow
               title="Estimated model memory"

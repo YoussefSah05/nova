@@ -256,6 +256,8 @@ function setupInvoke(
             entityId: "mov-7",
           },
         ]);
+      case "list_model_controls":
+        return Promise.resolve([]);
       case "get_enrich_model_status":
         return Promise.resolve({ installed: false, modelId: "e5", availability: "missing" });
       case "epg_refresh_if_stale":

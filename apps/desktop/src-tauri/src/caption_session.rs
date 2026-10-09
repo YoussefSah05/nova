@@ -225,13 +225,17 @@ pub struct CuesEvent {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
-struct StatusEvent {
+pub struct CaptionStatusEvent {
     session_id: String,
     media_kind: String,
+    #[cfg_attr(test, ts(type = "number"))]
     media_id: i64,
     /// `preparing` | `streaming` | `complete` | `failed`
     state: String,
+    phase: Option<String>,
     covered_sec: Option<f64>,
     error: Option<String>,
 }
@@ -275,7 +279,7 @@ async fn run_session_inner(
     playhead_cs: &AtomicU64,
     active_transcript: &AtomicI64,
 ) -> Result<(), String> {
-    emit_status(ctx, "preparing", None, None);
+    emit_phase(ctx, "preparing", "Preparing model", None);
 
     // Prefer a registered available location; retain the previous internal
     // download behavior when no local copy exists.
@@ -406,6 +410,12 @@ async fn run_session_inner(
         let window_end = gap_start + WINDOW_SEC;
         let audio_dur = window_end - audio_start;
 
+        emit_phase(
+            ctx,
+            "streaming",
+            "Extracting audio",
+            Some(covered_total(&covered)),
+        );
         if let Err(e) = extract_audio_window(
             &resolved.upstream_url,
             &wav,
@@ -422,6 +432,7 @@ async fn run_session_inner(
                 return Err(format!("audio extraction: {e}"));
             }
             mark_covered(&repo, &mut covered, transcript_id, gap_start, window_end).await;
+            emit_status(ctx, "streaming", Some(covered_total(&covered)), None);
             empty_streak += 1;
             if empty_streak >= 3 {
                 if let Some(id) = transcript_id {
@@ -441,12 +452,24 @@ async fn run_session_inner(
             initial_prompt: prompt_tail.clone(),
             max_len: MAX_LEN_CHARS,
         };
+        emit_phase(
+            ctx,
+            "streaming",
+            "Waiting for model",
+            Some(covered_total(&covered)),
+        );
         let lease = ctx
             .runtime
             .acquire_at(&ctx.model_root, model.id, WorkClass::Realtime, model_cancel)
             .await
             .map_err(|e| e.to_string())?;
         let child_cancel = model_cancel.clone();
+        emit_phase(
+            ctx,
+            "streaming",
+            "Recognizing and aligning speech",
+            Some(covered_total(&covered)),
+        );
         let result = lease
             .run_async_at(WorkClass::Realtime, model_cancel, move |lease| async move {
                 let _work = work;
@@ -471,6 +494,7 @@ async fn run_session_inner(
                     return Err(format!("whisper: {e}"));
                 }
                 mark_covered(&repo, &mut covered, transcript_id, gap_start, window_end).await;
+                emit_status(ctx, "streaming", Some(covered_total(&covered)), None);
                 continue;
             }
         };
@@ -804,13 +828,29 @@ fn emit_cues(
 fn emit_status(ctx: &StartCtx, state: &str, covered_sec: Option<f64>, error: Option<String>) {
     let _ = ctx.app.emit(
         "transcription:status",
-        StatusEvent {
+        CaptionStatusEvent {
             session_id: ctx.session_id.clone(),
             media_kind: ctx.media_kind.clone(),
             media_id: ctx.media_id,
             state: state.to_string(),
+            phase: None,
             covered_sec,
             error,
+        },
+    );
+}
+
+fn emit_phase(ctx: &StartCtx, state: &str, phase: &str, covered_sec: Option<f64>) {
+    let _ = ctx.app.emit(
+        "transcription:status",
+        CaptionStatusEvent {
+            session_id: ctx.session_id.clone(),
+            media_kind: ctx.media_kind.clone(),
+            media_id: ctx.media_id,
+            state: state.into(),
+            phase: Some(phase.into()),
+            covered_sec,
+            error: None,
         },
     );
 }

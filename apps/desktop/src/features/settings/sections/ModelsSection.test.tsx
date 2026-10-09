@@ -29,7 +29,7 @@ beforeEach(() => {
       return { installed, modelId: "whisper", availability: installed ? "available" : "missing" };
     if (command === "get_enrich_model_status")
       return { installed: true, modelId: "embedding", availability: "available" };
-    if (command === "list_external_model_libraries") return [];
+    if (command === "list_external_model_libraries" || command === "list_model_controls") return [];
     if (command === "model_runtime_status")
       return {
         activeJobs: 0,

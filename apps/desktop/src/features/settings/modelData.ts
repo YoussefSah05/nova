@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ModelStatus } from "@/types/generated/ModelStatus";
 import type { EnrichModelStatus } from "@/types/generated/EnrichModelStatus";
+import type { LocalModelStatus } from "@/types/generated/LocalModelStatus";
 import type { ModelRuntimeStatus } from "@/types/generated/ModelRuntimeStatus";
 
 export const modelKeys = {
@@ -61,4 +62,27 @@ export function useModelAction() {
     pending: pending?.command,
     failed: !pending && latest?.status === "error",
   };
+}
+
+export function useModelControls() {
+  const client = useQueryClient();
+  const models = useQuery({
+    queryKey: [...modelKeys.all, "controls"],
+    queryFn: () => invoke<LocalModelStatus[]>("list_model_controls"),
+    refetchInterval: 5000,
+  });
+  const change = useMutation({
+    mutationFn: async (action: { modelId: string; enabled?: boolean }) => {
+      if (action.enabled === undefined)
+        await invoke<boolean>("unload_model", { modelId: action.modelId });
+      else await invoke<void>("set_model_enabled", action);
+    },
+    onSettled: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: modelKeys.all }),
+        client.invalidateQueries({ queryKey: ["capability", "semanticSearch"] }),
+      ]);
+    },
+  });
+  return { models, change };
 }
