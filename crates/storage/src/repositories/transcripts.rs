@@ -221,17 +221,19 @@ impl<'a> TranscriptRepository<'a> {
         &self,
         transcript_id: i64,
         segments: &[TranscriptSegment],
-    ) -> Result<(), StorageError> {
+    ) -> Result<Vec<i64>, StorageError> {
         let mut tx = self.pool.begin().await?;
+        let mut ids = Vec::with_capacity(segments.len());
         for seg in segments {
             let words_json = match &seg.words {
                 Some(words) => Some(serde_json::to_string(words)?),
                 None => None,
             };
-            sqlx::query!(
+            let row = sqlx::query!(
                 r#"INSERT INTO transcript_segments
                      (transcript_id, seq, start_sec, end_sec, text, words_json)
-                   VALUES (?, ?, ?, ?, ?, ?)"#,
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   RETURNING id as "id!: i64""#,
                 transcript_id,
                 seg.seq,
                 seg.start_sec,
@@ -239,11 +241,53 @@ impl<'a> TranscriptRepository<'a> {
                 seg.text,
                 words_json,
             )
-            .execute(&mut *tx)
+            .fetch_one(&mut *tx)
             .await?;
+            ids.push(row.id);
         }
         tx.commit().await?;
-        Ok(())
+        Ok(ids)
+    }
+
+    /// Bounded, authoritative committed text for an interactive translation batch.
+    /// A segment from another transcript is never returned.
+    pub async fn segments_by_ids(
+        &self,
+        transcript_id: i64,
+        ids: &[i64],
+    ) -> Result<Vec<SourceSegment>, StorageError> {
+        let ids_json = serde_json::to_string(ids)?;
+        let rows = sqlx::query!(
+            r#"SELECT id as "id!: i64", start_sec as "start_sec!: f64",
+                      end_sec as "end_sec!: f64", text
+               FROM transcript_segments
+               WHERE transcript_id = ? AND id IN (SELECT value FROM json_each(?))
+               ORDER BY start_sec, id LIMIT 8"#,
+            transcript_id,
+            ids_json,
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SourceSegment {
+                id: r.id,
+                start_sec: r.start_sec,
+                end_sec: r.end_sec,
+                text: r.text,
+            })
+            .collect())
+    }
+
+    pub async fn language(&self, transcript_id: i64) -> Result<String, StorageError> {
+        let row = sqlx::query!(
+            "SELECT language FROM transcripts WHERE id = ?",
+            transcript_id
+        )
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or(StorageError::NotFound)?;
+        Ok(row.language)
     }
 
     /// Record a transcribed window `[start_sec, end_sec)` for coverage tracking.
@@ -520,6 +564,40 @@ mod tests {
         let path = dir.path().join("profile.db");
         let pool = init_profile_db(path.to_str().unwrap()).await.unwrap();
         (dir, pool)
+    }
+
+    #[tokio::test]
+    async fn committed_id_lookup_is_bounded_and_never_crosses_transcripts() {
+        let (_dir, pool) = temp_pool().await;
+        let repo = TranscriptRepository::new(&pool);
+        let first = repo
+            .get_or_create_transcript("first", "vod", 1, 0, "en", "m", "", "")
+            .await
+            .unwrap();
+        let other = repo
+            .get_or_create_transcript("other", "vod", 2, 0, "fr", "m", "", "")
+            .await
+            .unwrap();
+        let segments: Vec<_> = (0..12)
+            .map(|seq| TranscriptSegment {
+                seq,
+                start_sec: seq as f64,
+                end_sec: seq as f64 + 1.0,
+                text: format!("line {seq}"),
+                words: None,
+            })
+            .collect();
+        let ids = repo.append_segments(first, &segments).await.unwrap();
+        let foreign = repo.append_segments(other, &segments[..1]).await.unwrap();
+        let mut requested = ids.clone();
+        requested.extend(foreign);
+        let rows = repo.segments_by_ids(first, &requested).await.unwrap();
+        assert_eq!(rows.len(), 8);
+        assert_eq!(rows[0].text, "line 0");
+        assert_eq!(rows[7].text, "line 7");
+        assert!(rows.iter().all(|s| ids.contains(&s.id)));
+        assert_eq!(repo.language(first).await.unwrap(), "en");
+        assert!(repo.language(999).await.is_err());
     }
 
     #[tokio::test]

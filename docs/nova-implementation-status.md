@@ -8,6 +8,28 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### M18 committed translated captions — 2026-10-09
+
+The local engine now has a VOD/episode player consumer: Translation and Source +
+translation modes, English/French/Arabic targets, manifest-selected direct/pivot
+routes, batches of eight stored committed segment IDs, and cache-first inference
+through runtime leases/Realtime admission. Cache provenance includes source-text
+SHA-256, direction, route model revisions, pipeline and decoding versions in the
+existing backend key; no migration or automatic download was introduced.
+
+Session/profile/transcript validation and single-batch admission bound requests;
+stop/media/track changes cancel model work. Target changes discard stale results.
+Source captions survive failures, and translated/dual text retains appearance
+settings and Arabic RTL support. `C` cycles the four modes for VOD/episodes.
+
+`just lint`, `just typecheck`, and `just test` pass (182 frontend tests; all Rust
+workspace tests pass). Independent review findings were fixed and re-reviewed.
+Native playback/real translation models remain unqualified; visual inspection was
+blocked by automatic approval review's usage limit. See
+[`implementation/m18-translated-captions.md`](implementation/m18-translated-captions.md).
+M17 audio capture, model installation UX, Ask Nova/Command-K and discovery remain
+the next separate dependencies; existing user work is preserved.
+
 ### Repository baseline
 
 - Branch / commit: `main` at `1e0a170`. Clean tree.
@@ -42,7 +64,7 @@
 | M15 Recovery / QoE | PARTIAL | Bounded recovery (same item once, then other sources, ≤ 5 per 10 min per title) and per-source health (`variant_health`, 0039). | No decoder fallback; no QoE metrics (startup latency, rebuffering); buffering stalls aren't failures. |
 | M16 Jobs / bounded queues | PARTIAL | Persisted `JobQueue` for import, EPG, enrichment and scheduled refresh: dedup, cancel, startup recovery. Opt-in per-playlist auto-refresh (migration 0043) runs as background work for the active profile, one import per source (2026-10-05, `implementation/m05-m16-governed-work.md`). | No retry/backoff (slice B2 contracted). |
 | M17 Streaming transcription | PARTIAL | VOD caption sessions: segment-aligned windows, Realtime leases, subprocess kill on cancel. Resident streaming engine (2026-10-07, ADR-0011): whisper.cpp in a worker process of Nova's binary, Metal first then Core ML, LocalAgreement-2 sessions over a bounded `PcmQueue`, runtime-owned lifecycle and `prewarm_speech`. | Not yet wired to captions: no playback audio tap (ADR 0012), VOD still uses `whisper-cli` windows. |
-| M18 Timed translation | PARTIAL | Engine chosen by AI22: Opus-MT (Marian ONNX) per direction in `crates/translate` on the single ORT, English pivot for fr↔ar (`ModelManifest::translation_route`). Runtime `TranslationAdapter` verifies pinned checksums on first load (`.nova-verified`) and serves `lease.translator()` (2026-10-07). | Not wired to captions: no committed-segment translation worker, cache provenance (migration 0044) or UI. fr→en / ar→en unmeasured. |
+| M18 Timed translation | PARTIAL | Evaluated Opus-MT engine on the single ORT; verified runtime leases and manifest direct/English-pivot routing. VOD/episode captions now consume committed IDs in bounded batches, cache with source/model provenance, and expose Translation/Dual modes with en/fr/ar targets (2026-10-09). | Resident/live audio capture is still unwired. Translation model installer and native end-to-end qualification remain open; fr→en / ar→en unmeasured. Cache provenance reuses the existing backend key, so no 0044 migration is needed. |
 | M19 Embeddings / dialogue search | PARTIAL | Per-title dialogue search seeks playback (`TranscriptPanel` → `seekTo`). | Entity vectors belong to provider rows, not entities; no cross-library dialogue search. |
 | M20 Command-K typed intents | MISSING | `CommandPalette` is search + navigation. | No intent model or validator. |
 | M21 Smart discovery / personalization | PARTIAL | TMDB related/collections/trending intersected with the library. | No embedding similarity or history-based personalization. |
@@ -80,7 +102,7 @@
 | AI20 AI settings UX | PARTIAL | Installed / not installed plus external library state. |
 | AI21 AI failure UX | MISSING | Runtime errors map to generic `Internal`; no capability-specific states. |
 | AI22 Evaluation harness | PARTIAL | `tools/catalog-eval` (reasoner smoke only); no ASR/search eval. |
-| AI23 Provenance / versioning | PARTIAL | Model ID stored on transcripts/embeddings; no revision. |
+| AI23 Provenance / versioning | PARTIAL | Caption translations now key source-text SHA-256, source/target, route model IDs/revisions and pipeline/decoding versions (2026-10-09). Transcripts/embeddings still store model ID without revision. |
 | AI24 Privacy / offline | PARTIAL | No LLM prompts in the app; credential exposure is a UI/IPC issue (M25). |
 
 ### Skipped or stranded work

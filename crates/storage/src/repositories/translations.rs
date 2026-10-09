@@ -30,6 +30,26 @@ impl<'a> TranslationRepository<'a> {
         Self { pool }
     }
 
+    /// Look up one segment with a complete versioned provenance key. Legacy
+    /// backend names do not match keys emitted by the new caption pipeline.
+    pub async fn cached_segment(
+        &self,
+        segment_id: i64,
+        target_lang: &str,
+        backend: &str,
+    ) -> Result<Option<String>, StorageError> {
+        Ok(sqlx::query!(
+            "SELECT text FROM transcript_translations
+             WHERE segment_id = ? AND target_lang = ? AND backend = ?",
+            segment_id,
+            target_lang,
+            backend,
+        )
+        .fetch_optional(self.pool)
+        .await?
+        .map(|r| r.text))
+    }
+
     /// Cached translations for a transcript's segments, keyed by `segment_id`.
     pub async fn cached(
         &self,
@@ -140,6 +160,20 @@ mod tests {
         // A different target/backend is a miss.
         assert!(repo.cached(id, "fr", "nllb").await.unwrap().is_empty());
         assert_eq!(repo.count().await.unwrap(), 1);
+        assert_eq!(
+            repo.cached_segment(seg_id, "en", "nllb").await.unwrap(),
+            Some("Hello".into())
+        );
+        assert_eq!(
+            repo.cached_segment(seg_id, "en", "new-versioned-key")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            repo.cached_segment(seg_id, "fr", "nllb").await.unwrap(),
+            None
+        );
     }
 
     #[tokio::test]

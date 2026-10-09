@@ -16,6 +16,12 @@ interface CaptionPickerProps {
   onClose: () => void;
   /// Live status for the "Source language" row, or null.
   sourceNote?: string | null;
+  targetLang?: string;
+  onTargetChange?: (lang: string) => void;
+  translationNote?: string | null;
+  translationFailed?: boolean;
+  onRetryTranslation?: () => void;
+  isLive?: boolean;
 }
 
 interface ModeOption {
@@ -26,9 +32,23 @@ interface ModeOption {
 const OPTIONS: ModeOption[] = [
   { value: "off", label: "Off" },
   { value: "source", label: "Source language" },
+  { value: "translation", label: "Translation" },
+  { value: "dual", label: "Source + translation" },
 ];
 
-export function CaptionPicker({ mode, onChange, open, onClose, sourceNote }: CaptionPickerProps) {
+export function CaptionPicker({
+  mode,
+  onChange,
+  open,
+  onClose,
+  sourceNote,
+  targetLang = "en",
+  onTargetChange,
+  translationNote,
+  translationFailed,
+  onRetryTranslation,
+  isLive = false,
+}: CaptionPickerProps) {
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -52,7 +72,7 @@ export function CaptionPicker({ mode, onChange, open, onClose, sourceNote }: Cap
       )}
     >
       <p className="px-3 py-2 text-[11px] uppercase tracking-wider text-white/55">Captions</p>
-      <ul className="pb-1">
+      <ul role="group" aria-label="Caption display mode" className="pb-1">
         {OPTIONS.map((opt) => {
           const isActive = mode === opt.value;
           const liveNote = opt.value === "source" ? sourceNote : null;
@@ -60,14 +80,16 @@ export function CaptionPicker({ mode, onChange, open, onClose, sourceNote }: Cap
             <li key={opt.value}>
               <button
                 role="menuitemradio"
+                aria-label={opt.label}
                 aria-checked={isActive}
+                disabled={isLive && opt.value !== "off"}
                 onClick={() => {
                   onChange(opt.value);
                   onClose();
                 }}
                 className={cn(
                   "flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors",
-                  "hover:bg-white/10",
+                  "hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40",
                   isActive && "bg-white/10 text-white"
                 )}
               >
@@ -83,10 +105,47 @@ export function CaptionPicker({ mode, onChange, open, onClose, sourceNote }: Cap
         })}
       </ul>
       <div className="border-t border-white/10 px-3 py-3">
-        <p className="text-xs text-primary">Translation & dual captions</p>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          Coming with the intelligence upgrade. Source captions are available today.
-        </p>
+        {isLive ? (
+          <p className="text-xs text-white/55">Live AI captions are not available yet.</p>
+        ) : (
+          <>
+            <p className="text-xs text-primary">Translate to · on this Mac</p>
+            <div role="group" aria-label="Translation target" className="mt-2 flex gap-1">
+              {[
+                ["en", "English"],
+                ["fr", "French"],
+                ["ar", "Arabic"],
+              ].map(([lang, label]) => (
+                <button
+                  key={lang}
+                  role="menuitemradio"
+                  aria-checked={targetLang === lang}
+                  className={cn(
+                    "rounded px-2 py-2 text-xs transition-colors hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring",
+                    targetLang === lang && "bg-white/10 text-primary"
+                  )}
+                  onClick={() => onTargetChange?.(lang)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {translationNote && (
+              <p role="status" className="mt-2 text-xs leading-relaxed text-white/65">
+                {translationNote}
+              </p>
+            )}
+            {translationFailed && (
+              <button
+                role="menuitem"
+                onClick={onRetryTranslation}
+                className="mt-2 rounded px-2 py-1 text-xs text-primary hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Retry translation
+              </button>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
@@ -100,6 +159,12 @@ export function CaptionButton({
   onToggle,
   onClose,
   sourceNote,
+  targetLang,
+  onTargetChange,
+  translationNote,
+  translationFailed,
+  onRetryTranslation,
+  isLive,
 }: {
   mode: CaptionMode;
   onChange: (m: CaptionMode) => void;
@@ -107,6 +172,12 @@ export function CaptionButton({
   onToggle: () => void;
   onClose: () => void;
   sourceNote?: string | null;
+  targetLang?: string;
+  onTargetChange?: (lang: string) => void;
+  translationNote?: string | null;
+  translationFailed?: boolean;
+  onRetryTranslation?: () => void;
+  isLive?: boolean;
 }) {
   const active = mode !== "off";
   return (
@@ -129,6 +200,12 @@ export function CaptionButton({
         open={open}
         onClose={onClose}
         sourceNote={sourceNote}
+        targetLang={targetLang}
+        onTargetChange={onTargetChange}
+        translationNote={translationNote}
+        translationFailed={translationFailed}
+        onRetryTranslation={onRetryTranslation}
+        isLive={isLive}
       />
     </div>
   );

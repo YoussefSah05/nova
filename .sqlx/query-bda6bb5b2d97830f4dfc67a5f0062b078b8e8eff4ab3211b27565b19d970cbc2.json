@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT text FROM transcript_translations\n             WHERE segment_id = ? AND target_lang = ? AND backend = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "text",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bda6bb5b2d97830f4dfc67a5f0062b078b8e8eff4ab3211b27565b19d970cbc2"
+}

@@ -66,7 +66,8 @@ describe("source caption session", () => {
           mediaKind: "vod",
           mediaId: 1,
           language: "en",
-          cues: [{ start: 0, end: 1, text: "fixture" }],
+          transcriptId: 7,
+          cues: [{ segmentId: 1, start: 0, end: 1, text: "fixture" }],
         },
       });
     act(() => emit(first.sessionId));
@@ -76,5 +77,50 @@ describe("source caption session", () => {
     };
     act(() => emit(last.sessionId));
     expect(result.current.cues).toHaveLength(1);
+    expect(result.current.transcriptId).toBe(7);
+    expect(result.current.sessionId).toBe(last.sessionId);
+  });
+  it("hides old committed dialogue on the first render of a media or track change", async () => {
+    let onCues: ((event: Event<unknown>) => void) | undefined;
+    vi.mocked(listen).mockImplementation(async (name, handler) => {
+      if (name === event) onCues = handler as (event: Event<unknown>) => void;
+      return () => {};
+    });
+    mockInvoke.mockResolvedValue({ installed: true });
+    const seen: Array<{ count: number; transcript: number | null }> = [];
+    const { rerender } = renderHook(
+      ({ id, track }) => {
+        const state = useSourceCaptions("fixture", { kind: "vod", id }, true, time, time, {
+          index: track,
+          lang: "en",
+        });
+        seen.push({ count: state.cues.length, transcript: state.transcriptId });
+        return state;
+      },
+      { initialProps: { id: 1, track: 0 } }
+    );
+    await act(async () => {});
+    const session = mockInvoke.mock.calls.filter(([command]) => command === start).at(-1)?.[1] as {
+      sessionId: string;
+    };
+    act(() =>
+      onCues?.({
+        event,
+        id: 1,
+        payload: {
+          sessionId: session.sessionId,
+          mediaKind: "vod",
+          mediaId: 1,
+          transcriptId: 7,
+          language: "en",
+          cues: [{ segmentId: 1, start: 0, end: 1, text: "old dialogue" }],
+        },
+      })
+    );
+    expect(seen.at(-1)?.count).toBe(1);
+    const before = seen.length;
+    rerender({ id: 2, track: 1 });
+    expect(seen[before]).toEqual({ count: 0, transcript: null });
+    await act(async () => {});
   });
 });

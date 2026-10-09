@@ -28,7 +28,7 @@
 //! card can reuse the same stream.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,7 +45,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
 /// Max audio handed to whisper per window. 30s is whisper's native context length.
 const WINDOW_SEC: f64 = 30.0;
@@ -80,6 +80,10 @@ pub struct CaptionSessionManager {
 }
 
 struct SessionHandle {
+    session_id: String,
+    profile_id: String,
+    transcript_id: Arc<AtomicI64>,
+    translation_slot: Arc<Semaphore>,
     cancel: Arc<AtomicBool>,
     model_cancel: RuntimeCancellation,
     /// Live playhead in centiseconds (so it fits an atomic).
@@ -89,6 +93,7 @@ struct SessionHandle {
 /// Everything a session needs to run, assembled by the command layer.
 pub struct StartCtx {
     pub session_id: String,
+    pub profile_id: String,
     pub app: AppHandle,
     pub pool: Arc<SqlitePool>,
     pub media_kind: String,
@@ -117,7 +122,12 @@ impl CaptionSessionManager {
         let cancel = Arc::new(AtomicBool::new(false));
         let model_cancel = RuntimeCancellation::default();
         let playhead_cs = Arc::new(AtomicU64::new((ctx.from_sec.max(0.0) * 100.0) as u64));
+        let transcript_id = Arc::new(AtomicI64::new(0));
         let handle = Arc::new(SessionHandle {
+            session_id: ctx.session_id.clone(),
+            profile_id: ctx.profile_id.clone(),
+            transcript_id: Arc::clone(&transcript_id),
+            translation_slot: Arc::new(Semaphore::new(1)),
             cancel: Arc::clone(&cancel),
             model_cancel: model_cancel.clone(),
             playhead_cs: Arc::clone(&playhead_cs),
@@ -132,7 +142,13 @@ impl CaptionSessionManager {
             *guard = Some(Arc::clone(&handle));
         }
 
-        tokio::spawn(run_session(ctx, cancel, model_cancel, playhead_cs));
+        tokio::spawn(run_session(
+            ctx,
+            cancel,
+            model_cancel,
+            playhead_cs,
+            transcript_id,
+        ));
     }
 
     /// Update the live playhead so the session prioritises/throttles correctly.
@@ -150,25 +166,62 @@ impl CaptionSessionManager {
             h.model_cancel.cancel();
         }
     }
+
+    /// Translation borrows the caption session's cancellation, so closing the
+    /// player or switching media/track also cancels waiting/in-flight inference.
+    pub async fn translation_context(
+        &self,
+        session_id: &str,
+        profile_id: &str,
+        transcript_id: i64,
+    ) -> Option<(RuntimeCancellation, OwnedSemaphorePermit)> {
+        self.active
+            .lock()
+            .await
+            .as_ref()
+            .filter(|h| {
+                h.session_id == session_id
+                    && h.profile_id == profile_id
+                    && transcript_id > 0
+                    && h.transcript_id.load(Ordering::SeqCst) == transcript_id
+            })
+            .and_then(|h| {
+                h.translation_slot
+                    .clone()
+                    .try_acquire_owned()
+                    .ok()
+                    .map(|permit| (h.model_cancel.clone(), permit))
+            })
+    }
 }
 
 // ── Event payloads ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
-struct CueDto {
-    start: f64,
-    end: f64,
-    text: String,
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionCue {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub segment_id: i64,
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
-struct CuesEvent {
+pub struct CuesEvent {
     session_id: String,
     media_kind: String,
+    #[cfg_attr(test, ts(type = "number"))]
     media_id: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    transcript_id: i64,
     language: String,
-    cues: Vec<CueDto>,
+    cues: Vec<CaptionCue>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -198,8 +251,17 @@ async fn run_session(
     cancel: Arc<AtomicBool>,
     model_cancel: RuntimeCancellation,
     playhead_cs: Arc<AtomicU64>,
+    active_transcript: Arc<AtomicI64>,
 ) {
-    if let Err(e) = run_session_inner(&ctx, &cancel, &model_cancel, &playhead_cs).await {
+    if let Err(e) = run_session_inner(
+        &ctx,
+        &cancel,
+        &model_cancel,
+        &playhead_cs,
+        &active_transcript,
+    )
+    .await
+    {
         if !cancel.load(Ordering::SeqCst) {
             emit_status(&ctx, "failed", None, Some(e));
         }
@@ -211,6 +273,7 @@ async fn run_session_inner(
     cancel: &AtomicBool,
     model_cancel: &RuntimeCancellation,
     playhead_cs: &AtomicU64,
+    active_transcript: &AtomicI64,
 ) -> Result<(), String> {
     emit_status(ctx, "preparing", None, None);
 
@@ -287,6 +350,7 @@ async fn run_session_inner(
         .map_err(|e| e.to_string())?
     {
         transcript_id = Some(existing.id);
+        active_transcript.store(existing.id, Ordering::SeqCst);
         language = existing.language.clone();
         for (s, e) in repo
             .covered_windows(existing.id)
@@ -301,7 +365,11 @@ async fn run_session_inner(
             .map_err(|e| e.to_string())?;
         if !segments.is_empty() {
             prompt_tail = tail_prompt(&segments);
-            emit_cues(ctx, &language, &segments);
+            let stored = repo
+                .segments_with_ids(existing.id)
+                .await
+                .map_err(|e| e.to_string())?;
+            emit_cues(ctx, existing.id, &language, &stored);
         }
     }
 
@@ -457,15 +525,27 @@ async fn run_session_inner(
                 .await
                 .map_err(|e| e.to_string())?;
             transcript_id = Some(id);
+            active_transcript.store(id, Ordering::SeqCst);
         }
         let id = transcript_id.expect("transcript id set above");
 
         if !keep.is_empty() {
-            repo.append_segments(id, &keep)
+            let ids = repo
+                .append_segments(id, &keep)
                 .await
                 .map_err(|e| e.to_string())?;
             prompt_tail = tail_prompt(&keep);
-            emit_cues(ctx, &language, &keep);
+            let stored: Vec<_> = keep
+                .iter()
+                .zip(ids)
+                .map(|(s, id)| nova_storage::SourceSegment {
+                    id,
+                    start_sec: s.start_sec,
+                    end_sec: s.end_sec,
+                    text: s.text.clone(),
+                })
+                .collect();
+            emit_cues(ctx, id, &language, &stored);
             refresh_vtt(
                 &repo,
                 id,
@@ -693,10 +773,16 @@ fn hex_lower(bytes: &[u8]) -> String {
     s
 }
 
-fn emit_cues(ctx: &StartCtx, language: &str, segments: &[TranscriptSegment]) {
+fn emit_cues(
+    ctx: &StartCtx,
+    transcript_id: i64,
+    language: &str,
+    segments: &[nova_storage::SourceSegment],
+) {
     let cues = segments
         .iter()
-        .map(|s| CueDto {
+        .map(|s| CaptionCue {
+            segment_id: s.id,
             start: s.start_sec,
             end: s.end_sec,
             text: s.text.clone(),
@@ -708,6 +794,7 @@ fn emit_cues(ctx: &StartCtx, language: &str, segments: &[TranscriptSegment]) {
             session_id: ctx.session_id.clone(),
             media_kind: ctx.media_kind.clone(),
             media_id: ctx.media_id,
+            transcript_id,
             language: language.to_string(),
             cues,
         },
@@ -740,6 +827,52 @@ mod tests {
             text: text.to_string(),
             words: None,
         }
+    }
+
+    #[tokio::test]
+    async fn translation_is_scoped_bounded_and_cancelled_with_the_caption_session() {
+        let manager = CaptionSessionManager::new();
+        let cancel = RuntimeCancellation::default();
+        *manager.active.lock().await = Some(Arc::new(SessionHandle {
+            session_id: "session".into(),
+            profile_id: "profile".into(),
+            transcript_id: Arc::new(AtomicI64::new(7)),
+            translation_slot: Arc::new(Semaphore::new(1)),
+            cancel: Arc::new(AtomicBool::new(false)),
+            model_cancel: cancel.clone(),
+            playhead_cs: Arc::new(AtomicU64::new(0)),
+        }));
+        assert!(manager
+            .translation_context("old", "profile", 7)
+            .await
+            .is_none());
+        assert!(manager
+            .translation_context("session", "other", 7)
+            .await
+            .is_none());
+        assert!(manager
+            .translation_context("session", "profile", 8)
+            .await
+            .is_none());
+        let (borrowed, permit) = manager
+            .translation_context("session", "profile", 7)
+            .await
+            .unwrap();
+        assert!(manager
+            .translation_context("session", "profile", 7)
+            .await
+            .is_none());
+        drop(permit);
+        assert!(manager
+            .translation_context("session", "profile", 7)
+            .await
+            .is_some());
+        manager.stop().await;
+        assert!(borrowed.is_cancelled());
+        assert!(manager
+            .translation_context("session", "profile", 7)
+            .await
+            .is_none());
     }
 
     #[test]

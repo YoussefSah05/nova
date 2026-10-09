@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT language FROM transcripts WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "language",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8e2de4cb49d1ddb08888bfc7cdc1562de210c6425331fb1530afa31f14e1fac2"
+}

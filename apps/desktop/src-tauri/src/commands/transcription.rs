@@ -116,6 +116,7 @@ pub async fn start_caption_session(
     let pool = require_profile_pool(&profile_id, &state).await?;
     let ctx = StartCtx {
         session_id,
+        profile_id,
         app: app.clone(),
         pool,
         media_kind,

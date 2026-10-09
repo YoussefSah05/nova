@@ -89,7 +89,8 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `model_runtime_status` | `{}` | `ModelRuntimeStatus`: `{ loadedModels, activeLeases, busyModels, transitioningModels, estimatedResidentBytes, unknownResidentModels, activePlaybackSessions, queuedWork, activeWorkClass, residentModels, residentModelBudget, queuedJobs, activeJobs, jobSlots, suspendedWork }`; counts/class only, no paths or grants | M2.5 / M2.6 / P06 |
 | `get_enrich_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | enrichment / M2 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
-| `start_caption_session` | `{ profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
+| `start_caption_session` | `{ sessionId, profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
+| `translate_caption_segments` | `{ profileId, sessionId, transcriptId, segmentIds: number[], targetLang: string }` | `CaptionCue[]` (`segmentId,start,end,text`) | M18 |
 | `set_caption_playhead` | `{ sec: number }` | `void` | 6 |
 | `stop_caption_session` | `{}` | `void` | 6 |
 | `get_caption_style` | `{ profileId }` | `CaptionStyle` (defaults if unsaved) | 6 |
@@ -256,7 +257,7 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | `playlist:import:progress` | `{ sourceId, stage, parsed, inserted, liveCount, movieCount, seriesCount, failedCount, skippedCount, elapsedMs, done, error?, warning? }` | 2 |
 | `playlist:import:background` | `playlist:import:progress` payload plus `profileId` (source ids are per profile), for a scheduled (automatic) refresh. The UI picks up its catalog on success and never shows its progress or errors | M16 |
 | `artwork:channel-logos` | `{ stage: 'downloading'\|'matching'\|'complete'\|'failed', sourceId?, matched, candidates, done, error? }` | artwork v1 |
-| `transcription:cues` | `{ mediaKind, mediaId, language, cues: [{start,end,text}] }` (incremental, absolute times) | 6 |
+| `transcription:cues` | `{ sessionId, mediaKind, mediaId, transcriptId, language, cues: [{segmentId,start,end,text}] }` (committed, incremental, absolute times) | 6/M18 |
 | `transcription:status` | `{ mediaKind, mediaId, state: 'preparing'\|'streaming'\|'complete'\|'failed', coveredSec?, error? }` | 6 |
 | `model:download:progress` | `{ artifact: 'weights'\|'coreml', downloadedBytes, totalBytes? }` | 6 |
 | `translation:progress` | `{ job_id: number, pct: number }` | 7 |
@@ -497,20 +498,44 @@ No command: Rust owns it (`lifecycle.rs`).
   `playback:recover { reason: 'wake' }` (with a fresh recovery budget) and reconnects at the live
   edge, unless the Mac slept again first; VOD and a channel the user had paused stay paused.
 
-## Translation removed (2026-09-27)
+## Legacy translation removed (2026-09-27)
 
 The early NLLB/CTranslate2 engine (`nova-translate`, `ct2rs`) was removed: its
 statically linked sentencepiece carried a second protobuf copy that crashed ONNX
 Runtime when the embedding model loaded. Removed commands: `get_nllb_model_status`,
 `download_nllb_model`, `list_target_languages`, `start_translation_session`,
 `set_translation_playhead`, `stop_translation_session`; removed events:
-`translation:cues`, `translation:status`, `nllb:download:progress`. The player offers
-Off / Source captions only. Translation tables and cached rows are kept;
+`translation:cues`, `translation:status`, `nllb:download:progress`. Translation tables and cached rows are kept;
 `get_transcript` still returns cached translations when `targetLang` is given, and
 transcript search still matches them. The `enqueue_translation` /
 `translation:progress` / `translation:complete` rows above describe the planned
-Phase 7 contract, not implemented commands. Translation returns in Phase 7/10 after
-an engine study (latency, footprint, no conflicting native dependencies).
+Phase 7 contract, not implemented commands. The new M18 path below uses the evaluated
+Opus-MT engine on the app's single ONNX Runtime.
+
+## Committed caption translation (M18, 2026-10-09)
+
+`translate_caption_segments` accepts one to eight distinct positive segment IDs.
+The session, profile and transcript must match the active caption session. Text
+and timestamps are read from storage; arbitrary frontend text cannot be submitted.
+Only one batch may run per session; a busy or replaced session returns `Conflict`.
+Track/media changes, closing the player and turning captions off cancel model work
+through the caption session. Target/mode changes discard obsolete frontend results.
+
+Targets and source dialogue support English, French and Arabic, with BCP-47/ISO
+track-tag normalization. The manifest selects direct models or an English pivot.
+Every hop acquires a runtime lease and Realtime resource admission independently.
+The command never downloads models or invokes a network translation provider.
+
+Cache lookup precedes inference. `transcript_translations.backend` holds a JSON
+provenance key (`pipeline`, `decoding`, `source`, `target`, `sourceHash`, and ordered
+`models: [{id,revision}]`). Legacy keys remain readable through legacy APIs but are
+not reused by this path. Output cardinality/nonempty text is validated before one
+transaction writes the batch. Clearing transcripts still cascades translations.
+
+The player offers Off / Source / Translation / Source + translation, plus local
+English/French/Arabic targets. Missing/offline models and inference failure preserve
+source captions and show a safe status with a retry action. `C` cycles the four
+modes for VOD/episodes. Live AI captions remain unavailable pending audio capture.
 
 ## TMDB credential (P11)
 

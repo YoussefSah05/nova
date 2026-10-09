@@ -34,6 +34,7 @@ pub mod settings;
 pub mod title_art;
 pub mod title_facts;
 pub mod transcription;
+pub mod translation;
 
 // ── Profile commands (Phase 1) ────────────────────────────────────────────────
 

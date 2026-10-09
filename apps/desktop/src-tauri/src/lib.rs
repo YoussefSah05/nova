@@ -240,6 +240,7 @@ pub fn run() {
             commands::transcription::start_caption_session,
             commands::transcription::set_caption_playhead,
             commands::transcription::stop_caption_session,
+            commands::translation::translate_caption_segments,
             // Phase 8 — Search (transcript companion panel + dialogue FTS)
             commands::search::get_transcript,
             commands::search::search_transcript,

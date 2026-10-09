@@ -54,6 +54,7 @@ import { CinemaEpisodeBrowser } from "./CinemaEpisodeBrowser";
 import { episodeToMedia } from "./episodeMedia";
 import { usePlaybackEnded, usePlaybackRecover } from "./usePlaybackEnded";
 import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
+import { useTranslatedCaptions } from "./useTranslatedCaptions";
 import { useCaptionStyle } from "./useCaptionStyle";
 import { useAirPlay } from "./useAirPlay";
 import { AirPlayButton, AirPlayOverlay } from "./AirPlay";
@@ -280,6 +281,7 @@ export function PlayerModal({
 
   // -- caption state (Phase 5: inert; Phase 6/7 will populate the cue arrays) --
   const [captionMode, setCaptionMode] = useState<CaptionMode>("off");
+  const [translationTarget, setTranslationTarget] = useState("en");
   const [captionMenuOpen, setCaptionMenuOpen] = useState(false);
   const [companionTab, setCompanionTab] = useState<CompanionTab | null>(null);
   const companionTriggerRef = useRef<HTMLButtonElement>(null);
@@ -332,6 +334,13 @@ export function PlayerModal({
     selectedAudioTrack
   );
   const sourceCues: Cue[] = sourceCaptions.cues;
+  const translatedCaptions = useTranslatedCaptions(
+    profileId,
+    sourceCaptions,
+    !isLive && (captionMode === "translation" || captionMode === "dual"),
+    translationTarget,
+    () => latestPlaybackRef.current.currentTime
+  );
 
   useEffect(() => {
     captionModeRef.current = captionMode;
@@ -1381,6 +1390,14 @@ export function PlayerModal({
         case "F":
           toggleFullscreen();
           return;
+        case "c":
+        case "C": {
+          if (isLive) return;
+          const modes: CaptionMode[] = ["off", "source", "translation", "dual"];
+          setCaptionMode((mode) => modes[(modes.indexOf(mode) + 1) % modes.length]);
+          revealControls();
+          return;
+        }
         case "t":
         case "T":
           setCinema((v) => !v);
@@ -1572,13 +1589,16 @@ export function PlayerModal({
           <CaptionOverlay
             mode={captionMode}
             sourceCues={sourceCues}
+            translatedCues={translatedCaptions.cues}
+            targetLang={translationTarget}
+            sourceLang={sourceCaptions.language}
             currentTime={currentTime}
             captionStyle={captionStyleState.style}
           />
 
           {/* Caption status banner: model-download prompt, preparing, or error.
             Hidden once cues are streaming (status "streaming" with cues). */}
-          {captionMode === "source" &&
+          {captionMode !== "off" &&
             sourceCaptions.status !== "idle" &&
             sourceCaptions.status !== "complete" &&
             !(sourceCaptions.status === "streaming" && sourceCues.length > 0) && (
@@ -1621,6 +1641,15 @@ export function PlayerModal({
                 </div>
               </div>
             )}
+
+          {(captionMode === "translation" || captionMode === "dual") && translatedCaptions.note && (
+            <div
+              role="status"
+              className="pointer-events-none absolute inset-x-0 bottom-[6%] z-10 px-6 text-center text-xs text-white/70"
+            >
+              {translatedCaptions.note}
+            </div>
+          )}
 
           {/* Skip indicator (+-10s) */}
           {skipIndicator && (
@@ -1859,6 +1888,12 @@ export function PlayerModal({
                 onToggle={() => setCaptionMenuOpen((v) => !v)}
                 onClose={() => setCaptionMenuOpen(false)}
                 sourceNote={sourceCaptionNote(sourceCaptions)}
+                targetLang={translationTarget}
+                onTargetChange={setTranslationTarget}
+                translationNote={translatedCaptions.note}
+                translationFailed={translatedCaptions.failed}
+                onRetryTranslation={translatedCaptions.retry}
+                isLive={isLive}
               />
 
               {/* Caption-style ("Aa") controls — only while captions are showing. */}

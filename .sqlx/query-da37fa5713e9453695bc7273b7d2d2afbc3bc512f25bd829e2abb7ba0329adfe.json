@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: i64\", start_sec as \"start_sec!: f64\",\n                      end_sec as \"end_sec!: f64\", text\n               FROM transcript_segments\n               WHERE transcript_id = ? AND id IN (SELECT value FROM json_each(?))\n               ORDER BY start_sec, id LIMIT 8",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "start_sec!: f64",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "end_sec!: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "text",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "da37fa5713e9453695bc7273b7d2d2afbc3bc512f25bd829e2abb7ba0329adfe"
+}

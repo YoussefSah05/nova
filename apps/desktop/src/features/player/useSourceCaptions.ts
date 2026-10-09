@@ -15,6 +15,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invokeSession } from "./sessionCommands";
 
 import type { Cue } from "./CaptionOverlay";
+import type { CuesEvent } from "@/types/generated/CuesEvent";
 
 export type SourceCaptionStatus =
   | "idle"
@@ -27,6 +28,8 @@ export type SourceCaptionStatus =
 
 export interface SourceCaptionsState {
   cues: Cue[];
+  sessionId: string | null;
+  transcriptId: number | null;
   status: SourceCaptionStatus;
   /// Model-download progress (0..100) when known, else null.
   modelPct: number | null;
@@ -36,13 +39,6 @@ export interface SourceCaptionsState {
   downloadModel: () => void;
 }
 
-interface CuesEvent {
-  sessionId: string;
-  mediaKind: string;
-  mediaId: number;
-  language: string;
-  cues: Cue[];
-}
 interface StatusEvent {
   sessionId: string;
   mediaKind: string;
@@ -98,6 +94,9 @@ export function useSourceCaptions(
   audioTrack: AudioTrackSelection | null
 ): SourceCaptionsState {
   const [cues, setCues] = useState<Cue[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [transcriptId, setTranscriptId] = useState<number | null>(null);
+  const [stateKey, setStateKey] = useState<string | null>(null);
   const [status, setStatus] = useState<SourceCaptionStatus>("idle");
   const [modelPct, setModelPct] = useState<number | null>(null);
   const [language, setLanguage] = useState<string | null>(null);
@@ -106,7 +105,7 @@ export function useSourceCaptions(
   const trackIndex = audioTrack?.index ?? 0;
   const trackLang = audioTrack?.lang ?? null;
   // Re-key the session on (media, track): switching either tears down + restarts.
-  const sessionKey = `${profileId}:${media.kind}:${media.id}:${trackIndex}`;
+  const sessionKey = `${profileId}:${media.kind}:${media.id}:${trackIndex}:${trackLang}`;
   const eligible = active && media.kind !== "live";
 
   // Keep the latest clock getters in refs so the lifecycle effect need not
@@ -163,6 +162,8 @@ export function useSourceCaptions(
   // Reset everything when the media or selected audio track changes.
   useEffect(() => {
     setCues([]);
+    setTranscriptId(null);
+    setStateKey(null);
     setStatus("idle");
     setModelPct(null);
     setLanguage(null);
@@ -174,6 +175,10 @@ export function useSourceCaptions(
     let cancelled = false;
     const sessionId = crypto.randomUUID();
     sessionRef.current = sessionId;
+    setStateKey(sessionKey);
+    setSessionId(sessionId);
+    setTranscriptId(null);
+    setCues([]);
     const unlisteners: Array<() => void> = [];
 
     const subscriptions = Promise.all(
@@ -184,6 +189,7 @@ export function useSourceCaptions(
           if (p.sessionId !== sessionId || p.mediaKind !== media.kind || p.mediaId !== media.id)
             return;
           setLanguage(p.language);
+          setTranscriptId(p.transcriptId);
           setCues((prev) => mergeCues(prev, p.cues));
         }),
         listen<StatusEvent>("transcription:status", (ev) => {
@@ -249,7 +255,19 @@ export function useSourceCaptions(
     };
   }, [eligible, profileId, sessionKey, startSession, media.kind, media.id]);
 
-  return { cues, status, modelPct, language, error, downloadModel };
+  // Media/track changes must hide preceding dialogue during the very first
+  // render, before the lifecycle effects reset their stored state.
+  const current = eligible && stateKey === sessionKey;
+  return {
+    cues: current ? cues : [],
+    sessionId: current ? sessionId : null,
+    transcriptId: current ? transcriptId : null,
+    status: current ? status : "idle",
+    modelPct: current ? modelPct : null,
+    language: current ? language : null,
+    error: current ? error : null,
+    downloadModel,
+  };
 }
 
 /// Short status label for the caption menu / banner, or null when nothing needs

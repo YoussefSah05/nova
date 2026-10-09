@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO transcript_segments\n                     (transcript_id, seq, start_sec, end_sec, text, words_json)\n                   VALUES (?, ?, ?, ?, ?, ?)\n                   RETURNING id as \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "83f46607a899cd6aa6571a077169874787bd4c40417a81f7635fc31ba199dc1e"
+}
