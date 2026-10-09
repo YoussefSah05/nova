@@ -10,6 +10,10 @@ default:
 setup:
     bash scripts/bootstrap.sh
 
+# Install Nova's pinned Whisper CLI (no model downloads or system package changes)
+install-whisper:
+    bash scripts/install-whisper-cli.sh
+
 # Read-only stack inventory and drift checks (no model downloads)
 stack:
     pnpm stack

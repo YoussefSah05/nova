@@ -32,9 +32,30 @@ allowed: an inventory entry asserts the named version is present, not exclusive.
 Install mise using its [official setup guide](https://mise.jdx.dev/getting-started.html),
 then run `bash scripts/bootstrap.sh` (or `just setup` once just is available).
 Bootstrap installs the exact versions in mise.toml, uses frozen/locked dependency
-resolution and verifies the development tools. It does not download models, change
-user data, install Homebrew media packages or claim the native app is ready to ship.
+resolution and verifies the development tools. It also installs Nova's private Whisper CLI
+runtime as described below. It preserves profiles and model weights, does not install
+Homebrew media packages, and does not claim the native app is ready to ship.
 Those dependencies still need the versioned SDK workstream.
+
+### Whisper CLI runtime
+
+`just install-whisper` builds and repairs Nova's private CLI from checksum-pinned official
+whisper.cpp v1.8.3 source, matching the current whisper-rs backend. It requires CMake,
+a C/C++ toolchain, curl, and Node; macOS needs Xcode command-line tools and a Metal compiler.
+The macOS build enables Core ML with Metal fallback, embeds shaders, and links only system
+frameworks/libraries. No model download or shell PATH changes occur. Its source/build cache
+is under ignored `target/whisper-cli/`; the executable is installed under the app data
+folder's `runtime/whisper/whisper-cli` (readiness is checked before atomic replacement).
+
+At startup Nova registers that location. Driver resolution prefers `NOVA_WHISPER_BIN`,
+then the private CLI, executable `whisper-cli` on PATH, then standard Homebrew locations
+on macOS. It no longer probes generic `main` or legacy `whisper-cpp` names. CLI discovery
+works with the restricted PATH of GUI launches. An explicit override remains authoritative;
+repair/remove an invalid override rather than expecting automatic fallback.
+
+The installer supports macOS and Linux; native smoke qualification currently covers macOS.
+Private development installation does not bundle or sign the executable in a distributable
+app. Signed, clean-machine deployment remains a separate validation gate.
 
 Rust 1.95.0, Node 22.22.3, pnpm 9.15.4 and just 1.51.0 were selected from the inspected
 machine, without package upgrades. Rust was installed under the moving `stable`

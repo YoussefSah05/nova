@@ -68,6 +68,9 @@ pub fn run() {
             },
         )
         .setup(|app| {
+            // GUI launches have a restricted PATH. Resolve the private,
+            // verified CLI installed by `just install-whisper` independently.
+            nova_transcribe::whisper::configure_whisper_cli(&app.path().app_data_dir()?);
             // Artwork cache behind `nova-art://`: disposable, so it lives in the
             // cache dir; trimmed to its budget once per launch.
             let art_dir = app.path().app_cache_dir()?.join("artwork");

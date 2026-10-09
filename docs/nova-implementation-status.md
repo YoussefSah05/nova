@@ -8,6 +8,26 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Whisper CLI installation and discovery repair — 2026-10-09
+
+The reported `whisper-cli failed to start` error came from a missing executable; no old
+global Whisper installation was found. `just install-whisper` now builds checksum-pinned
+official whisper.cpp 1.8.3 with Core ML, Metal and embedded shaders, then atomically installs
+Nova's private runtime. Setup includes this step. Native startup registers the app-data
+location so GUI launches can find it without a shell PATH; explicit overrides remain
+authoritative. Existing models, profiles and resident-worker builds were preserved.
+
+Real transcription through the player's Rust CLI driver and installed turbo q5_0 model
+passed on the official public JFK sample: **46.81 seconds** on the first run, **1.55 seconds**
+on the warm repeat, both with two caption segments and 22 timed words. This qualifies local
+startup/inference/parsing; provider extraction, full playback synchronization, other languages
+and translation models still need their own validation. Restart an older running Nova to use
+the new discovery code.
+
+`just lint`, `just typecheck`, `just test` (730 Rust tests/doctests, 187 frontend tests),
+and the locked native desktop build pass. The opt-in real-model test passed separately;
+independent review found no blockers. See [the repair contract](implementation/whisper-cli-repair.md).
+
 ### Model controls and caption readiness — 2026-10-09
 
 Settings now shows all six supported models with effective internal/external availability,

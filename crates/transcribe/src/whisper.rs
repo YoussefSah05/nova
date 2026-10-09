@@ -17,8 +17,10 @@
 //! rely on. Adaptive, pause-aligned chunking is achieved at the session layer
 //! using whisper's natural segment boundaries instead.
 
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use nova_core::{RawTranscript, TranscriptSegment, TranscriptWord};
@@ -28,7 +30,7 @@ use tokio::process::{Child, Command};
 
 #[derive(Debug, Error)]
 pub enum WhisperError {
-    #[error("whisper-cli failed to start (is it installed / on PATH?): {0}")]
+    #[error("whisper-cli failed to start; repair Nova's runtime with `just install-whisper`: {0}")]
     Spawn(#[source] std::io::Error),
     #[error("whisper-cli exited with status {0:?}: {1}")]
     Failed(Option<i32>, String),
@@ -42,32 +44,98 @@ pub enum WhisperError {
     TimedOut,
 }
 
-/// Candidate binary names for whisper.cpp's CLI, newest naming first. The
-/// Homebrew `whisper-cpp` formula installs `whisper-cli`; older builds shipped
-/// `main`/`whisper-cpp`.
-const WHISPER_CANDIDATES: &[&str] = &["whisper-cli", "whisper-cpp", "main"];
+static MANAGED_CLI: OnceLock<PathBuf> = OnceLock::new();
 
-/// Resolve the whisper CLI binary. Honours `NOVA_WHISPER_BIN`; otherwise probes
-/// `PATH` for a known name, falling back to `whisper-cli` (so the error message
-/// names the expected binary when none is installed).
-pub fn whisper_bin() -> String {
-    if let Ok(explicit) = std::env::var("NOVA_WHISPER_BIN") {
-        return explicit;
-    }
-    for cand in WHISPER_CANDIDATES {
-        if binary_on_path(cand) {
-            return (*cand).to_string();
-        }
-    }
-    "whisper-cli".to_string()
+/// Register Nova's private runtime location at startup. Installation may occur
+/// later: discovery checks the file on each run, so no path is cached as missing.
+pub fn configure_whisper_cli(app_data_dir: &Path) {
+    let _ = MANAGED_CLI.set(app_data_dir.join("runtime/whisper/whisper-cli"));
 }
 
-/// True if `name` resolves to an executable on `PATH`.
-fn binary_on_path(name: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
+/// Prefer an explicit override, then Nova's managed CLI, PATH and Homebrew.
+/// Never select a generic `main`: it may be an unrelated executable.
+pub fn whisper_bin() -> PathBuf {
+    resolve_cli(
+        std::env::var_os("NOVA_WHISPER_BIN").as_deref(),
+        MANAGED_CLI.get().map(PathBuf::as_path),
+        std::env::var_os("PATH").as_deref(),
+        homebrew_cli_candidates(),
+    )
+}
+
+fn homebrew_cli_candidates() -> &'static [&'static str] {
+    if cfg!(target_os = "macos") {
+        &[
+            "/opt/homebrew/bin/whisper-cli",
+            "/usr/local/bin/whisper-cli",
+        ]
+    } else {
+        &[]
+    }
+}
+
+fn executable(path: &Path) -> bool {
+    let Ok(meta) = path.metadata() else {
         return false;
     };
-    std::env::split_paths(&paths).any(|dir| dir.join(name).is_file())
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 == 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn absolute(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|dir| dir.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        }
+    })
+}
+
+fn resolve_cli(
+    explicit: Option<&OsStr>,
+    managed: Option<&Path>,
+    paths: Option<&OsStr>,
+    known: &[&str],
+) -> PathBuf {
+    let on_path = |name: &OsStr| {
+        paths.and_then(|paths| {
+            std::env::split_paths(paths)
+                .map(|dir| dir.join(name))
+                .find(|path| executable(path))
+        })
+    };
+    if let Some(explicit) = explicit.filter(|value| !value.is_empty()) {
+        let path = Path::new(explicit);
+        return if path.components().count() == 1 && !path.is_absolute() {
+            on_path(explicit)
+                .map(|path| absolute(&path))
+                .unwrap_or_else(|| absolute(path))
+        } else {
+            absolute(path)
+        };
+    }
+    if let Some(path) = managed.filter(|path| executable(path)) {
+        return absolute(path);
+    }
+    if let Some(path) = on_path(OsStr::new("whisper-cli")) {
+        return absolute(&path);
+    }
+    if let Some(path) = known.iter().map(Path::new).find(|path| executable(path)) {
+        return absolute(path);
+    }
+    PathBuf::from("whisper-cli")
 }
 
 /// Options for a single transcription run.
@@ -445,6 +513,115 @@ fn tokens_to_words(tokens: &[RawToken]) -> Vec<TranscriptWord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn cli_fixture(dir: &Path, name: &str, mode: u32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        path.canonicalize().unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_cli_works_without_gui_path_and_wins_over_old_path_copies() {
+        let managed = tempfile::tempdir().unwrap();
+        let path_dir = tempfile::tempdir().unwrap();
+        let cli = cli_fixture(managed.path(), "whisper-cli", 0o755);
+        cli_fixture(path_dir.path(), "whisper-cli", 0o755);
+        let paths = std::env::join_paths([path_dir.path()]).unwrap();
+        assert_eq!(resolve_cli(None, Some(&cli), None, &[]), cli);
+        assert_eq!(resolve_cli(None, Some(&cli), Some(&paths), &[]), cli);
+        let explicit = cli_fixture(path_dir.path(), "custom-whisper", 0o755);
+        assert_eq!(
+            resolve_cli(Some(explicit.as_os_str()), Some(&cli), None, &[]),
+            explicit
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_checks_execution_permissions_and_never_launches_generic_main() {
+        let dir = tempfile::tempdir().unwrap();
+        cli_fixture(dir.path(), "main", 0o755);
+        cli_fixture(dir.path(), "whisper-cpp", 0o755);
+        let cli = cli_fixture(dir.path(), "whisper-cli", 0o644);
+        let paths = std::env::join_paths([dir.path()]).unwrap();
+        assert_eq!(
+            resolve_cli(None, Some(&cli), Some(&paths), &[]),
+            PathBuf::from("whisper-cli")
+        );
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(resolve_cli(None, None, Some(&paths), &[]), cli);
+        assert_eq!(resolve_cli(None, None, None, &[cli.to_str().unwrap()]), cli);
+        assert_eq!(
+            resolve_cli(Some(OsStr::new("whisper-cli")), None, Some(&paths), &[]),
+            cli
+        );
+    }
+
+    /// Deliberate device qualification, never a model download in CI.
+    #[tokio::test]
+    #[ignore = "requires NOVA_TEST_WHISPER_ROOT and NOVA_TEST_WHISPER_WAV (public JFK sample)"]
+    async fn installed_cli_transcribes_real_speech_with_the_player_driver() {
+        let root =
+            PathBuf::from(std::env::var_os("NOVA_TEST_WHISPER_ROOT").expect("app data root"));
+        let wav = PathBuf::from(std::env::var_os("NOVA_TEST_WHISPER_WAV").expect("public sample"));
+        configure_whisper_cli(&root);
+        assert_eq!(
+            whisper_bin(),
+            root.join("runtime/whisper/whisper-cli")
+                .canonicalize()
+                .unwrap()
+        );
+        let model = crate::default_model();
+        let paths = crate::model_paths(&root.join("models/whisper"), &model);
+        let out = tempfile::tempdir().unwrap();
+        let opts = TranscribeOptions {
+            model_id: model.id.into(),
+            dtw_preset: model.dtw_preset.into(),
+            language: Some("eng".into()),
+            max_len: 60,
+            initial_prompt: None,
+        };
+        let started = std::time::Instant::now();
+        let transcript =
+            transcribe_wav(&wav, &paths.ggml, &out.path().join("speech"), &opts, |_| {})
+                .await
+                .unwrap();
+        let text = transcript
+            .segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        assert!(
+            text.contains("country"),
+            "public reference speech was not recognized"
+        );
+        assert_eq!(transcript.language, "en");
+        let words = transcript
+            .segments
+            .iter()
+            .filter_map(|s| s.words.as_ref())
+            .flatten()
+            .collect::<Vec<_>>();
+        assert!(words.len() > 10);
+        for word in &words {
+            assert!(word.start_sec.is_finite() && word.end_sec.is_finite());
+            assert!(word.start_sec >= 0.0 && word.end_sec >= word.start_sec);
+            assert!(word.end_sec <= 12.0);
+        }
+        eprintln!(
+            "Whisper real-model smoke: {:.2}s to caption data, {} segments, {} words",
+            started.elapsed().as_secs_f64(),
+            transcript.segments.len(),
+            words.len()
+        );
+    }
 
     #[cfg(unix)]
     #[tokio::test]
