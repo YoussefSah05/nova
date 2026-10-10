@@ -87,6 +87,7 @@ pub struct SessionPolicy {
     resume_at: Option<f64>,
     pending: Option<PendingResume>,
     ready: bool,
+    loaded_position: Option<f64>,
     ended: bool,
     failed: bool,
     healthy: bool,
@@ -122,6 +123,7 @@ impl SessionPolicy {
             resume_at,
             pending: None,
             ready: false,
+            loaded_position: None,
             ended: false,
             failed: false,
             healthy: false,
@@ -131,6 +133,15 @@ impl SessionPolicy {
             position_sec: 0.0,
             duration_sec: None,
         }
+    }
+
+    /// Actual engine position only once startup resume has settled. A source
+    /// without a duration can still caption when there is no seek to perform.
+    fn caption_position(&self) -> Option<f64> {
+        if self.failed || self.ended || self.resume_at.is_some() || self.pending.is_some() {
+            return None;
+        }
+        self.loaded_position
     }
 
     /// A live stream that was playing: after the Mac sleeps its connection
@@ -174,6 +185,12 @@ impl SessionPolicy {
         }
         if self.ended || self.failed {
             return actions;
+        }
+        if matches!(phase, MpvPlaybackPhase::Playing | MpvPlaybackPhase::Paused)
+            && position_sec.is_finite()
+            && position_sec >= 0.0
+        {
+            self.loaded_position = Some(position_sec);
         }
         let was_active = self.active;
         self.active = matches!(
@@ -381,6 +398,10 @@ enum Msg {
         token: Option<String>,
         done: oneshot::Sender<()>,
     },
+    CaptionPosition {
+        token: String,
+        done: oneshot::Sender<Option<f64>>,
+    },
     CaptionMode {
         token: String,
         mode: Option<String>,
@@ -467,6 +488,16 @@ impl PlaybackCoordinator {
             done,
         });
         let _ = wait.await;
+    }
+
+    /// Read startup readiness in order with native snapshots and resume seeks.
+    pub async fn caption_position(&self, token: &str) -> Option<f64> {
+        let (done, wait) = oneshot::channel();
+        let _ = self.tx.send(Msg::CaptionPosition {
+            token: token.to_string(),
+            done,
+        });
+        wait.await.ok().flatten()
     }
 
     /// The user's caption selection, persisted with the session's progress.
@@ -596,6 +627,13 @@ impl PlaybackCoordinator {
                         expected = None;
                     }
                     let _ = done.send(());
+                }
+                Msg::CaptionPosition { token, done } => {
+                    let position = active
+                        .as_ref()
+                        .filter(|s| s.token == token)
+                        .and_then(|s| s.policy.caption_position());
+                    let _ = done.send(position);
                 }
                 Msg::CaptionMode { token, mode } => {
                     if let Some(session) = active.as_mut().filter(|s| s.token == token) {
@@ -941,6 +979,28 @@ mod tests {
             p.observe(Playing, 0.0, D, 400),
             vec![PolicyAction::Seek(600.0)]
         );
+    }
+
+    #[test]
+    fn captions_wait_for_resume_acknowledgement_or_bounded_failure() {
+        let mut p = SessionPolicy::new(false, Some((600.0, false)));
+        assert_eq!(p.caption_position(), None);
+        p.observe(Playing, 0.0, D, 0);
+        assert_eq!(p.caption_position(), None);
+        p.observe(Playing, 0.5, D, 500);
+        assert_eq!(p.caption_position(), None);
+        p.observe(Playing, 600.1, D, 600);
+        assert_eq!(p.caption_position(), Some(600.1));
+        let mut failed = SessionPolicy::new(false, Some((600.0, false)));
+        for now in [0, 2000, 4000] {
+            failed.observe(Playing, 1.0, D, now);
+            assert_eq!(failed.caption_position(), None);
+        }
+        failed.observe(Playing, 6.0, D, 6000);
+        assert_eq!(failed.caption_position(), Some(6.0));
+        let mut unknown_duration = SessionPolicy::new(false, None);
+        unknown_duration.observe(Playing, 2.0, None, 0);
+        assert_eq!(unknown_duration.caption_position(), Some(2.0));
     }
 
     #[test]

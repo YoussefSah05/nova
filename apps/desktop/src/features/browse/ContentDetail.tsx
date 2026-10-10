@@ -1,3 +1,4 @@
+import { useAudioTrackChoice } from "./detail/useAudioTrackChoice";
 //! Per-content "starting screen" for movies (the frame is shared with series,
 //! `detail/TitleHero`): backdrop, title logo, facts (rating, runtime, age
 //! rating, cast), and the actions: Play/Resume, versions, preferred audio,
@@ -6,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, Headphones, Languages, Play } from "lucide-react";
+import { ArrowLeft, ChevronDown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -16,7 +17,6 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useProfileSettings } from "@/features/settings/useProfileSettings";
 import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
 import { fetchChannelsInGroup, movieToItem, type BrowseItem } from "./queries";
@@ -30,27 +30,18 @@ import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
 import { canonicalMovieQuery, useRelatedTitles, useTitleFacts } from "./detail/data";
 import { metaLine } from "./detail/meta";
-import { AudioLanguageBanner, MovieAudioLanguageBanner } from "./detail/AudioLanguageBanner";
+import { AudioLanguageBanner } from "./detail/AudioLanguageBanner";
+import type { PlaybackLaunchOptions } from "@/features/player/playbackLaunch";
+import { AudioTrackPicker, PlayWithCaptions } from "./detail/PlaybackChoices";
+import { useMovieAudioTarget } from "./detail/useAudioLanguages";
 import { useScreenActive } from "@/lib/screenActive";
-
-/// Preferred audio language choices. `null` = keep the stream's original track.
-const AUDIO_LANGS: { value: string | null; label: string }[] = [
-  { value: null, label: "Original" },
-  { value: "en", label: "English" },
-  { value: "fr", label: "French" },
-  { value: "ar", label: "Arabic" },
-  { value: "es", label: "Spanish" },
-  { value: "de", label: "German" },
-  { value: "it", label: "Italian" },
-  { value: "pt", label: "Portuguese" },
-];
 
 interface ContentDetailProps {
   profileId: string;
   sourceId: number | null;
   item: BrowseItem;
   onBack: () => void;
-  onPlay: (item: BrowseItem) => void;
+  onPlay: (item: BrowseItem, options?: PlaybackLaunchOptions) => void;
   onToggleFavorite: (item: BrowseItem, next: boolean) => void;
   onToggleWatchlist: (item: BrowseItem, next: boolean) => void;
   /// Open another title (from "More like this" or the collection).
@@ -69,7 +60,7 @@ function LiveBundleDetail({
   sourceId: number | null;
   item: BrowseItem;
   onBack: () => void;
-  onPlay: (item: BrowseItem) => void;
+  onPlay: (item: BrowseItem, options?: PlaybackLaunchOptions) => void;
 }) {
   const [channels, setChannels] = useState<BrowseItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -165,7 +156,7 @@ export function ContentDetail({
   onToggleWatchlist,
   onOpenTitle,
 }: ContentDetailProps) {
-  const { settings, setSettings } = useProfileSettings(profileId);
+  const [version, setVersion] = useState<{ owner: string; key: string } | null>(null);
   // Canonical movie detail (entity-owned resume state); the card's summary
   // renders immediately and the detail refines it when it arrives.
   const detailQuery = useQuery({
@@ -180,6 +171,27 @@ export function ContentDetail({
   const movieSubject = item.kind === "movie" ? titleArtSubject(item) : null;
   const { data: facts } = useTitleFacts(profileId, movieSubject);
   const { data: related } = useRelatedTitles(profileId, sourceId, movieSubject);
+
+  const versions = [item, ...(item.variants ?? [])];
+  const selectedVersion =
+    version?.owner === item.key ? (versions.find((v) => v.key === version.key) ?? item) : item;
+  const picked = detail?.variants.find((variant) => variant.available && variant.picked);
+  const source = useMovieAudioTarget(
+    profileId,
+    item.entityId,
+    picked?.variantId,
+    item.kind === "movie" && !!detail
+  );
+  const audioTarget =
+    selectedVersion.kind === "vod"
+      ? { mediaKind: "vod" as const, mediaId: selectedVersion.id }
+      : (source.data ?? null);
+  const audioChoice = useAudioTrackChoice(profileId, audioTarget);
+  const resolvingAudio =
+    item.kind === "movie" && (detailQuery.isPending || (!!detail && source.isPending));
+  const audioError = item.kind === "movie" && (detailQuery.isError || source.isError);
+  const retryAudio = () =>
+    detailQuery.isError ? void detailQuery.refetch() : void source.refetch();
 
   // Live brand bundle → channel grid; movies → the overview hero below.
   if (item.kind === "live") {
@@ -197,9 +209,6 @@ export function ContentDetail({
   const overview = movie?.overview ?? item.vod?.overview ?? null;
   const resume = detail?.resume && !detail.resume.completed ? detail.resume : null;
   const playLabel = resume ? `Resume · ${formatClock(resume.positionSec)}` : "Play";
-  const versions = [item, ...(item.variants ?? [])];
-  const audioLabel =
-    AUDIO_LANGS.find((l) => l.value === settings.preferredAudioLang)?.label ?? "Original";
 
   return (
     <TitleHero
@@ -212,84 +221,53 @@ export function ContentDetail({
       meta={metaLine(facts, { kind: "movie", year: movie?.year, genre: movie?.category })}
       tagline={facts?.tagline}
       audioBanner={
-        item.kind === "vod" ? (
-          <AudioLanguageBanner
-            profileId={profileId}
-            target={{ mediaKind: "vod", mediaId: item.id }}
-            sourceNote="Selected version"
-          />
-        ) : (
-          <MovieAudioLanguageBanner
-            profileId={profileId}
-            entityId={item.entityId}
-            detail={detail}
-            loadingDetail={detailQuery.isPending}
-            detailError={detailQuery.isError}
-            onRetryDetail={() => void detailQuery.refetch()}
-          />
-        )
+        <AudioLanguageBanner
+          profileId={profileId}
+          target={audioTarget}
+          sourceNote="Selected version"
+          resolving={resolvingAudio}
+          sourceError={audioError}
+          onRetrySource={retryAudio}
+        />
       }
       overview={overview ?? facts?.plot}
       onBack={onBack}
       actions={
         <>
-          {/* Version picker (quality/backup variants) sits next to Play. */}
-          {versions.length > 1 ? (
-            <div className="flex items-center overflow-hidden rounded-md">
-              <Button onClick={() => onPlay(item)} className="gap-2 rounded-r-none">
-                <Play className="h-4 w-4 fill-current" /> {playLabel}
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button className="rounded-l-none border-l border-primary-foreground/20 px-2">
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="max-h-72 w-64 overflow-auto">
-                  <DropdownMenuLabel>Versions</DropdownMenuLabel>
-                  {versions.map((v, i) => (
-                    <DropdownMenuCheckItem key={v.key} onSelect={() => onPlay(v)}>
-                      {variantLabel(v, i)}
-                    </DropdownMenuCheckItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          ) : (
-            <Button onClick={() => onPlay(item)} className="gap-2">
-              <Play className="h-4 w-4 fill-current" /> {playLabel}
-            </Button>
+          <PlayWithCaptions
+            label={playLabel}
+            audioTrack={audioChoice.launchTrack}
+            onPlay={(options) => onPlay(selectedVersion, options)}
+          />
+          {versions.length > 1 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="secondary" className="gap-2">
+                  Version: {variantLabel(selectedVersion, versions.indexOf(selectedVersion))}
+                  <ChevronDown className="h-4 w-4" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="max-h-72 w-64 overflow-auto">
+                <DropdownMenuLabel>Versions</DropdownMenuLabel>
+                {versions.map((v, i) => (
+                  <DropdownMenuCheckItem
+                    key={v.key}
+                    checked={v.key === selectedVersion.key}
+                    onSelect={() => setVersion({ owner: item.key, key: v.key })}
+                  >
+                    {variantLabel(v, i)}
+                  </DropdownMenuCheckItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
-
-          {/* Preferred audio language (applied when playback starts). */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="secondary" className="gap-2">
-                <Headphones className="h-4 w-4" /> Audio: {audioLabel}
-                <ChevronDown className="h-4 w-4 opacity-70" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-48">
-              <DropdownMenuLabel>Preferred audio</DropdownMenuLabel>
-              {AUDIO_LANGS.map((l) => (
-                <DropdownMenuCheckItem
-                  key={l.label}
-                  checked={settings.preferredAudioLang === l.value}
-                  onSelect={() => setSettings({ preferredAudioLang: l.value })}
-                >
-                  {l.label}
-                </DropdownMenuCheckItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
+          <AudioTrackPicker
+            choice={audioChoice}
+            resolving={resolvingAudio}
+            sourceError={audioError}
+            onRetrySource={retryAudio}
+          />
           <TrailerButton url={facts?.trailerUrl} />
-
-          {/* Translation arrives in a later phase. */}
-          <Button variant="secondary" disabled className="gap-2 opacity-60">
-            <Languages className="h-4 w-4" /> Translate
-            <span className="rounded bg-white/15 px-1 text-[10px] uppercase">Soon</span>
-          </Button>
 
           <WatchlistButton
             inWatchlist={item.isInWatchlist}

@@ -1,3 +1,4 @@
+import { useAudioTrackChoice } from "./detail/useAudioTrackChoice";
 //! A series' page, on the same frame as a movie's: backdrop and title logo,
 //! a meta line (years · rating · seasons · score), tagline and overview, the
 //! main action (Resume / Next episode / Play S01E01), trailer, watchlist and
@@ -5,7 +6,6 @@
 //! tabs (posters when TMDB has them) with rich episode rows.
 
 import { useEffect, useMemo, useState } from "react";
-import { Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { EpisodeView, SeriesSummary } from "@/types";
@@ -18,6 +18,8 @@ import { SeasonTabs } from "./detail/SeasonTabs";
 import { ShowProgress } from "./detail/ShowProgress";
 import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
+import type { PlaybackLaunchOptions } from "@/features/player/playbackLaunch";
+import { AudioTrackPicker, PlayWithCaptions } from "./detail/PlaybackChoices";
 import { AudioLanguageBanner } from "./detail/AudioLanguageBanner";
 import {
   useRelatedTitles,
@@ -43,7 +45,7 @@ interface SeriesDetailProps {
   onBack: () => void;
   onToggleFavorite: (next: boolean) => Promise<void> | void;
   onToggleWatchlist: (next: boolean) => Promise<void> | void;
-  onPlayEpisode: (episode: PlayableEpisode) => void;
+  onPlayEpisode: (episode: PlayableEpisode, options?: PlaybackLaunchOptions) => void;
   /// Open another title and toggle its flags (from "More like this").
   onOpenTitle: (item: BrowseItem) => void;
   onToggleItemFavorite: (item: BrowseItem, next: boolean) => void;
@@ -100,17 +102,19 @@ export function SeriesDetail({
   const seasonName = (n: number) =>
     facts?.seasons.find((s) => s.number === n)?.name ?? (n === 0 ? "Specials" : `Season ${n}`);
 
-  const playEpisode = (ep: EpisodeView) =>
-    onPlayEpisode({ id: ep.id, label: episodeViewLabel(ep, true), stillUrl: ep.stillUrl });
-  const playAction = () => {
+  const audioTarget = action ? { mediaKind: "episode" as const, mediaId: action.episodeId } : null;
+  const audioChoice = useAudioTrackChoice(profileId, audioTarget);
+  const playEpisode = (ep: EpisodeView, options?: PlaybackLaunchOptions) =>
+    onPlayEpisode({ id: ep.id, label: episodeViewLabel(ep, true), stillUrl: ep.stillUrl }, options);
+  const playAction = (options: PlaybackLaunchOptions) => {
     if (!action) return;
     const listed = episodes.data?.find((e) => e.id === action.episodeId);
-    if (listed) return playEpisode(listed);
+    if (listed) return playEpisode(listed, options);
     const label =
       resume?.episodeTitle && resume.mediaId === action.episodeId
         ? `${action.episodeCode} — ${resume.episodeTitle}`
         : action.episodeCode;
-    onPlayEpisode({ id: action.episodeId, label, stillUrl: resume?.posterUrl ?? null });
+    onPlayEpisode({ id: action.episodeId, label, stillUrl: resume?.posterUrl ?? null }, options);
   };
 
   const next = facts?.nextEpisode;
@@ -143,9 +147,13 @@ export function SeriesDetail({
       onBack={onBack}
       actions={
         <>
-          <Button onClick={playAction} disabled={!action} className="gap-2">
-            <Play className="h-4 w-4 fill-current" /> {action?.label ?? "Play"}
-          </Button>
+          <PlayWithCaptions
+            onPlay={playAction}
+            disabled={!action}
+            label={action?.label ?? "Play"}
+            audioTrack={audioChoice.launchTrack}
+          />
+          <AudioTrackPicker choice={audioChoice} resolving={all.isPending} />
           <TrailerButton url={facts?.trailerUrl} />
           <WatchlistButton
             inWatchlist={series.isInWatchlist}
@@ -194,7 +202,7 @@ export function SeriesDetail({
               episodes={episodes.data}
               loading={all.isLoading || episodes.isLoading}
               currentId={action?.episodeId}
-              onPlay={playEpisode}
+              onPlay={(episode) => playEpisode(episode)}
             />
           </>
         )}

@@ -233,6 +233,7 @@ pub fn run() {
             commands::playback::record_watch_progress,
             commands::playback::get_resume_position,
             commands::playback::playback_caption_mode,
+            commands::playback::playback_caption_position,
             // Phase 6 — Transcription (VOD), streaming caption sessions
             commands::transcription::get_model_status,
             commands::models::list_internal_models,

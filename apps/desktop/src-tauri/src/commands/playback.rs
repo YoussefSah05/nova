@@ -111,6 +111,20 @@ pub async fn playback_caption_mode(
     Ok(())
 }
 
+/// Startup clock for captions; null while the coordinator is applying resume.
+#[tauri::command]
+pub async fn playback_caption_position(
+    token: String,
+    state: State<'_, AppState>,
+) -> Result<Option<f64>, ApiError> {
+    let snapshot = state
+        .mpv_engine
+        .state(Some(&token))
+        .map_err(|e| ApiError::Internal(format!("native player state failed: {e}")))?;
+    state.playback.observe(snapshot).await;
+    Ok(state.playback.caption_position(&token).await)
+}
+
 #[tauri::command]
 pub async fn mpv_player_state(
     token: Option<String>,

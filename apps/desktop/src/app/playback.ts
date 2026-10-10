@@ -5,14 +5,19 @@ import { createContext, useContext } from "react";
 
 import type { PlayMedia } from "@/features/player/PlayerModal";
 import type { BrowseItem } from "@/features/browse/queries";
+import type { PlaybackLaunchOptions } from "@/features/player/playbackLaunch";
 
 export interface Playback {
   /// Play a catalog card: Rust picks a canonical movie's source.
-  playItem: (item: BrowseItem) => Promise<void>;
+  playItem: (item: BrowseItem, options?: PlaybackLaunchOptions) => Promise<void>;
   /// Play one chosen source of a canonical movie (Rust checks it belongs).
-  playVariant: (item: BrowseItem, variantId: string) => Promise<void>;
+  playVariant: (
+    item: BrowseItem,
+    variantId: string,
+    options?: PlaybackLaunchOptions
+  ) => Promise<void>;
   /// Play resolved media (an episode, a channel, a Continue Watching card).
-  playMedia: (media: PlayMedia) => void;
+  playMedia: (media: PlayMedia, options?: PlaybackLaunchOptions) => void;
 }
 
 /// Stable actions: cards that start playback never re-render because the

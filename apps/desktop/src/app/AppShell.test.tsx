@@ -605,11 +605,14 @@ describe("AppShell", () => {
 
     const cards = await screen.findAllByRole("button", { name: "Review Movie" });
     await userEvent.click(cards[0]);
-    const backup = await screen.findByRole("button", { name: /^Play Backup 4K/ });
+    const backup = await screen.findByRole("button", { name: /^Select Backup 4K/ });
     expect(
-      screen.getByRole("button", { name: /^Play Primary FHD \(Nova's pick\)/ })
+      screen.getByRole("button", { name: /^Select Primary FHD \(Nova's pick\)/ })
     ).toBeInTheDocument();
     await userEvent.click(backup);
+    expect(backup).toHaveAttribute("aria-pressed", "true");
+    expect(mocks.invoke.mock.calls.some(([command]) => command === "mpv_open_stream")).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: /^(Play|Resume)$/ }));
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("resolve_movie_playback", {
         profileId: profile.id,

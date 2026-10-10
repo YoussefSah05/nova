@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -89,6 +89,7 @@ it("lists channels with what's on, says when there is no guide, and moves with t
   first.focus();
   await userEvent.keyboard("{ArrowDown}");
   expect(onSelect).toHaveBeenCalledWith(channels[1]);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Channel 2" })).toHaveFocus());
   await userEvent.keyboard("{Enter}");
-  expect(onPlay).toHaveBeenCalledWith(channels[0]);
+  expect(onPlay).toHaveBeenCalledWith(channels[1]);
 });

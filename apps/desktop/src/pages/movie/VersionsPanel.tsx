@@ -1,5 +1,4 @@
-//! The film's sources, with Nova's pick explained. Choosing one plays it
-//! (Rust checks it belongs to the film).
+//! Select a source before choosing its audio track and caption startup mode.
 
 import { memo } from "react";
 
@@ -10,11 +9,13 @@ import { orderVersions, versionReason } from "./versions";
 export const VersionsPanel = memo(function VersionsPanel({
   variants,
   preferredLang,
-  onPlay,
+  selectedVariantId,
+  onSelect,
 }: {
   variants: VariantSummary[];
   preferredLang: string | null;
-  onPlay: (variantId: string) => void;
+  selectedVariantId?: string;
+  onSelect: (variantId: string) => void;
 }) {
   if (variants.length === 0) return null;
   const ordered = orderVersions(variants);
@@ -37,8 +38,9 @@ export const VersionsPanel = memo(function VersionsPanel({
           key={v.variantId}
           type="button"
           disabled={!v.available}
-          onClick={() => onPlay(v.variantId)}
-          aria-label={`Play ${v.sourceName}${v.badges.length ? ` ${v.badges.join(" ")}` : ""}${v.picked ? " (Nova's pick)" : ""}`}
+          onClick={() => onSelect(v.variantId)}
+          aria-pressed={selectedVariantId === v.variantId}
+          aria-label={`Select ${v.sourceName}${v.badges.length ? ` ${v.badges.join(" ")}` : ""}${v.picked ? " (Nova's pick)" : ""}`}
           aria-describedby={`version-why-${v.variantId}`}
           className={cn(
             "flex flex-col gap-1.5 rounded-xl border p-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
@@ -56,6 +58,9 @@ export const VersionsPanel = memo(function VersionsPanel({
               )}
             />
             <span className="truncate text-sm font-medium">{v.sourceName}</span>
+            {selectedVariantId === v.variantId && (
+              <span className="text-xs text-primary">Selected</span>
+            )}
             <span className="flex-1" />
             {v.badges.map((b) => (
               <span

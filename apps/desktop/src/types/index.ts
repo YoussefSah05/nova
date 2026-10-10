@@ -1,4 +1,5 @@
 export type { AudioLanguages } from "./generated/AudioLanguages";
+export type { AudioTrackInfo } from "./generated/AudioTrackInfo";
 
 // ── Profiles ──────────────────────────────────────────────────────────────────
 

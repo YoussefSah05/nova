@@ -1,21 +1,13 @@
+import { useAudioTrackChoice } from "@/features/browse/detail/useAudioTrackChoice";
 //! A film's page: full-bleed text-free backdrop with the TMDB logo, the facts
 //! that matter (with where the rating comes from), resume, the film's sources
 //! with Nova's pick explained, cast and credits, its saga, and more like it.
 
-import { memo, useMemo } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Headphones, Languages, Play } from "lucide-react";
+import { memo, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import type { CanonicalMediaDetail, CanonicalMediaSummary, TitleFactsView } from "@/types";
 import { Artwork } from "@/components/Artwork";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuCheckItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { AmbientGlow, useAmbientColor } from "@/lib/ambient";
 import { useArtworkSrc } from "@/lib/artwork";
 import { useScreenActive } from "@/lib/screenActive";
@@ -27,7 +19,7 @@ import { PosterFallback } from "@/features/browse/PosterFallback";
 import { TitleLogo } from "@/features/browse/TitleLogo";
 import { CastStrip } from "@/features/browse/detail/CastStrip";
 import { TrailerButton } from "@/features/browse/detail/TrailerButton";
-import { MovieAudioLanguageBanner } from "@/features/browse/detail/AudioLanguageBanner";
+import { AudioLanguageBanner } from "@/features/browse/detail/AudioLanguageBanner";
 import {
   canonicalMovieQuery,
   useRelatedTitles,
@@ -42,18 +34,10 @@ import { useActivate } from "@/app/useActivate";
 import { useLibraryActions } from "@/app/libraryActions";
 import { usePlayback } from "@/app/playback";
 import { useSession } from "@/app/session";
+import { AudioTrackPicker, PlayWithCaptions } from "@/features/browse/detail/PlaybackChoices";
+import { useMovieAudioTarget } from "@/features/browse/detail/useAudioLanguages";
+import type { PlaybackLaunchOptions } from "@/features/player/playbackLaunch";
 import { VersionsPanel } from "./movie/VersionsPanel";
-
-const AUDIO_LANGS: { value: string | null; label: string }[] = [
-  { value: null, label: "Original" },
-  { value: "en", label: "English" },
-  { value: "fr", label: "French" },
-  { value: "ar", label: "Arabic" },
-  { value: "es", label: "Spanish" },
-  { value: "de", label: "German" },
-  { value: "it", label: "Italian" },
-  { value: "pt", label: "Portuguese" },
-];
 
 /// `1:34:10` / `34:10`.
 function clock(totalSec: number): string {
@@ -77,11 +61,10 @@ function formatRelease(date: string): string {
 
 export function MoviePage({ item }: { item: BrowseItem }) {
   const { profile, activeSourceId } = useSession();
-  const qc = useQueryClient();
   const { playItem, playVariant } = usePlayback();
   const activate = useActivate();
   const { toggleFavorite, toggleWatchlist } = useLibraryActions();
-  const { settings, saveSettings } = useProfileSettings(profile.id);
+  const { settings } = useProfileSettings(profile.id);
   const detailQuery = useQuery({
     subscribed: useScreenActive(),
     ...canonicalMovieQuery(profile.id, item.entityId),
@@ -95,14 +78,15 @@ export function MoviePage({ item }: { item: BrowseItem }) {
   const { data: facts } = useTitleFacts(profile.id, subject);
   const { data: related } = useRelatedTitles(profile.id, activeSourceId, subject);
 
-  const setAudio = (value: string | null) => {
-    // Nova's pick depends on the audio language: refetch once it is saved.
-    void saveSettings({ preferredAudioLang: value }).then(() =>
-      qc.invalidateQueries({
-        queryKey: canonicalMovieQuery(profile.id, item.entityId).queryKey,
-      })
-    );
-  };
+  const [version, setVersion] = useState<{ entity: string | undefined; id: string } | null>(null);
+  const picked = detail?.variants.find((variant) => variant.available && variant.picked);
+  const selectedVariantId = version?.entity === item.entityId ? version?.id : picked?.variantId;
+  const source = useMovieAudioTarget(profile.id, item.entityId, selectedVariantId, !!detail);
+  const audioChoice = useAudioTrackChoice(profile.id, source.data ?? null);
+  const resolvingAudio = detailQuery.isPending || (!!detail && source.isPending);
+  const audioError = detailQuery.isError || source.isError;
+  const retryAudio = () =>
+    detailQuery.isError ? void detailQuery.refetch() : void source.refetch();
 
   return (
     <article className="relative min-h-screen bg-background pb-24">
@@ -113,19 +97,30 @@ export function MoviePage({ item }: { item: BrowseItem }) {
         facts={facts}
         logoUrl={art?.logoUrl ?? null}
         backdropUrl={art?.backdropUrl ?? movie?.backdropUrl ?? item.posterUrl}
-        audio={settings.preferredAudioLang ?? null}
-        audioBanner={
-          <MovieAudioLanguageBanner
-            profileId={profile.id}
-            entityId={item.entityId}
-            detail={detail}
-            loadingDetail={detailQuery.isPending}
-            detailError={detailQuery.isError}
-            onRetryDetail={() => void detailQuery.refetch()}
+        audioPicker={
+          <AudioTrackPicker
+            choice={audioChoice}
+            resolving={resolvingAudio}
+            sourceError={audioError}
+            onRetrySource={retryAudio}
           />
         }
-        onAudio={setAudio}
-        onPlay={() => void playItem(item)}
+        launchAudioTrack={audioChoice.launchTrack}
+        audioBanner={
+          <AudioLanguageBanner
+            profileId={profile.id}
+            target={source.data ?? null}
+            sourceNote="Selected version"
+            resolving={resolvingAudio}
+            sourceError={audioError}
+            onRetrySource={retryAudio}
+          />
+        }
+        onPlay={(options) =>
+          selectedVariantId
+            ? void playVariant(item, selectedVariantId, options)
+            : void playItem(item, options)
+        }
         onToggleFavorite={(next) => void toggleFavorite(item, next)}
         onToggleWatchlist={(next) => void toggleWatchlist(item, next)}
         versions={
@@ -133,7 +128,10 @@ export function MoviePage({ item }: { item: BrowseItem }) {
             <VersionsPanel
               variants={detail.variants}
               preferredLang={settings.preferredAudioLang ?? null}
-              onPlay={(variantId) => void playVariant(item, variantId)}
+              selectedVariantId={selectedVariantId}
+              onSelect={(variantId) => {
+                setVersion({ entity: item.entityId, id: variantId });
+              }}
             />
           ) : null
         }
@@ -184,9 +182,9 @@ function MovieHero({
   facts,
   logoUrl,
   backdropUrl,
-  audio,
+  audioPicker,
   audioBanner,
-  onAudio,
+  launchAudioTrack,
   onPlay,
   onToggleFavorite,
   onToggleWatchlist,
@@ -198,10 +196,10 @@ function MovieHero({
   facts: TitleFactsView | undefined;
   logoUrl: string | null;
   backdropUrl: string | null | undefined;
-  audio: string | null;
+  audioPicker: React.ReactNode;
+  launchAudioTrack: PlaybackLaunchOptions["audioTrack"];
   audioBanner: React.ReactNode;
-  onAudio: (value: string | null) => void;
-  onPlay: () => void;
+  onPlay: (options: PlaybackLaunchOptions) => void;
   onToggleFavorite: (next: boolean) => void;
   onToggleWatchlist: (next: boolean) => void;
   versions: React.ReactNode;
@@ -217,7 +215,6 @@ function MovieHero({
   const ratingSource = facts?.ratingSource ?? movie?.ratingSource ?? null;
   const runtime = facts?.runtimeMin ?? movie?.runtimeMin ?? null;
   const genres = movie?.genres?.length ? movie.genres : movie?.category ? [movie.category] : [];
-  const audioLabel = AUDIO_LANGS.find((l) => l.value === audio)?.label ?? "Original";
   const overview = movie?.overview ?? facts?.plot ?? null;
 
   return (
@@ -317,10 +314,12 @@ function MovieHero({
             </div>
           )}
           <div className="mt-1 flex flex-wrap items-center gap-2.5">
-            <Button size="lg" onClick={onPlay} className="gap-2.5">
-              <Play className="h-4 w-4 fill-current" strokeWidth={1.5} aria-hidden />
-              {resume ? `Resume · ${clock(resume.positionSec)}` : "Play"}
-            </Button>
+            <PlayWithCaptions
+              size="lg"
+              onPlay={onPlay}
+              audioTrack={launchAudioTrack}
+              label={resume ? `Resume · ${clock(resume.positionSec)}` : "Play"}
+            />
             <WatchlistButton
               inWatchlist={item.isInWatchlist}
               onToggle={onToggleWatchlist}
@@ -332,31 +331,7 @@ function MovieHero({
               label={item.title}
             />
             <TrailerButton url={facts?.trailerUrl} />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="secondary" className="gap-2">
-                  <Headphones className="h-4 w-4" strokeWidth={1.5} aria-hidden /> Audio:{" "}
-                  {audioLabel}
-                  <ChevronDown className="h-4 w-4 opacity-70" strokeWidth={1.5} aria-hidden />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-48">
-                <DropdownMenuLabel>Preferred audio</DropdownMenuLabel>
-                {AUDIO_LANGS.map((l) => (
-                  <DropdownMenuCheckItem
-                    key={l.label}
-                    checked={audio === l.value}
-                    onSelect={() => onAudio(l.value)}
-                  >
-                    {l.label}
-                  </DropdownMenuCheckItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button variant="secondary" disabled className="gap-2 opacity-60">
-              <Languages className="h-4 w-4" strokeWidth={1.5} aria-hidden /> Translate
-              <span className="rounded bg-white/15 px-1 text-xs uppercase">Soon</span>
-            </Button>
+            {audioPicker}
           </div>
         </div>
         {versions}

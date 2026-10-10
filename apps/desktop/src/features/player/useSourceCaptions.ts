@@ -17,6 +17,7 @@ import { invokeSession } from "./sessionCommands";
 import type { Cue } from "./CaptionOverlay";
 import type { CaptionStatusEvent } from "@/types/generated/CaptionStatusEvent";
 import type { CuesEvent } from "@/types/generated/CuesEvent";
+import type { LocalModelStatus } from "@/types/generated/LocalModelStatus";
 
 export type SourceCaptionStatus =
   | "idle"
@@ -41,6 +42,7 @@ export interface SourceCaptionsState {
   error: string | null;
   /// Called by the UI to confirm the one-time model download.
   downloadModel: () => void;
+  retry: () => void;
 }
 
 interface ModelProgress {
@@ -90,6 +92,8 @@ export function useSourceCaptions(
   audioTrack: AudioTrackSelection | null
 ): SourceCaptionsState {
   const [cues, setCues] = useState<Cue[]>([]);
+  const [retryCount, setRetryCount] = useState(0);
+  const retry = useCallback(() => setRetryCount((count) => count + 1), []);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [transcriptId, setTranscriptId] = useState<number | null>(null);
   const [stateKey, setStateKey] = useState<string | null>(null);
@@ -168,6 +172,7 @@ export function useSourceCaptions(
   // Reset everything when the media or selected audio track changes.
   useEffect(() => {
     setCues([]);
+    setError(null);
     setPhase(null);
     setStageSec(0);
     setFirstCuesSec(null);
@@ -182,6 +187,9 @@ export function useSourceCaptions(
   useEffect(() => {
     if (!eligible) return;
     let cancelled = false;
+    setError(null);
+    setPhase("Preparing model");
+    setStatus("preparing");
     const sessionId = crypto.randomUUID();
     sessionRef.current = sessionId;
     setStateKey(sessionKey);
@@ -247,6 +255,13 @@ export function useSourceCaptions(
         if (model.installed) {
           await startSession(sessionId);
         } else {
+          const controls = await invoke<LocalModelStatus[]>("list_model_controls");
+          if (cancelled) return;
+          if (controls.find((control) => control.modelId === model.modelId)?.enabled === false) {
+            setStatus("failed");
+            setError("Whisper is disabled. Enable it in Settings → Models, then Retry.");
+            return;
+          }
           setStatus("needsModel");
         }
       } catch (e) {
@@ -269,7 +284,7 @@ export function useSourceCaptions(
       unlisteners.forEach((u) => u());
       void invokeSession("caption", "stop_caption_session").catch(() => undefined);
     };
-  }, [eligible, profileId, sessionKey, startSession, media.kind, media.id]);
+  }, [eligible, profileId, sessionKey, startSession, media.kind, media.id, retryCount]);
 
   useEffect(() => {
     if (!eligible || !phase || status === "failed") return;
@@ -294,6 +309,7 @@ export function useSourceCaptions(
     language: current ? language : null,
     error: current ? error : null,
     downloadModel,
+    retry,
   };
 }
 

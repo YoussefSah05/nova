@@ -57,6 +57,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `epg_refresh` | `{ profileId, sourceId }` | `void` (durable job: each feed is downloaded to a temp file capped at 512 MiB (gzip feeds are inflated while parsing, up to 2 GiB), parsed into bounded staged batches, then replaces only its own programmes in one short transaction; a feed that parses to no programmes fails and keeps its previous guide). Also queued automatically after every successful import (add or refresh) | 4, M24 |
 | `mpv_open_stream` | `{ profileId, mediaKind, mediaId, title, startSec? }` — optional finite, non-negative dialogue timestamp overrides saved resume for this opening (one-second lead-in); ignored for live | `{ token, engine: 'mpv', embedded }` | 5, UI-5 |
 | `mpv_close` | `{ token }` | `void` | 5 |
+| `playback_caption_position` | `{ token }` | `number \| null` (actual native clock once the coordinator has acknowledged resume, or bounded seek retries have ended; no URLs) | Caption startup |
 | `playback_caption_mode` | `{ token, captionMode }` | `void` | M14 — the caption selection, persisted with the native session's progress by the playback coordinator |
 | `mpv_player_state` | `{ token? }` | `MpvPlayerState` | 5 |
 | `mpv_toggle_pause` | `{ token }` | `void` | 5 |
@@ -583,7 +584,10 @@ invalid tags fall back to `en-US`.
 
 - Resolves one playable `vod`, `episode` or `live` row privately in its profile database.
 - Returns deduplicated uppercase audio language tags (`languages`), `unknownTracks` and
-  `trackCount`. ISO-639-2 tags and regional tags are normalized to compact codes where
+  `trackCount`, plus ordered `tracks: { audioIndex: number, language: string | null }[]`.
+  `audioIndex` is the zero-based **audio-only** stream ordinal (`0:a:<index>`), not
+  the container stream index; duplicate-language and untagged tracks are retained.
+  ISO-639-2 tags and regional tags are normalized to compact codes where
   known. Subtitle tags and a title's original language are excluded.
 - Uses a six-second audio-only ffprobe within an eight-second admission/probe budget;
   shares the bounded interactive job lane. No playback starts and no URLs, stream titles,
@@ -591,6 +595,32 @@ invalid tags fall back to `en-US`.
 - Requested and cached only for active detail targets. Movie details resolve Nova's selected
   version through `resolve_movie_playback`; series describes only its next/resume episode.
   Missing tags mean unknown, not unavailable audio. This command does not install media tools.
+  Media tools preserve explicit environment overrides, search PATH first, then standard macOS
+  Homebrew locations so desktop launches can use already installed FFmpeg/ffprobe.
+
+## Per-play audio and caption startup
+
+Detail Audio menus show only probe-confirmed tracks in the selected source. Auto is the
+native/profile selection; an explicit track overrides it for this playback only. Choosing
+another version clears the transient track choice. Unknown or duplicate-language tracks
+include their one-based display track number. Probe loading/failure offers status/retry,
+without constructing language choices from titles, subtitles or profile preferences.
+
+Frontend playback accepts optional `PlaybackLaunchOptions` with `captionMode`,
+`translationTarget` (EN/FR/AR), and a source-bound `{ mediaKind, mediaId, index, language }`
+audio request. Shared Play/Resume controls launch off/source/translation explicitly.
+Existing callers retain their profile behavior. No profile writes or database migration.
+Every explicit launch creates a new player request, including reopening the same title.
+Automatic next episode retains the viewer's current caption mode/target and discards the
+previous episode's track ordinal; each new source resolves its own audio tracks.
+
+Video opens immediately. Native captions wait for both actual audio selection acknowledgement
+and `playback_caption_position` (polling only during startup). The backend observes a fresh
+native snapshot on its ordered coordinator before returning the settled clock. Unavailable
+tracks or failed/three-second unconfirmed switches visibly fall back to automatic/current
+audio. Disabled models point to Settings → Models and Retry; missing models retain explicit
+download actions. Translation failures continue to render source captions. Live AI captions
+remain unavailable.
 
 ## Moments: dialogue across the library (UI-5)
 

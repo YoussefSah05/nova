@@ -108,6 +108,14 @@ pub struct AudioLanguages {
     pub languages: Vec<String>,
     pub unknown_tracks: u32,
     pub track_count: u32,
+    pub tracks: Vec<AudioTrackInfo>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct AudioTrackInfo {
+    /// Position among audio streams, matching FFmpeg's `0:a:<index>`.
+    pub audio_index: u32,
+    pub language: Option<String>,
 }
 
 /// Bounded metadata request; no playback session or media download is started.
@@ -168,16 +176,21 @@ impl AudioProbeOutput {
             languages: Vec::new(),
             unknown_tracks: 0,
             track_count: 0,
+            tracks: Vec::new(),
         };
         for stream in self.streams {
             if stream.codec_type.as_deref() != Some("audio") {
                 continue;
             }
-            result.track_count += 1;
             let code = stream
                 .tags
                 .and_then(|tags| tags.language)
                 .and_then(|tag| compact_audio_language(&tag));
+            result.tracks.push(AudioTrackInfo {
+                audio_index: result.track_count,
+                language: code.clone(),
+            });
+            result.track_count += 1;
             match code {
                 Some(code) if !result.languages.contains(&code) => result.languages.push(code),
                 Some(_) => {}
@@ -457,6 +470,14 @@ mod tests {
                 languages: vec!["FR".into(), "AR".into(), "EN".into()],
                 unknown_tracks: 2,
                 track_count: 6,
+                tracks: [Some("FR"), Some("FR"), Some("AR"), Some("EN"), None, None]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, language)| AudioTrackInfo {
+                        audio_index: index as u32,
+                        language: language.map(str::to_string),
+                    })
+                    .collect(),
             }
         );
     }
@@ -492,6 +513,9 @@ mod tests {
         assert_eq!(info.languages, vec!["FR", "AR", "EN"]);
         assert_eq!(info.track_count, 4);
         assert_eq!(info.unknown_tracks, 1);
+        assert_eq!(info.tracks.len(), 4);
+        assert_eq!(info.tracks[3].audio_index, 3);
+        assert_eq!(info.tracks[3].language, None);
     }
 
     #[test]

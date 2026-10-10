@@ -21,6 +21,16 @@ pub struct AudioLanguages {
     pub languages: Vec<String>,
     pub unknown_tracks: u32,
     pub track_count: u32,
+    pub tracks: Vec<AudioTrackInfo>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
+#[serde(rename_all = "camelCase")]
+pub struct AudioTrackInfo {
+    pub audio_index: u32,
+    pub language: Option<String>,
 }
 
 #[tauri::command]
@@ -58,5 +68,13 @@ pub async fn get_audio_languages(
         languages: info.languages,
         unknown_tracks: info.unknown_tracks,
         track_count: info.track_count,
+        tracks: info
+            .tracks
+            .into_iter()
+            .map(|track| AudioTrackInfo {
+                audio_index: track.audio_index,
+                language: track.language,
+            })
+            .collect(),
     })
 }

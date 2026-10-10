@@ -38,14 +38,17 @@ export function SeriesPage({ series: seed }: { series: SeriesSummary }) {
       onToggleItemWatchlist={actions.toggleWatchlist}
       onToggleFavorite={(next) => actions.toggleSeriesFavorite(series, next)}
       onToggleWatchlist={(next) => actions.toggleSeriesWatchlist(series, next)}
-      onPlayEpisode={(episode) =>
-        playMedia({
-          kind: "episode",
-          id: episode.id,
-          title: series.displayTitle,
-          subtitle: episode.label,
-          posterUrl: episode.stillUrl ?? series.posterUrl,
-        })
+      onPlayEpisode={(episode, options) =>
+        playMedia(
+          {
+            kind: "episode",
+            id: episode.id,
+            title: series.displayTitle,
+            subtitle: episode.label,
+            posterUrl: episode.stillUrl ?? series.posterUrl,
+          },
+          options
+        )
       }
     />
   );

@@ -15,6 +15,7 @@ const source: SourceCaptionsState = {
   modelPct: null,
   error: null,
   downloadModel: vi.fn(),
+  retry: vi.fn(),
   cues: Array.from({ length: 12 }, (_, i) => ({
     segmentId: i + 1,
     start: i,

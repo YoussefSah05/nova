@@ -55,6 +55,9 @@ import { episodeToMedia } from "./episodeMedia";
 import { usePlaybackEnded, usePlaybackRecover } from "./usePlaybackEnded";
 import { sourceCaptionNote, useSourceCaptions } from "./useSourceCaptions";
 import { useTranslatedCaptions } from "./useTranslatedCaptions";
+import { useCaptionStartup } from "./useCaptionStartup";
+import { useAudioStartup } from "./useAudioStartup";
+import { initialCaptionMode, type PlaybackLaunchOptions } from "./playbackLaunch";
 import { useCaptionStyle } from "./useCaptionStyle";
 import { useAirPlay } from "./useAirPlay";
 import { AirPlayButton, AirPlayOverlay } from "./AirPlay";
@@ -84,6 +87,7 @@ export interface PlayMedia {
 interface PlayerModalProps {
   profileId: string;
   media: PlayMedia;
+  launchOptions?: PlaybackLaunchOptions;
   onClose: () => void;
   /// Refresh progress views only after the player's final write has settled.
   onProgressSaved?: () => void;
@@ -212,6 +216,7 @@ type PiPDocument = Document & {
 export function PlayerModal({
   profileId,
   media,
+  launchOptions,
   onClose,
   onProgressSaved,
   sourceId,
@@ -280,8 +285,10 @@ export function PlayerModal({
   const lastTapRef = useRef<{ t: number; x: number } | null>(null);
 
   // -- caption state (Phase 5: inert; Phase 6/7 will populate the cue arrays) --
-  const [captionMode, setCaptionMode] = useState<CaptionMode>("off");
-  const [translationTarget, setTranslationTarget] = useState("en");
+  const [captionMode, setCaptionMode] = useState<CaptionMode>(launchOptions?.captionMode ?? "off");
+  const [translationTarget, setTranslationTarget] = useState<string>(
+    launchOptions?.translationTarget ?? "en"
+  );
   const [captionMenuOpen, setCaptionMenuOpen] = useState(false);
   const [companionTab, setCompanionTab] = useState<CompanionTab | null>(null);
   const companionTriggerRef = useRef<HTMLButtonElement>(null);
@@ -312,6 +319,24 @@ export function PlayerModal({
     latestPlaybackRef.current = { currentTime, duration, playing };
   }, [currentTime, duration, playing]);
 
+  const profileSettings = useProfileSettings(profileId);
+  const audioStartup = useAudioStartup({
+    mediaKind: media.kind,
+    mediaId: media.id,
+    token: nativeToken,
+    ready,
+    tracks: audioTracks,
+    selectedId: audioTrackId,
+    requested: launchOptions?.audioTrack,
+    profileLoaded: profileSettings.loaded,
+    preferredLanguage: profileSettings.settings.preferredAudioLang ?? null,
+  });
+
+  const resumeSettled = useCaptionStartup(nativeToken, USE_MPV_ENGINE && ready, (position) => {
+    latestPlaybackRef.current.currentTime = position;
+    setCurrentTime(position);
+  });
+
   // Source-language captions (Phase 6): a streaming session transcribes ~30s
   // windows at the playhead and emits cues, rendered through CaptionOverlay.
   // The selected audio track as a 0-based index among audio tracks (ffmpeg
@@ -328,7 +353,8 @@ export function PlayerModal({
   const sourceCaptions = useSourceCaptions(
     profileId,
     { kind: media.kind, id: media.id },
-    captionMode !== "off",
+    captionMode !== "off" &&
+      (USE_MPV_ENGINE ? resumeSettled && audioStartup.settled && audioStartup.hasAudio : ready),
     () => latestPlaybackRef.current.currentTime,
     () => latestPlaybackRef.current.duration,
     selectedAudioTrack
@@ -347,7 +373,6 @@ export function PlayerModal({
   }, [captionMode]);
 
   // -- per-profile settings + autoplay-next-episode -----------------------
-  const profileSettings = useProfileSettings(profileId);
 
   // Autoplay: the Rust playback coordinator decides the media ended, looks up
   // the next episode and reads the profile's autoplay setting; the player only
@@ -384,11 +409,16 @@ export function PlayerModal({
   useEffect(() => {
     if (!profileSettings.loaded || defaultCaptionApplied.current) return;
     defaultCaptionApplied.current = true;
-    // Any non-off default (including legacy "translation"/"dual" values saved
-    // before translation was removed) opens source captions.
-    if (profileSettings.settings.defaultCaptionMode !== "off" && media.kind !== "live")
-      setCaptionMode("source");
-  }, [profileSettings.loaded, profileSettings.settings.defaultCaptionMode, media.kind]);
+    if (media.kind !== "live")
+      setCaptionMode(
+        initialCaptionMode(launchOptions, profileSettings.settings.defaultCaptionMode)
+      );
+  }, [
+    profileSettings.loaded,
+    profileSettings.settings.defaultCaptionMode,
+    media.kind,
+    launchOptions,
+  ]);
 
   // -- AirPlay (parallel AVPlayer route) ----------------------------------
   // When an AirPlay device is selected, the backend AVPlayer streams the proxy
@@ -1224,21 +1254,6 @@ export function PlayerModal({
     [nativeToken]
   );
 
-  // Apply the profile's preferred audio language once per stream, when tracks
-  // first arrive (the start screen sets this; exact switching stays manual).
-  const preferredAudioAppliedRef = useRef(false);
-  useEffect(() => {
-    preferredAudioAppliedRef.current = false;
-  }, [media.id]);
-  useEffect(() => {
-    if (preferredAudioAppliedRef.current) return;
-    const pref = profileSettings.settings.preferredAudioLang;
-    if (!pref || audioTracks.length < 2) return;
-    const match = audioTracks.find((t) => t.lang?.toLowerCase().startsWith(pref.toLowerCase()));
-    if (match && match.id !== audioTrackId) selectAudioTrack(match.id);
-    preferredAudioAppliedRef.current = true;
-  }, [audioTracks, audioTrackId, selectAudioTrack, profileSettings.settings.preferredAudioLang]);
-
   const changeSpeed = useCallback(
     (next: number) => {
       setSpeed(next);
@@ -1598,6 +1613,25 @@ export function PlayerModal({
 
           {/* Caption status banner: model-download prompt, preparing, or error.
             Hidden once cues are streaming (status "streaming" with cues). */}
+          {USE_MPV_ENGINE &&
+            !isLive &&
+            captionMode !== "off" &&
+            (!resumeSettled || !audioStartup.settled) && (
+              <p
+                role="status"
+                className="pointer-events-none absolute left-4 top-4 z-20 rounded-md bg-black/65 px-3 py-2 text-sm text-white"
+              >
+                Preparing captions — confirming playback position and audio…
+              </p>
+            )}
+          {audioStartup.note && (
+            <p
+              role="status"
+              className="pointer-events-none absolute inset-x-0 bottom-[30%] z-10 px-6 text-center text-sm text-white/80"
+            >
+              {audioStartup.note}
+            </p>
+          )}
           {captionMode !== "off" &&
             sourceCaptions.status !== "idle" &&
             sourceCaptions.status !== "complete" &&
@@ -1627,7 +1661,7 @@ export function PlayerModal({
                       </span>
                       <button
                         type="button"
-                        onClick={sourceCaptions.downloadModel}
+                        onClick={sourceCaptions.retry}
                         className="rounded-full bg-white/15 px-3 py-0.5 text-xs font-semibold hover:bg-white/25"
                       >
                         Retry

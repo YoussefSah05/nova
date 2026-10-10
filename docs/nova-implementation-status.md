@@ -8,6 +8,32 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Available audio tracks and caption startup — 2026-10-10
+
+Movie and episode Audio selectors now list only ordered, probe-confirmed tracks for the
+selected source. Duplicate languages retain track numbers; untagged audio stays Unknown.
+Choosing another version selects it before playback and clears its transient audio choice.
+Shared Play/Resume controls offer normal playback, source transcription and EN/FR/AR
+translated captions, without writing profile preferences or claiming translated audio.
+
+Video starts immediately. Explicit launch choices override profile defaults once per request;
+reopening the same title applies new choices, and automatic next episode preserves the viewer's
+caption mode/target while resolving audio independently. Native ASR waits for actual audio
+acknowledgement and coordinator-confirmed resume, with visible bounded fallback. Missing or
+disabled models retain explicit download/Settings/Retry actions and translation failures keep
+source captions. Desktop launches now find already installed macOS FFmpeg tools without
+requiring the shell PATH. No migrations or live AI caption changes.
+
+`just lint`, `just typecheck`, `just test` (746 Rust tests/doctests, 225 frontend tests),
+scoped formatting, final debug app bundling and independent review pass. A real four-track
+container also passes with a restricted GUI PATH. Native 4L validation showed only EN under
+Audio, separate EN/FR/AR caption targets, and immediate video with Arabic translation selected
+while source captions prepared. Reopening resumed near 1:10 and generated timed source
+dialogue from that position. One alternate provider source timed out; no languages were
+invented. Full-film accuracy remains unqualified; multi-track/next-episode behavior is covered by
+automated tests rather than this single native provider sample. See
+[the delivery contract and validation record](implementation/audio-caption-startup.md).
+
 ### Caption reliability and browsing polish — 2026-10-10
 
 Arabic's no-JSON failure was reproduced against the pinned Whisper 1.8.3 CLI: the
