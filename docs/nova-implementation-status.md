@@ -29,7 +29,8 @@ scoped formatting, final debug app bundling and independent review pass. A real 
 container also passes with a restricted GUI PATH. Native 4L validation showed only EN under
 Audio, separate EN/FR/AR caption targets, and immediate video with Arabic translation selected
 while source captions prepared. Reopening resumed near 1:10 and generated timed source
-dialogue from that position. One alternate provider source timed out; no languages were
+dialogue from that position. Arabic translation reported an unavailable model while source
+captions remained visible and playback controls stayed usable. One alternate provider source timed out; no languages were
 invented. Full-film accuracy remains unqualified; multi-track/next-episode behavior is covered by
 automated tests rather than this single native provider sample. See
 [the delivery contract and validation record](implementation/audio-caption-startup.md).

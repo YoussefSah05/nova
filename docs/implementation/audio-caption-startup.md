@@ -91,7 +91,10 @@ EN/FR/AR translated captions separately. Launching Arabic translated captions im
 started native video; the player confirmed Translation and Arabic selected while caption
 status reported Extracting audio and the video clock advanced. A fresh same-title launch
 resumed around 1:10 before extraction; the companion then showed generated source dialogue
-starting at 1:10, with timed entries through 1:34 while translation prepared. Version changes and failed
+starting at 1:10, with timed entries through 1:34 while translation prepared. Additional
+dialogue reached the current 3:04 playhead. Arabic translation then reported its model
+unavailable with a Models & Storage action note; source captions remained visible and
+the native player stayed usable. No translation model was downloaded or enabled. Version changes and failed
 provider metadata were also checked earlier without starting playback or fabricating audio.
 
 This qualifies menu/startup wiring and selected-source native playback. Multi-track ordinal,
