@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE transcripts SET language = ?, vtt_path = ?, json_path = ?\n             WHERE id = ? AND NOT EXISTS\n               (SELECT 1 FROM transcript_segments WHERE transcript_id = transcripts.id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "4608873e7ac9064fcd8bce74c94f6f54e26b216c4d1f6e3dd48e9a12bc9dea74"
+}

@@ -1,53 +1,56 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Screen } from "./Screen";
 
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
-function mount(active: boolean) {
-  return render(
-    <Screen active={active} label="Movies" onScrolledChange={vi.fn()}>
-      <div style={{ height: 4000 }}>content</div>
+it("protects horizontal rail scrolling while title activation remains available", () => {
+  const activate = vi.fn();
+  render(
+    <Screen active label="Home" onScrolledChange={() => {}}>
+      <div data-testid="rail">
+        <button data-card onClick={activate}>
+          A film
+        </button>
+      </div>
     </Screen>
   );
-}
+  const home = screen.getByRole("region", { name: "Home" });
+  const rail = screen.getByTestId("rail");
+  // Native scroll events do not bubble; a capture listener must see this.
+  fireEvent(rail, new Event("scroll", { bubbles: false }));
+  expect(home).toHaveClass("nova-scrolling");
+  fireEvent.click(screen.getByRole("button", { name: "A film" }));
+  expect(activate).toHaveBeenCalledOnce();
+  act(() => vi.advanceTimersByTime(100));
+  fireEvent(rail, new Event("scroll", { bubbles: false }));
+  act(() => vi.advanceTimersByTime(100));
+  expect(home).toHaveClass("nova-scrolling");
+  act(() => vi.advanceTimersByTime(50));
+  expect(home).not.toHaveClass("nova-scrolling");
+});
 
-describe("Screen scrolling", () => {
-  it("takes the pointer off its content while scrolling, and gives it back when idle", () => {
-    mount(true);
-    const region = screen.getByRole("region", { name: "Movies" });
-    fireEvent.scroll(region);
-    expect(region).toHaveClass("nova-scrolling");
-    act(() => vi.advanceTimersByTime(100));
-    fireEvent.scroll(region);
-    act(() => vi.advanceTimersByTime(100));
-    expect(region).toHaveClass("nova-scrolling");
-    act(() => vi.advanceTimersByTime(60));
-    expect(region).not.toHaveClass("nova-scrolling");
-  });
-
-  it("ignores scroll events while hidden", () => {
-    const { container } = mount(false);
-    // Inert while hidden, so it is out of the accessibility tree.
-    const region = container.querySelector(".nova-screen")!;
-    fireEvent.scroll(region);
-    expect(region).not.toHaveClass("nova-scrolling");
-  });
-
-  it("gives the pointer back after a real move, ignoring jitter", () => {
-    mount(true);
-    const region = screen.getByRole("region", { name: "Movies" });
-    // jsdom has no PointerEvent; a MouseEvent carries the coordinates.
-    const move = (x: number, y: number) =>
-      region.dispatchEvent(
-        new MouseEvent("pointermove", { bubbles: true, clientX: x, clientY: y })
-      );
-    move(100, 100);
-    fireEvent.scroll(region);
-    move(102, 101);
-    expect(region).toHaveClass("nova-scrolling");
-    move(112, 100);
-    expect(region).not.toHaveClass("nova-scrolling");
-  });
+it("does not start scroll work on inactive screens and cleans up pending work", () => {
+  const view = render(
+    <Screen active={false} label="Home" onScrolledChange={() => {}}>
+      <div data-testid="rail" />
+    </Screen>
+  );
+  const home = screen.getByRole("region", { hidden: true });
+  fireEvent.scroll(screen.getByTestId("rail"));
+  expect(home).not.toHaveClass("nova-scrolling");
+  view.rerender(
+    <Screen active label="Home" onScrolledChange={() => {}}>
+      <div data-testid="rail" />
+    </Screen>
+  );
+  const unrelatedTimers = vi.getTimerCount();
+  fireEvent.scroll(screen.getByTestId("rail"));
+  expect(vi.getTimerCount()).toBe(unrelatedTimers + 1);
+  view.unmount();
+  expect(vi.getTimerCount()).toBe(unrelatedTimers);
 });

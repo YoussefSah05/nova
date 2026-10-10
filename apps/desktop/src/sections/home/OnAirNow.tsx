@@ -85,6 +85,7 @@ const OnAirTile = memo(function OnAirTile({ channel }: { channel: OnAirChannel }
 
   return (
     <button
+      data-card
       type="button"
       onClick={() =>
         playMedia({

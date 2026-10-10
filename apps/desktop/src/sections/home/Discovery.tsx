@@ -6,6 +6,7 @@ import { memo } from "react";
 
 import type { ContinueWatchingItem } from "@/types";
 import { Artwork } from "@/components/Artwork";
+import { tmdbSized } from "@/lib/artwork";
 import { PosterCard } from "@/features/browse/PosterCard";
 import { PosterFallback } from "@/features/browse/PosterFallback";
 import { useRelatedTitles, useTrendingInLibrary } from "@/features/browse/detail/data";
@@ -62,6 +63,7 @@ const RankedCard = memo(function RankedCard({ item, rank }: { item: BrowseItem; 
   const activate = useActivate();
   return (
     <button
+      data-card
       type="button"
       onClick={() => activate(item)}
       aria-label={`${item.title}, number ${rank} this week`}
@@ -73,9 +75,12 @@ const RankedCard = memo(function RankedCard({ item, rank }: { item: BrowseItem; 
       >
         {rank}
       </span>
-      <span className="relative h-[192px] w-[128px] overflow-hidden rounded-[10px] bg-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,.45),inset_0_0_0_1px_rgba(255,255,255,.08)] transition-transform duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:-translate-y-1">
+      <span
+        data-card-visual
+        className="relative h-[192px] w-[128px] overflow-hidden rounded-[10px] bg-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,.45),inset_0_0_0_1px_rgba(255,255,255,.08)] transition-transform duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:-translate-y-1"
+      >
         <Artwork
-          src={item.posterUrl}
+          src={tmdbSized(item.posterUrl, "w342")}
           alt=""
           loading="lazy"
           decoding="async"

@@ -3,8 +3,9 @@
 //! buttons and menus stay clickable), it clears the traffic lights, and it
 //! turns to glass once the screen under it scrolls.
 //!
-//! Both states are stacked layers whose opacity changes (compositor-only):
-//! the blur itself is never switched on and off while scrolling.
+//! Both states are stacked layers whose opacity changes. The scrolled surface
+//! uses a tinted gradient: a fixed backdrop blur would resample moving artwork
+//! on every scroll frame, even when its own opacity is unchanged.
 
 import { memo, useRef } from "react";
 import {
@@ -48,7 +49,7 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
       <div
         aria-hidden
         className={cn(
-          "nova-glass pointer-events-none absolute inset-0 rounded-none border-x-0 border-t-0 transition-opacity duration-200",
+          "pointer-events-none absolute inset-0 border-b border-white/[0.08] bg-gradient-to-b from-[#0c0c10]/[0.98] to-[#0c0c10]/[0.94] shadow-[0_4px_16px_rgba(0,0,0,0.18)] transition-opacity duration-200",
           glass ? "opacity-100" : "opacity-0"
         )}
       />

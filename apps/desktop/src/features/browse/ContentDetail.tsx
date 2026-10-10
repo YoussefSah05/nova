@@ -30,6 +30,7 @@ import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
 import { canonicalMovieQuery, useRelatedTitles, useTitleFacts } from "./detail/data";
 import { metaLine } from "./detail/meta";
+import { AudioLanguageBanner, MovieAudioLanguageBanner } from "./detail/AudioLanguageBanner";
 import { useScreenActive } from "@/lib/screenActive";
 
 /// Preferred audio language choices. `null` = keep the stream's original track.
@@ -167,12 +168,13 @@ export function ContentDetail({
   const { settings, setSettings } = useProfileSettings(profileId);
   // Canonical movie detail (entity-owned resume state); the card's summary
   // renders immediately and the detail refines it when it arrives.
-  const { data: detail } = useQuery({
+  const detailQuery = useQuery({
     subscribed: useScreenActive(),
     ...canonicalMovieQuery(profileId, item.entityId),
     enabled: item.kind === "movie" && !!item.entityId,
     staleTime: 0,
   });
+  const { data: detail } = detailQuery;
   const movie = detail ?? item.movie;
   const art = useTitleArt(profileId, item);
   const movieSubject = item.kind === "movie" ? titleArtSubject(item) : null;
@@ -209,6 +211,24 @@ export function ContentDetail({
       logoUrl={art?.logoUrl}
       meta={metaLine(facts, { kind: "movie", year: movie?.year, genre: movie?.category })}
       tagline={facts?.tagline}
+      audioBanner={
+        item.kind === "vod" ? (
+          <AudioLanguageBanner
+            profileId={profileId}
+            target={{ mediaKind: "vod", mediaId: item.id }}
+            sourceNote="Selected version"
+          />
+        ) : (
+          <MovieAudioLanguageBanner
+            profileId={profileId}
+            entityId={item.entityId}
+            detail={detail}
+            loadingDetail={detailQuery.isPending}
+            detailError={detailQuery.isError}
+            onRetryDetail={() => void detailQuery.refetch()}
+          />
+        )
+      }
       overview={overview ?? facts?.plot}
       onBack={onBack}
       actions={

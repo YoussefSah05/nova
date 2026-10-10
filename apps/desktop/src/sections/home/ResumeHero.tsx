@@ -10,7 +10,7 @@ import type { ContinueWatchingItem } from "@/types";
 import { Artwork } from "@/components/Artwork";
 import { Button } from "@/components/ui/button";
 import { AmbientGlow, useAmbientColor } from "@/lib/ambient";
-import { useArtworkSrc } from "@/lib/artwork";
+import { tmdbSized, useArtworkSrc } from "@/lib/artwork";
 import { cn } from "@/lib/utils";
 import { continueEpisodeLabel } from "@/features/browse/continueWatching";
 import { canonicalMovieQuery } from "@/features/browse/detail/data";
@@ -163,6 +163,7 @@ function AlsoInProgress({ items }: { items: ContinueWatchingItem[] }) {
             : (timeLeft(it) ?? it.subtitle);
         return (
           <button
+            data-card
             key={`${it.mediaKind}-${it.mediaId}`}
             type="button"
             onClick={() => playMedia(continueMedia(it))}
@@ -170,7 +171,7 @@ function AlsoInProgress({ items }: { items: ContinueWatchingItem[] }) {
           >
             <span className="relative h-[50px] w-[88px] shrink-0 overflow-hidden rounded-md bg-white/[0.06] shadow-[inset_0_0_0_1px_rgba(255,255,255,.08)]">
               <Artwork
-                src={it.posterUrl}
+                src={tmdbSized(it.posterUrl, "w342")}
                 alt=""
                 loading="lazy"
                 decoding="async"

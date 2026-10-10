@@ -46,6 +46,7 @@ export const ShowCard = memo(function ShowCard({
           className="group relative flex min-w-0 flex-col gap-2.5 [contain:layout_paint]"
         >
           <button
+            data-card-visual
             type="button"
             onClick={() => onActivate(item)}
             aria-label={[item.title, status, meta].filter(Boolean).join(", ")}
@@ -82,7 +83,10 @@ export const ShowCard = memo(function ShowCard({
               </span>
             )}
           </button>
-          <div className="pointer-events-none absolute left-2.5 top-2.5 flex gap-1 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+          <div
+            data-card-hover
+            className="pointer-events-none absolute left-2.5 top-2.5 flex gap-1 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+          >
             <WatchlistButton
               inWatchlist={item.isInWatchlist}
               onToggle={(next) => onToggleWatchlist(item, next)}

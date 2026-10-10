@@ -65,10 +65,12 @@ export function NavProvider({
   const back = useCallback(() => {
     if (canGoBack(stateRef.current)) withTransition(() => dispatch({ type: "pop" }));
   }, []);
-  const switchTo = useCallback(
-    (section: SectionId) => withTransition(() => dispatch({ type: "switch", section })),
-    []
-  );
+  const switchTo = useCallback((section: SectionId) => {
+    // Reselecting a section with a pushed page still returns to its root.
+    // An already-visible root needs neither a render nor a screenshot.
+    if (stateRef.current.section === section && !canGoBack(stateRef.current)) return;
+    withTransition(() => dispatch({ type: "switch", section }));
+  }, []);
   const resetAll = useCallback(() => dispatch({ type: "resetAll" }), []);
   const patchItem = useCallback<NavApi["patchItem"]>(
     (key, patch) => dispatch({ type: "patchItem", key, patch }),

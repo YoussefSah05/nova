@@ -1,3 +1,5 @@
+export type { AudioLanguages } from "./generated/AudioLanguages";
+
 // ── Profiles ──────────────────────────────────────────────────────────────────
 
 export interface Profile {

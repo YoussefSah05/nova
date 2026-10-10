@@ -309,14 +309,31 @@ html.nova-native-player-active .nova-native-player-shell * {
   pointer-events: none;
 }
 
-/* Set by Screen while it scrolls: cards skip hover hit-testing (no hover
-   repaints, previews or prefetches as they pass under a resting cursor).
-   Cards only: rails and the screen stay hit-testable, so wheel and sideways
-   swipes keep working. `!important` beats the cards' own hover-revealed
-   `pointer-events-auto` actions. */
+/* Scroll protection changes decoration, never activation hit-testing: a user
+   can click a title while momentum settles. Hover-intent hooks gate expensive
+   previews and prefetch separately. */
 .nova-scrolling [data-card],
-.nova-scrolling [data-card] * {
+.nova-scrolling [data-card-visual] {
+  transform: none !important;
+  transition: none !important;
+}
+
+.nova-scrolling [data-card]:not(:focus-within),
+.nova-scrolling [data-card-visual]:not(:focus-visible) {
+  box-shadow: none !important;
+}
+
+.nova-scrolling [data-card-hover]:not(:focus-within) {
+  opacity: 0 !important;
+  transition: none !important;
   pointer-events: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-card],
+  [data-card-visual] {
+    transform: none !important;
+  }
 }
 
 @supports (content-visibility: hidden) {

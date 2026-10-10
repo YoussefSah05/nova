@@ -20,6 +20,7 @@ export function TitleHero({
   backdropUrl,
   logoUrl,
   meta,
+  audioBanner,
   tagline,
   overview,
   note,
@@ -32,6 +33,7 @@ export function TitleHero({
   backdropUrl: string | null | undefined;
   logoUrl?: string | null;
   meta: MetaLine;
+  audioBanner?: ReactNode;
   tagline?: string | null;
   overview?: string | null;
   /** A short highlighted line, e.g. the next episode's air date. */
@@ -96,6 +98,7 @@ export function TitleHero({
               className="font-display text-3xl font-semibold tracking-tight drop-shadow-lg md:text-4xl"
             />
             <MetaRow meta={meta} />
+            {audioBanner && <div className="mt-3">{audioBanner}</div>}
             {tagline && <p className="mt-2 text-sm italic text-white/60">{tagline}</p>}
             {note && <p className="mt-2 text-xs font-medium text-primary">{note}</p>}
             {overview && (

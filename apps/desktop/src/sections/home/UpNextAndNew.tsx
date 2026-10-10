@@ -6,6 +6,7 @@ import { memo } from "react";
 
 import type { ContinueWatchingItem } from "@/types";
 import { Artwork } from "@/components/Artwork";
+import { tmdbSized } from "@/lib/artwork";
 import { PosterFallback } from "@/features/browse/PosterFallback";
 import { continueEpisodeLabel } from "@/features/browse/continueWatching";
 import { RECENTLY_ADDED_RAIL, useRail, type BrowseItem } from "@/features/browse/queries";
@@ -52,13 +53,14 @@ const EpisodeCard = memo(function EpisodeCard({ item }: { item: ContinueWatching
   const left = timeLeft(item);
   return (
     <button
+      data-card
       type="button"
       onClick={() => playMedia(continueMedia(item))}
       className="flex items-center gap-4 rounded-[14px] bg-[#111113] p-2.5 text-left shadow-[inset_0_0_0_1px_rgba(255,255,255,.06)] transition-transform duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span className="relative h-[117px] w-[208px] shrink-0 overflow-hidden rounded-[10px] bg-white/[0.06]">
         <Artwork
-          src={item.posterUrl}
+          src={tmdbSized(item.posterUrl, "w342")}
           alt=""
           loading="lazy"
           decoding="async"
@@ -95,13 +97,14 @@ function NewInLibrary({ items }: { items: BrowseItem[] }) {
       </div>
       <div className="grid grid-cols-2 gap-5">
         <button
+          data-card
           type="button"
           onClick={() => activate(feature)}
           aria-label={feature.title}
           className="group relative h-[332px] overflow-hidden rounded-2xl bg-[#111113] text-left shadow-[inset_0_0_0_1px_rgba(255,255,255,.08)] transition-transform duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Artwork
-            src={featureBackdrop ?? feature.posterUrl}
+            src={tmdbSized(featureBackdrop ?? feature.posterUrl, "w780")}
             alt=""
             loading="lazy"
             decoding="async"
@@ -125,13 +128,14 @@ function NewInLibrary({ items }: { items: BrowseItem[] }) {
           {rest.slice(0, 5).map((it) => (
             <li key={it.key}>
               <button
+                data-card
                 type="button"
                 onClick={() => activate(it)}
                 className="flex w-full items-center gap-3.5 rounded-[10px] p-2 text-left transition-colors hover:bg-white/[0.05] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <span className="h-[60px] w-10 shrink-0 overflow-hidden rounded-[5px] bg-white/[0.06] shadow-[inset_0_0_0_1px_rgba(255,255,255,.08)]">
                   <Artwork
-                    src={it.posterUrl}
+                    src={tmdbSized(it.posterUrl, "w185")}
                     alt=""
                     loading="lazy"
                     decoding="async"

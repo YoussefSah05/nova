@@ -18,6 +18,7 @@ import { SeasonTabs } from "./detail/SeasonTabs";
 import { ShowProgress } from "./detail/ShowProgress";
 import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
+import { AudioLanguageBanner } from "./detail/AudioLanguageBanner";
 import {
   useRelatedTitles,
   useSeasonEpisodes,
@@ -129,6 +130,14 @@ export function SeriesDetail({
         genre: series.category,
       })}
       tagline={facts?.tagline}
+      audioBanner={
+        <AudioLanguageBanner
+          profileId={profileId}
+          target={action ? { mediaKind: "episode", mediaId: action.episodeId } : null}
+          label={action?.label.startsWith("Resume") ? "Resume episode audio" : "Next episode audio"}
+          resolving={series.entityId !== null && all.isPending}
+        />
+      }
       overview={series.overview ?? facts?.plot}
       note={note}
       onBack={onBack}

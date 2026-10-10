@@ -47,11 +47,11 @@ export const Screen = memo(function Screen({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    // While the screen scrolls, its cards ignore the pointer: cards passing
-    // under a resting cursor would otherwise each run hover styles (large
+    // While the screen or a horizontal rail scrolls, cards skip hover decoration:
+    // cards passing under a resting cursor would otherwise run hover styles (large
     // shadow repaints in WebKit) and start hover previews and detail
     // prefetches mid-scroll. A class on the container, never a React render;
-    // two style passes per gesture. Rails and the screen keep the wheel.
+    // two style passes per gesture. Activation stays clickable during momentum.
     let idle = 0;
     const onScroll = () => {
       if (!activeRef.current) return;
@@ -87,11 +87,11 @@ export const Screen = memo(function Screen({
       anchor = null;
       el.classList.remove("nova-scrolling");
     };
-    el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("scroll", onScroll, { passive: true, capture: true });
     el.addEventListener("pointermove", onPointerMove, { passive: true });
     return () => {
       window.clearTimeout(idle);
-      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("scroll", onScroll, true);
       el.removeEventListener("pointermove", onPointerMove);
     };
   }, []);

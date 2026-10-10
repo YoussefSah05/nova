@@ -8,6 +8,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useReducedMotion } from "@/lib/motion";
 import { PosterCard, PosterCardSkeleton, type PosterCardHandlers } from "./PosterCard";
 import { useRail, type BrowseTab, type RailSpec } from "./queries";
 
@@ -34,6 +35,7 @@ export function Rail({
   const ref = useRef<HTMLElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const [inView, setInView] = useState(eager);
+  const reduce = useReducedMotion();
 
   useEffect(() => {
     if (eager) return;
@@ -61,7 +63,8 @@ export function Rail({
 
   const nudge = (dir: 1 | -1) => {
     const el = trackRef.current;
-    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.85, behavior: "smooth" });
+    if (el)
+      el.scrollBy({ left: dir * el.clientWidth * 0.85, behavior: reduce ? "auto" : "smooth" });
   };
 
   return (

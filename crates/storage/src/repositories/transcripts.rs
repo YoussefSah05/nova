@@ -54,6 +54,29 @@ impl<'a> TranscriptRepository<'a> {
         Self { pool }
     }
 
+    /// Repair a language guessed from silence before committing the first
+    /// speech. Never relabel a transcript that already owns caption text.
+    pub async fn confirm_empty_language(
+        &self,
+        id: i64,
+        language: &str,
+        vtt_path: &str,
+        json_path: &str,
+    ) -> Result<(), StorageError> {
+        sqlx::query!(
+            "UPDATE transcripts SET language = ?, vtt_path = ?, json_path = ?
+             WHERE id = ? AND NOT EXISTS
+               (SELECT 1 FROM transcript_segments WHERE transcript_id = transcripts.id)",
+            language,
+            vtt_path,
+            json_path,
+            id,
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Find or create the transcript row for a specific audio track, returning
     /// its id. Identity is the stable `content_key` (a hash of the stream URL)
     /// plus `audio_track` and `model` — so a playlist refresh that renumbers
@@ -564,6 +587,61 @@ mod tests {
         let path = dir.path().join("profile.db");
         let pool = init_profile_db(path.to_str().unwrap()).await.unwrap();
         (dir, pool)
+    }
+
+    #[tokio::test]
+    async fn first_speech_repairs_an_empty_cache_without_relabeling_committed_text() {
+        let (_dir, pool) = temp_pool().await;
+        let repo = TranscriptRepository::new(&pool);
+        let id = repo
+            .get_or_create_transcript(
+                "silent-intro",
+                "vod",
+                1,
+                0,
+                "en",
+                "m",
+                "old.vtt",
+                "old.json",
+            )
+            .await
+            .unwrap();
+        repo.record_window(id, 0.0, 30.0).await.unwrap();
+        repo.confirm_empty_language(id, "ar", "ar.vtt", "ar.json")
+            .await
+            .unwrap();
+        let stored = repo
+            .get_for_media_track("silent-intro", "vod", 1, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.language, "ar");
+        assert_eq!(stored.vtt_path, "ar.vtt");
+        assert_eq!(stored.json_path, "ar.json");
+        assert_eq!(repo.covered_windows(id).await.unwrap(), vec![(0.0, 30.0)]);
+        repo.append_segments(
+            id,
+            &[TranscriptSegment {
+                seq: 0,
+                start_sec: 30.0,
+                end_sec: 32.0,
+                text: "مرحبا".into(),
+                words: None,
+            }],
+        )
+        .await
+        .unwrap();
+        repo.confirm_empty_language(id, "en", "wrong.vtt", "wrong.json")
+            .await
+            .unwrap();
+        let stored = repo
+            .get_for_media_track("silent-intro", "vod", 1, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.language, "ar");
+        assert_eq!(stored.vtt_path, "ar.vtt");
+        assert_eq!(repo.get_segments(id).await.unwrap()[0].text, "مرحبا");
     }
 
     #[tokio::test]

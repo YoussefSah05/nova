@@ -20,6 +20,7 @@ import { WatchlistButton } from "./WatchlistButton";
 import { PosterFallback } from "./PosterFallback";
 import type { BrowseItem } from "./queries";
 import { Artwork } from "@/components/Artwork";
+import { tmdbSized } from "@/lib/artwork";
 import { ChannelTile } from "./ChannelTile";
 import { usePrefetchTitle } from "./prefetch";
 import { useChannelGuide } from "./guide";
@@ -60,7 +61,7 @@ export const PosterCard = memo(function PosterCard({
           data-card
           onMouseEnter={(e) => {
             preview.onEnter(e);
-            prefetch.onEnter();
+            prefetch.onEnter(e);
           }}
           onMouseLeave={() => {
             preview.onLeave();
@@ -88,6 +89,7 @@ export const PosterCard = memo(function PosterCard({
             )}
           </AnimatePresence>
           <button
+            data-card-visual
             type="button"
             onClick={() => {
               preview.close();
@@ -106,7 +108,7 @@ export const PosterCard = memo(function PosterCard({
               <ChannelTile logoUrl={item.posterUrl} title={item.title} />
             ) : (
               <Artwork
-                src={item.posterUrl}
+                src={tmdbSized(item.posterUrl, "w342")}
                 alt=""
                 loading="lazy"
                 decoding="async"
@@ -114,7 +116,10 @@ export const PosterCard = memo(function PosterCard({
                 fallback={<PosterFallback title={item.title} />}
               />
             )}
-            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+            <div
+              data-card-hover
+              className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100"
+            />
             {/* Solid chips, never blurred: a grid of blurs is recomputed on
                 every scroll frame. */}
             {quality && (
@@ -134,7 +139,10 @@ export const PosterCard = memo(function PosterCard({
           </button>
 
           {/* Quick actions — revealed on hover/focus within the card. */}
-          <div className="pointer-events-none absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+          <div
+            data-card-hover
+            className="pointer-events-none absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+          >
             <WatchlistButton
               inWatchlist={item.isInWatchlist}
               onToggle={(next) => onToggleWatchlist(item, next)}

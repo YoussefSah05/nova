@@ -195,6 +195,14 @@ export function useHoverPreview(delay = 450) {
   };
 
   useEffect(() => cancel, []);
+  // Only an open preview subscribes: scrolling dismisses its portal immediately,
+  // without installing a listener per mounted catalog card.
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener("scroll", close, { capture: true, passive: true });
+    return () => window.removeEventListener("scroll", close, true);
+  }, [open]);
   // Its screen was hidden (another section, a page opened): close with it.
   useEffect(() => {
     if (!active) {
@@ -208,9 +216,11 @@ export function useHoverPreview(delay = 450) {
     onEnter: (event: { currentTarget: Element }) => {
       cancel();
       const card = event.currentTarget;
+      if (card.closest(".nova-scrolling, [inert]")) return;
       timer.current = window.setTimeout(() => {
         timer.current = null;
-        if (performance.now() - lastScrollAt > 180 && !card.closest("[inert]")) setOpen(true);
+        if (performance.now() - lastScrollAt > 180 && !card.closest(".nova-scrolling, [inert]"))
+          setOpen(true);
       }, delay);
     },
     onLeave: () => {

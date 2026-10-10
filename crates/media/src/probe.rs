@@ -101,6 +101,161 @@ pub async fn probe_stream(url: &str, deadline: Duration) -> Result<StreamProbe, 
     run_probe(cmd, url, deadline).await
 }
 
+/// Audio stream tags only. Subtitles and a title's original language do not
+/// establish which audio tracks are present in this particular version.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AudioLanguages {
+    pub languages: Vec<String>,
+    pub unknown_tracks: u32,
+    pub track_count: u32,
+}
+
+/// Bounded metadata request; no playback session or media download is started.
+pub async fn probe_audio_languages(
+    url: &str,
+    deadline: Duration,
+) -> Result<AudioLanguages, ProbeError> {
+    let mut cmd = Command::new(ffprobe_bin());
+    cmd.kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .args([
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=codec_type:stream_tags=language",
+            "-rw_timeout",
+            &(deadline.as_micros() / 2)
+                .min(u128::from(u32::MAX))
+                .to_string(),
+        ])
+        .arg(url);
+    let output = timeout(deadline, cmd.output())
+        .await
+        .map_err(|_| ProbeError::Timeout(deadline))??;
+    if !output.status.success() {
+        return Err(ProbeError::Failed("audio metadata unavailable".into()));
+    }
+    // Never echo ffprobe's stderr or raw JSON: either may contain provider data.
+    let parsed: AudioProbeOutput = serde_json::from_slice(&output.stdout)?;
+    Ok(parsed.into_languages())
+}
+
+#[derive(Deserialize)]
+struct AudioProbeOutput {
+    streams: Vec<AudioProbeStream>,
+}
+
+#[derive(Deserialize)]
+struct AudioProbeStream {
+    codec_type: Option<String>,
+    tags: Option<AudioProbeTags>,
+}
+
+#[derive(Deserialize)]
+struct AudioProbeTags {
+    language: Option<String>,
+}
+
+impl AudioProbeOutput {
+    fn into_languages(self) -> AudioLanguages {
+        let mut result = AudioLanguages {
+            languages: Vec::new(),
+            unknown_tracks: 0,
+            track_count: 0,
+        };
+        for stream in self.streams {
+            if stream.codec_type.as_deref() != Some("audio") {
+                continue;
+            }
+            result.track_count += 1;
+            let code = stream
+                .tags
+                .and_then(|tags| tags.language)
+                .and_then(|tag| compact_audio_language(&tag));
+            match code {
+                Some(code) if !result.languages.contains(&code) => result.languages.push(code),
+                Some(_) => {}
+                None => result.unknown_tracks += 1,
+            }
+        }
+        result
+    }
+}
+
+/// Normalize stream tags, keeping valid three-letter tags when no short alias
+/// is known. No arbitrary track names or provider text cross the IPC boundary.
+fn compact_audio_language(tag: &str) -> Option<String> {
+    let tag = tag.trim().to_ascii_lowercase();
+    let primary = tag.split(['-', '_']).next()?;
+    if !matches!(primary.len(), 2 | 3)
+        || !primary.bytes().all(|b| b.is_ascii_alphabetic())
+        || matches!(primary, "und" | "mul" | "zxx" | "mis" | "unk" | "xx" | "zz")
+    {
+        return None;
+    }
+    let code = match primary {
+        "eng" => "en",
+        "fra" | "fre" => "fr",
+        "ara" | "arb" => "ar",
+        "deu" | "ger" => "de",
+        "spa" => "es",
+        "ita" => "it",
+        "por" => "pt",
+        "rus" => "ru",
+        "jpn" => "ja",
+        "kor" => "ko",
+        "zho" | "chi" => "zh",
+        "hin" => "hi",
+        "nld" | "dut" => "nl",
+        "swe" => "sv",
+        "nor" => "no",
+        "dan" => "da",
+        "fin" => "fi",
+        "pol" => "pl",
+        "tur" => "tr",
+        "heb" => "he",
+        "ell" | "gre" => "el",
+        "ces" | "cze" => "cs",
+        "ron" | "rum" => "ro",
+        "ukr" => "uk",
+        "vie" => "vi",
+        "tha" => "th",
+        "ind" => "id",
+        "msa" | "may" => "ms",
+        "hun" => "hu",
+        "bul" => "bg",
+        "hrv" => "hr",
+        "srp" => "sr",
+        "slk" | "slo" => "sk",
+        "slv" => "sl",
+        "lit" => "lt",
+        "lav" => "lv",
+        "est" => "et",
+        "fas" | "per" => "fa",
+        "urd" => "ur",
+        "ben" => "bn",
+        "tam" => "ta",
+        "tel" => "te",
+        "cat" => "ca",
+        "isl" | "ice" => "is",
+        "nob" => "nb",
+        "nno" => "nn",
+        "eus" | "baq" => "eu",
+        "cym" | "wel" => "cy",
+        "gle" => "ga",
+        "afr" => "af",
+        "swa" => "sw",
+        other => other,
+    };
+    Some(code.to_ascii_uppercase())
+}
+
 async fn run_probe(
     mut cmd: Command,
     url: &str,
@@ -282,6 +437,62 @@ pub fn url_looks_like_browser_file(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_tags_exclude_subtitles_and_preserve_unknown_tracks() {
+        let raw = r#"{"streams":[
+          {"codec_type":"audio","tags":{"language":"fra"}},
+          {"codec_type":"audio","tags":{"language":"fr-FR"}},
+          {"codec_type":"audio","tags":{"language":"ara"}},
+          {"codec_type":"audio","tags":{"language":"EN_us"}},
+          {"codec_type":"audio","tags":{"language":"und"}},
+          {"codec_type":"audio"},
+          {"codec_type":"subtitle","tags":{"language":"deu"}},
+          {"codec_type":"video"}
+        ]}"#;
+        let parsed: AudioProbeOutput = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            parsed.into_languages(),
+            AudioLanguages {
+                languages: vec!["FR".into(), "AR".into(), "EN".into()],
+                unknown_tracks: 2,
+                track_count: 6,
+            }
+        );
+    }
+
+    #[test]
+    fn audio_tags_do_not_export_arbitrary_provider_text() {
+        for tag in [
+            "",
+            "und",
+            "mul",
+            "zxx",
+            "MULTI",
+            "VOSTFR",
+            "https://private.invalid",
+            "Arabic audio",
+        ] {
+            assert_eq!(compact_audio_language(tag), None, "{tag}");
+        }
+        assert_eq!(compact_audio_language(" fre "), Some("FR".into()));
+        assert_eq!(compact_audio_language("ar-MA"), Some("AR".into()));
+        assert_eq!(compact_audio_language("yue"), Some("YUE".into()));
+        let parsed: AudioProbeOutput = serde_json::from_str(r#"{"streams":[]}"#).unwrap();
+        assert_eq!(parsed.into_languages().track_count, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires NOVA_TEST_AUDIO_FILE with FR/AR/EN and one untagged audio stream"]
+    async fn real_audio_probe_reads_only_container_audio_languages() {
+        let file = std::env::var("NOVA_TEST_AUDIO_FILE").expect("tagged local media fixture");
+        let info = probe_audio_languages(&file, Duration::from_secs(6))
+            .await
+            .unwrap();
+        assert_eq!(info.languages, vec!["FR", "AR", "EN"]);
+        assert_eq!(info.track_count, 4);
+        assert_eq!(info.unknown_tracks, 1);
+    }
 
     #[test]
     fn classification_recognises_browser_friendly_hls() {

@@ -577,6 +577,21 @@ invalid tags fall back to `en-US`.
 - It replaces `semantic_search_catalog` in the browse search and the Command
   palette. `semantic_search_catalog` still exists but is unused by the UI.
 
+## Detail audio languages
+
+`get_audio_languages { profileId, mediaKind, mediaId } -> AudioLanguages`
+
+- Resolves one playable `vod`, `episode` or `live` row privately in its profile database.
+- Returns deduplicated uppercase audio language tags (`languages`), `unknownTracks` and
+  `trackCount`. ISO-639-2 tags and regional tags are normalized to compact codes where
+  known. Subtitle tags and a title's original language are excluded.
+- Uses a six-second audio-only ffprobe within an eight-second admission/probe budget;
+  shares the bounded interactive job lane. No playback starts and no URLs, stream titles,
+  paths or raw probe output cross IPC. Missing/failed probes return a safe structured error.
+- Requested and cached only for active detail targets. Movie details resolve Nova's selected
+  version through `resolve_movie_playback`; series describes only its next/resume episode.
+  Missing tags mean unknown, not unavailable audio. This command does not install media tools.
+
 ## Moments: dialogue across the library (UI-5)
 
 `search_moments { profileId, sourceId, query, limit? } -> MomentHit[]`

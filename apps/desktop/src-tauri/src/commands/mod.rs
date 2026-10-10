@@ -17,6 +17,7 @@ use crate::state::AppState;
 
 use std::time::{Duration, Instant};
 
+pub mod audio_languages;
 pub mod caption_style;
 pub mod channel_logos;
 pub mod discovery;

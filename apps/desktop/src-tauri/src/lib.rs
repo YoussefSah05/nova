@@ -210,6 +210,7 @@ pub fn run() {
             commands::epg::list_epg_feeds,
             // Phase 5 — Playback
             commands::playback::get_proxy_port,
+            commands::audio_languages::get_audio_languages,
             commands::playback::resolve_stream,
             commands::playback::stop_playback,
             commands::playback::mpv_open_stream,

@@ -8,8 +8,8 @@
 //! is no `--task` flag), word/token timestamps via `--output-json-full`, and
 //! `--dtw <preset>` for **DTW-aligned** token timestamps (dynamic time warping
 //! over the cross-attention heads — far more accurate than whisper's default
-//! heuristic offsets, and the source of our word-level cue timing). `-nc` for
-//! Arabic; `--prompt` carries the previous window's tail across boundaries.
+//! heuristic offsets, and the source of our word-level cue timing).
+//! Arabic uses zero prompt history; `--prompt` carries the previous window's tail across boundaries.
 //!
 //! Note: we deliberately do **not** pass `--vad`. In this whisper.cpp build VAD
 //! remaps segment offsets to the original timeline but leaves the per-token DTW
@@ -190,6 +190,52 @@ pub async fn transcribe_wav_cancellable(
     mut on_progress: impl FnMut(u8),
     cancelled: impl std::future::Future<Output = ()>,
 ) -> Result<RawTranscript, WhisperError> {
+    let (mut cmd, normalized) = whisper_command(wav, ggml_model, out_base, opts);
+
+    let mut child = cmd.spawn().map_err(WhisperError::Spawn)?;
+
+    let (status, tail) = wait_for_child(
+        &mut child,
+        &mut on_progress,
+        cancelled,
+        Duration::from_secs(300),
+    )
+    .await?;
+    if !status.success() {
+        return Err(WhisperError::Failed(status.code(), tail.join("\n")));
+    }
+    on_progress(100);
+
+    let mut json_name = out_base.as_os_str().to_os_string();
+    json_name.push(".json");
+    let json_path = PathBuf::from(json_name);
+    let json = match tokio::fs::read_to_string(&json_path).await {
+        Ok(j) => j,
+        // whisper-cli exited 0 but wrote no JSON — almost always an argument it
+        // didn't recognise, in which case it dumps help to stderr. Surface that
+        // tail instead of a bare "No such file" so the cause is visible.
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(WhisperError::Io(error))
+        }
+        Err(_) => {
+            return Err(WhisperError::Failed(
+                status.code(),
+                format!(
+                    "whisper produced no JSON output. Last output:\n{}",
+                    tail.join("\n")
+                ),
+            ))
+        }
+    };
+    parse_whisper_json(&json, &opts.model_id, normalized.as_deref())
+}
+
+fn whisper_command(
+    wav: &Path,
+    ggml_model: &Path,
+    out_base: &Path,
+    opts: &TranscribeOptions,
+) -> (Command, Option<String>) {
     let mut cmd = Command::new(whisper_bin());
     cmd.kill_on_drop(true)
         .stdin(Stdio::null())
@@ -214,8 +260,14 @@ pub async fn transcribe_wav_cancellable(
         cmd.args(["--dtw", &opts.dtw_preset]);
     }
 
+    let normalized = opts.language.as_deref().and_then(normalize_whisper_lang);
+
     // Lexical context carried from the previous window's tail.
-    if let Some(prompt) = opts.initial_prompt.as_deref() {
+    if let Some(prompt) = opts
+        .initial_prompt
+        .as_deref()
+        .filter(|_| normalized.as_deref() != Some("ar"))
+    {
         if !prompt.trim().is_empty() {
             cmd.args(["--prompt", prompt]);
         }
@@ -232,44 +284,14 @@ pub async fn transcribe_wav_cancellable(
     // reports ISO-639-2 ("eng"), which whisper-cli rejects — it then prints help
     // and writes no JSON (the "could not read whisper output" failure). Unknown
     // codes fall back to auto-detect rather than breaking the run.
-    let normalized = opts.language.as_deref().and_then(normalize_whisper_lang);
     cmd.args(["--language", normalized.as_deref().unwrap_or("auto")]);
     if normalized.as_deref() == Some("ar") {
-        // Arabic hallucinates across silence without this; see whisper-config.
-        cmd.arg("--no-context");
+        // v1.8.3 has no --no-context flag. Disable prompt history using its
+        // supported option and omit the previous window's prompt above.
+        cmd.args(["--max-context", "0"]);
     }
 
-    let mut child = cmd.spawn().map_err(WhisperError::Spawn)?;
-
-    let (status, tail) = wait_for_child(
-        &mut child,
-        &mut on_progress,
-        cancelled,
-        Duration::from_secs(300),
-    )
-    .await?;
-    if !status.success() {
-        return Err(WhisperError::Failed(status.code(), tail.join("\n")));
-    }
-    on_progress(100);
-
-    let json_path = out_base.with_extension("json");
-    let json = match tokio::fs::read_to_string(&json_path).await {
-        Ok(j) => j,
-        // whisper-cli exited 0 but wrote no JSON — almost always an argument it
-        // didn't recognise, in which case it dumps help to stderr. Surface that
-        // tail instead of a bare "No such file" so the cause is visible.
-        Err(_) => {
-            return Err(WhisperError::Failed(
-                status.code(),
-                format!(
-                    "whisper produced no JSON output. Last output:\n{}",
-                    tail.join("\n")
-                ),
-            ))
-        }
-    };
-    parse_whisper_json(&json, &opts.model_id, normalized.as_deref())
+    (cmd, normalized)
 }
 
 async fn wait_for_child(
@@ -289,10 +311,18 @@ async fn wait_for_child(
         result = async {
             let mut lines = BufReader::new(stderr).lines();
             let mut tail = Vec::new();
+            let mut errors = Vec::new();
             while let Some(line) = lines.next_line().await? {
+                let line: String = line.chars().take(4096).collect();
                 if let Some(pct) = parse_progress(&line) { on_progress(pct); }
+                if (line.starts_with("error:") || line.starts_with("Error:")) && errors.len() < 4 {
+                    errors.push(line.clone());
+                }
                 tail.push(line);
                 if tail.len() > 20 { tail.remove(0); }
+            }
+            for error in errors.into_iter().rev() {
+                if !tail.contains(&error) { tail.insert(0, error); }
             }
             Ok::<_, WhisperError>((child.wait().await?, tail))
         } => result,
@@ -306,22 +336,26 @@ async fn wait_for_child(
     result
 }
 
-/// Normalize a language hint into a code whisper.cpp accepts (ISO-639-1, two
-/// letters) or `None` to auto-detect. The media player reports ISO-639-2 track
+/// Normalize a language hint into a pinned whisper.cpp language code or
+/// `None` to auto-detect (also supports haw and yue). The media player reports ISO-639-2 track
 /// tags ("eng", "fra", …) which whisper-cli rejects — passing one makes it print
 /// help and write no JSON. Anything unrecognised maps to `None` (auto-detect) so
 /// a stray tag can never break a run.
 pub fn normalize_whisper_lang(code: &str) -> Option<String> {
-    let c = code.trim().to_ascii_lowercase();
+    let tag = code.trim().to_ascii_lowercase();
+    let c = tag.split(['-', '_']).next().unwrap_or_default();
     if c.is_empty() || c == "und" || c == "auto" || c == "mul" || c == "zxx" {
         return None;
     }
     // Already ISO-639-1 (whisper's native code form).
-    if c.len() == 2 && c.chars().all(|ch| ch.is_ascii_alphabetic()) {
-        return Some(c);
+    // Pinned whisper.cpp 1.8.3 language vocabulary, including haw and yue.
+    // Unsupported alphabetic tags cause exit(0) with help instead of JSON.
+    const LANGUAGES: &str = "en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue";
+    if LANGUAGES.split_whitespace().any(|language| language == c) {
+        return Some(c.to_string());
     }
     // Common ISO-639-2 (bibliographic /B and terminological /T) → 639-1.
-    let mapped = match c.as_str() {
+    let mapped = match c {
         "eng" => "en",
         "fre" | "fra" => "fr",
         "ger" | "deu" => "de",
@@ -513,6 +547,156 @@ fn tokens_to_words(tokens: &[RawToken]) -> Vec<TranscriptWord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arabic_arguments_are_supported_and_do_not_seed_previous_dialogue() {
+        let opts = TranscribeOptions {
+            language: Some("ar-EG".into()),
+            dtw_preset: "large.v3.turbo".into(),
+            initial_prompt: Some("previous dialogue".into()),
+            max_len: 60,
+            ..Default::default()
+        };
+        let (cmd, language) = whisper_command(
+            Path::new("speech.wav"),
+            Path::new("model.bin"),
+            Path::new("speech"),
+            &opts,
+        );
+        let args: Vec<_> = cmd
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(language.as_deref(), Some("ar"));
+        assert!(args.windows(2).any(|pair| pair == ["--max-context", "0"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--dtw", "large.v3.turbo"]));
+        assert!(args.contains(&"--output-json-full".into()));
+        assert!(!args
+            .iter()
+            .any(|arg| arg == "--no-context" || arg == "--prompt"));
+    }
+
+    #[test]
+    fn language_tags_are_validated_against_the_pinned_cli() {
+        for (tag, expected) in [
+            ("AR_eg", "ar"),
+            ("fra-FR", "fr"),
+            ("en-US", "en"),
+            ("haw", "haw"),
+            ("yue-Hant", "yue"),
+        ] {
+            assert_eq!(normalize_whisper_lang(tag).as_deref(), Some(expected));
+        }
+        for tag in ["zz", "xx", "qz-XX", "und", "mul", "???"] {
+            assert_eq!(normalize_whisper_lang(tag), None);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn diagnostics_retain_the_error_before_a_long_help_listing() {
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("printf 'error: unknown argument: --no-context\\n' >&2; i=0; while [ $i -lt 50 ]; do printf 'help line\\n' >&2; i=$((i+1)); done")
+            .stderr(Stdio::piped())
+            .spawn().unwrap();
+        let (status, lines) = wait_for_child(
+            &mut child,
+            &mut |_| {},
+            std::future::pending(),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert!(status.success());
+        assert_eq!(lines[0], "error: unknown argument: --no-context");
+        assert!(lines.len() <= 24);
+    }
+
+    /// Small public FLEURS fixtures qualify actual French/Arabic speech, the
+    /// app's flags and JSON parser. This is not a full multilingual WER eval.
+    #[tokio::test]
+    #[ignore = "requires NOVA_TEST_WHISPER_ROOT and NOVA_TEST_FLEURS_DIR"]
+    async fn installed_cli_transcribes_real_french_and_arabic_speech() {
+        let root =
+            PathBuf::from(std::env::var_os("NOVA_TEST_WHISPER_ROOT").expect("app data root"));
+        let samples =
+            PathBuf::from(std::env::var_os("NOVA_TEST_FLEURS_DIR").expect("public fixtures"));
+        configure_whisper_cli(&root);
+        let model = crate::default_model();
+        let paths = crate::model_paths(&root.join("models/whisper"), &model);
+        let out = tempfile::tempdir().unwrap();
+        for (fixture, hint, language) in [("fr_fr", "fra-FR", "fr"), ("ar_eg", "ar_EG", "ar")] {
+            let opts = TranscribeOptions {
+                model_id: model.id.into(),
+                dtw_preset: model.dtw_preset.into(),
+                language: Some(hint.into()),
+                max_len: 60,
+                initial_prompt: Some("prior window dialogue".into()),
+            };
+            let started = std::time::Instant::now();
+            let transcript = transcribe_wav(
+                &samples.join(format!("{fixture}.wav")),
+                &paths.ggml,
+                &out.path().join(hint),
+                &opts,
+                |_| {},
+            )
+            .await
+            .unwrap();
+            assert_eq!(transcript.language, language);
+            assert!(!transcript.segments.is_empty());
+            let words = transcript
+                .segments
+                .iter()
+                .filter_map(|segment| segment.words.as_ref())
+                .flatten()
+                .count();
+            assert!(words > 0, "JSON-full must preserve timed speech words");
+            assert!(transcript
+                .segments
+                .iter()
+                .all(|segment| segment.start_sec.is_finite()
+                    && segment.end_sec.is_finite()
+                    && segment.end_sec >= segment.start_sec));
+            let reference =
+                tokio::fs::read_to_string(samples.join(format!("{fixture}.reference.txt")))
+                    .await
+                    .unwrap();
+            let normalize = |text: &str| {
+                text.to_lowercase()
+                    .split_whitespace()
+                    .map(|word| {
+                        word.chars()
+                            .filter(|ch| ch.is_alphanumeric())
+                            .collect::<String>()
+                    })
+                    .filter(|word| !word.is_empty())
+                    .collect::<Vec<_>>()
+            };
+            let actual = normalize(
+                &transcript
+                    .segments
+                    .iter()
+                    .map(|segment| segment.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+            let expected = normalize(&reference);
+            assert!(
+                actual.iter().any(|word| expected.contains(word)),
+                "transcription must match some real reference dialogue"
+            );
+            eprintln!(
+                "Real {language} speech: {} segments, {words} timed words, {:.2}s",
+                transcript.segments.len(),
+                started.elapsed().as_secs_f64()
+            );
+        }
+    }
 
     #[cfg(unix)]
     fn cli_fixture(dir: &Path, name: &str, mode: u32) -> PathBuf {

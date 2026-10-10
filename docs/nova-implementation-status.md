@@ -8,6 +8,38 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Caption reliability and browsing polish — 2026-10-10
+
+Arabic's no-JSON failure was reproduced against the pinned Whisper 1.8.3 CLI: the
+unsupported `--no-context` flag exits zero without producing output. Nova now uses
+supported context arguments and normalized supported language tags. Long-film windows
+remain bounded (30 seconds plus 3 seconds overlap); PCM validation, finite-end clamping,
+repeatable unknown-end detection and three cancellable retries prevent failed or empty
+extractions from becoming skipped dialogue. Silent openings no longer end the session or
+lock auto-detection to a guessed language. Existing empty cache metadata is repaired only
+before its first stored speech, preserving committed captions and translation IDs.
+
+Home scrolling uses cheaper header/image rendering and suppresses hover decoration,
+portals and speculative prefetch during vertical/rail scrolling, while clicks and focus
+stay usable. Shared button feedback and navigation respect reduced motion and avoid
+redundant root transitions. Details show real selected-stream audio tags such as FR/AR/EN;
+series labels refer to the next/resume episode, and unavailable/untagged audio stays explicit.
+A bounded private probe keeps provider URLs out of the generated IPC metadata.
+
+Real French and Arabic FLEURS samples passed through the installed CLI and existing turbo
+q5_0 model: two segments / 19 timed words in **39.90 seconds** on the first invocation,
+then three segments / 15 timed words in **1.57 seconds**. A two-hour synthetic late-seek/EOF
+fixture and a real four-track language container also passed. The rebuilt Nova app was
+opened with the approved restart; home scrolling, detail navigation and 4L's provider-backed
+EN audio badge were verified visually. These samples do not qualify full-film accuracy,
+all dialects, translation inference or measured frame rate.
+
+`just lint`, `just typecheck`, `just test` (743 Rust tests/doctests, 205 frontend tests),
+frontend production build, locked native build and rebuilt debug app bundle pass. The
+opt-in real speech/audio tests passed separately; formatting and scoped whitespace checks
+pass. Independent review found no remaining confirmed blockers. See
+[the delivery contract and validation record](implementation/caption-reliability-polish.md).
+
 ### Whisper CLI installation and discovery repair — 2026-10-09
 
 The reported `whisper-cli failed to start` error came from a missing executable; no old

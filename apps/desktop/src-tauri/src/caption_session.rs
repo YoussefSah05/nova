@@ -37,6 +37,7 @@ use crate::resource_policy::WorkClass;
 use nova_core::TranscriptSegment;
 use nova_media::extract_audio_window;
 use nova_storage::{PlaybackRepository, TranscriptRepository};
+use nova_transcribe::whisper::normalize_whisper_lang;
 use nova_transcribe::{
     default_model, ensure_model, segments_to_vtt, shift_transcript, transcribe_wav_cancellable,
     ModelDownloadProgress, TranscribeOptions,
@@ -59,9 +60,8 @@ const MAX_LEN_CHARS: u32 = 60;
 /// Segments ending within this of the window's tail are treated as possibly
 /// truncated by the hard 30s cut, so they're left for the next window to re-read.
 const TRAILING_GUARD_SEC: f64 = 1.5;
-/// If whisper found less audio than the window span by more than this, we've hit
-/// the end of the file and every segment is complete.
-const EOF_SHORTFALL_SEC: f64 = 2.0;
+/// Tolerance for a decoded audio window reaching the actual end of a source.
+const EOF_SHORTFALL_SEC: f64 = 1.0;
 /// Floor on per-window progress so a window dominated by one long segment can't
 /// stall the cursor.
 const MIN_ADVANCE_SEC: f64 = 5.0;
@@ -335,17 +335,20 @@ async fn run_session_inner(
     let lang_hint = ctx
         .track_lang
         .clone()
-        .or_else(|| resolved.source_lang.clone());
+        .or_else(|| resolved.source_lang.clone())
+        .as_deref()
+        .and_then(normalize_whisper_lang);
 
     let repo = TranscriptRepository::new(&ctx.pool);
-    let duration = ctx
+    let mut duration = ctx
         .duration_sec
-        .filter(|d| *d > 0.0)
+        .filter(|d| d.is_finite() && *d > 0.0)
         .unwrap_or(f64::INFINITY);
 
     // Load any cached transcript for this track and replay its cues immediately.
     let mut transcript_id: Option<i64> = None;
     let mut language = lang_hint.clone().unwrap_or_default();
+    let mut language_confirmed = false;
     let mut covered: Vec<(f64, f64)> = Vec::new();
     let mut prompt_tail: Option<String> = None;
     if let Some(existing) = repo
@@ -355,7 +358,6 @@ async fn run_session_inner(
     {
         transcript_id = Some(existing.id);
         active_transcript.store(existing.id, Ordering::SeqCst);
-        language = existing.language.clone();
         for (s, e) in repo
             .covered_windows(existing.id)
             .await
@@ -367,7 +369,13 @@ async fn run_session_inner(
             .get_segments(existing.id)
             .await
             .map_err(|e| e.to_string())?;
+        language = cached_speech_language(
+            &existing.language,
+            !segments.is_empty(),
+            lang_hint.as_deref(),
+        );
         if !segments.is_empty() {
+            language_confirmed = true;
             prompt_tail = tail_prompt(&segments);
             let stored = repo
                 .segments_with_ids(existing.id)
@@ -379,7 +387,8 @@ async fn run_session_inner(
 
     emit_status(ctx, "streaming", Some(covered_total(&covered)), None);
 
-    let mut empty_streak = 0u32;
+    let mut failures = WindowFailures::default();
+    let mut candidate_eof: Option<f64> = None;
     loop {
         if cancel.load(Ordering::SeqCst) {
             return Ok(());
@@ -406,9 +415,7 @@ async fn run_session_inner(
             .tempdir()
             .map_err(|e| e.to_string())?;
         let wav = work.path().join("win.wav");
-        let audio_start = (gap_start - OVERLAP_SEC).max(0.0);
-        let window_end = gap_start + WINDOW_SEC;
-        let audio_dur = window_end - audio_start;
+        let (audio_start, window_end, audio_dur) = window_bounds(gap_start, duration);
 
         emit_phase(
             ctx,
@@ -416,37 +423,111 @@ async fn run_session_inner(
             "Extracting audio",
             Some(covered_total(&covered)),
         );
-        if let Err(e) = extract_audio_window(
-            &resolved.upstream_url,
-            &wav,
-            audio_start,
-            audio_dur,
-            ctx.audio_track,
-            EXTRACT_DEADLINE,
-        )
-        .await
-        {
-            // First window failing is fatal; later failures are likely EOF —
-            // mark the span covered so we advance instead of looping.
-            if covered.is_empty() {
-                return Err(format!("audio extraction: {e}"));
+        let extracted = tokio::select! {
+            biased;
+            _ = model_cancel.cancelled() => return Ok(()),
+            result = extract_audio_window(
+                &resolved.upstream_url,
+                &wav,
+                audio_start,
+                audio_dur,
+                ctx.audio_track,
+                EXTRACT_DEADLINE,
+            ) => result,
+        };
+        let decoded_sec = match extracted {
+            Ok(seconds) => seconds,
+            Err(error) => {
+                emit_phase(
+                    ctx,
+                    "streaming",
+                    "Retrying audio extraction",
+                    Some(covered_total(&covered)),
+                );
+                if retry_window(
+                    &mut failures,
+                    gap_start,
+                    format!("audio extraction: {error}"),
+                    model_cancel,
+                )
+                .await?
+                {
+                    continue;
+                }
+                return Ok(());
             }
-            mark_covered(&repo, &mut covered, transcript_id, gap_start, window_end).await;
-            emit_status(ctx, "streaming", Some(covered_total(&covered)), None);
-            empty_streak += 1;
-            if empty_streak >= 3 {
-                if let Some(id) = transcript_id {
-                    let _ = repo.mark_complete(id).await;
+        };
+        if decoded_sec <= EPS {
+            // Successful demux with an empty data chunk is EOF only after
+            // reaching an established endpoint. An empty first window or early
+            // seek on a declared finite movie is not successful caption work.
+            if point_covered(&covered, audio_start)
+                && (!duration.is_finite() || audio_start >= duration - EOF_SHORTFALL_SEC)
+            {
+                if covers_to(&covered, duration.min(gap_start)) {
+                    if let Some(id) = transcript_id {
+                        let _ = repo.mark_complete(id).await;
+                    }
                 }
                 emit_status(ctx, "complete", Some(covered_total(&covered)), None);
                 return Ok(());
             }
-            continue;
+            emit_phase(
+                ctx,
+                "streaming",
+                "Retrying empty audio",
+                Some(covered_total(&covered)),
+            );
+            if retry_window(
+                &mut failures,
+                gap_start,
+                "No audio samples decoded at the requested position".into(),
+                model_cancel,
+            )
+            .await?
+            {
+                continue;
+            }
+            return Ok(());
         }
+        let decoded_end = audio_start + decoded_sec;
+        let short_window = decoded_sec + EPS < audio_dur;
+        let final_window = duration.is_finite() && window_end >= duration - EPS;
+        if short_window {
+            // A partial upstream response in the middle of a known movie is
+            // not EOF. Unknown-length media requires repeatable decoded EOF
+            // evidence, not the last speech timestamp or a few silent windows.
+            if short_window_needs_retry(duration, window_end, decoded_end, candidate_eof) {
+                candidate_eof = Some(decoded_end);
+                emit_phase(
+                    ctx,
+                    "streaming",
+                    "Retrying incomplete audio window",
+                    Some(covered_total(&covered)),
+                );
+                if retry_window(
+                    &mut failures,
+                    gap_start,
+                    "Decoded audio ended before the requested window".into(),
+                    model_cancel,
+                )
+                .await?
+                {
+                    continue;
+                }
+                return Ok(());
+            }
+        }
+        let reached_eof = short_window || final_window;
+        if short_window && (!duration.is_finite() || final_window) {
+            duration = duration.min(decoded_end);
+        }
+        candidate_eof = None;
+        let window_end = window_end.min(decoded_end);
 
         let out_base = work.path().join("win");
         let opts = TranscribeOptions {
-            language: lang_hint.clone(),
+            language: normalize_whisper_lang(&language).or_else(|| lang_hint.clone()),
             model_id: model.id.to_string(),
             dtw_preset: model.dtw_preset.to_string(),
             initial_prompt: prompt_tail.clone(),
@@ -490,14 +571,26 @@ async fn run_session_inner(
         let mut raw = match result {
             Ok(t) => t,
             Err(e) => {
-                if covered.is_empty() {
-                    return Err(format!("whisper: {e}"));
+                emit_phase(
+                    ctx,
+                    "streaming",
+                    "Retrying speech recognition",
+                    Some(covered_total(&covered)),
+                );
+                if retry_window(
+                    &mut failures,
+                    gap_start,
+                    format!("whisper: {e}"),
+                    model_cancel,
+                )
+                .await?
+                {
+                    continue;
                 }
-                mark_covered(&repo, &mut covered, transcript_id, gap_start, window_end).await;
-                emit_status(ctx, "streaming", Some(covered_total(&covered)), None);
-                continue;
+                return Ok(());
             }
         };
+        failures = WindowFailures::default();
         if cancel.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -518,19 +611,12 @@ async fn run_session_inner(
         raw.segments.retain(|s| !s.text.trim().is_empty());
 
         // Decide which segments are "complete" and how far the cursor advances.
-        let (keep, advance_to) = split_complete(&raw.segments, gap_start, window_end);
+        let (keep, advance_to) = split_complete(&raw.segments, gap_start, window_end, reached_eof);
 
-        if keep.is_empty() {
-            empty_streak += 1;
-        } else {
-            empty_streak = 0;
-        }
-
-        // Create the transcript row lazily once we know the language.
-        if transcript_id.is_none() {
-            if raw.language != "und" && !raw.language.is_empty() {
-                language = raw.language.clone();
-            }
+        // Whisper may guess a language even for silence. Learn it only from
+        // confirmed speech; keep silent coverage in memory until then.
+        if !language_confirmed && !keep.is_empty() {
+            language = speech_language(&raw.language, lang_hint.as_deref());
             let base = transcript_basename(&ctx.media_kind, ctx.media_id, track_slot, &language);
             let vtt_path = ctx.transcripts_dir.join(format!("{base}.vtt"));
             let json_path = ctx.transcripts_dir.join(format!("{base}.json"));
@@ -550,10 +636,24 @@ async fn run_session_inner(
                 .map_err(|e| e.to_string())?;
             transcript_id = Some(id);
             active_transcript.store(id, Ordering::SeqCst);
+            repo.confirm_empty_language(
+                id,
+                &language,
+                &vtt_path.to_string_lossy(),
+                &json_path.to_string_lossy(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            for &(start, end) in &covered {
+                repo.record_window(id, start, end)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            language_confirmed = true;
         }
-        let id = transcript_id.expect("transcript id set above");
 
         if !keep.is_empty() {
+            let id = transcript_id.expect("confirmed speech has a transcript");
             let ids = repo
                 .append_segments(id, &keep)
                 .await
@@ -581,16 +681,85 @@ async fn run_session_inner(
             )
             .await;
         }
-        mark_covered(&repo, &mut covered, Some(id), gap_start, advance_to).await;
+        mark_covered(&repo, &mut covered, transcript_id, gap_start, advance_to).await;
 
         emit_status(ctx, "streaming", Some(covered_total(&covered)), None);
+    }
+}
 
-        // EOF heuristic when duration is unknown.
-        if duration.is_infinite() && empty_streak >= 3 {
-            let _ = repo.mark_complete(id).await;
-            emit_status(ctx, "complete", Some(covered_total(&covered)), None);
-            return Ok(());
+fn speech_language(detected: &str, hint: Option<&str>) -> String {
+    hint.and_then(normalize_whisper_lang)
+        .or_else(|| normalize_whisper_lang(detected))
+        .unwrap_or_else(|| "und".into())
+}
+
+fn cached_speech_language(stored: &str, has_speech: bool, hint: Option<&str>) -> String {
+    if has_speech {
+        stored.into()
+    } else {
+        hint.and_then(normalize_whisper_lang).unwrap_or_default()
+    }
+}
+
+fn window_bounds(gap_start: f64, duration: f64) -> (f64, f64, f64) {
+    let audio_start = (gap_start - OVERLAP_SEC).max(0.0);
+    let window_end = (gap_start + WINDOW_SEC).min(duration);
+    (audio_start, window_end, window_end - audio_start)
+}
+
+fn short_window_needs_retry(
+    duration: f64,
+    _window_end: f64,
+    decoded_end: f64,
+    candidate_eof: Option<f64>,
+) -> bool {
+    if duration.is_finite() {
+        // Audio can legitimately finish slightly before the declared video
+        // tail. Anything materially earlier is incomplete extraction, even
+        // when the requested span was the final window.
+        decoded_end < duration - EOF_SHORTFALL_SEC
+    } else {
+        candidate_eof.is_none_or(|end| (end - decoded_end).abs() > EPS)
+    }
+}
+
+/// Failures leave the gap untouched, so transient upstream/model failures can
+/// recover and a later session can retry after the bounded attempt budget.
+#[derive(Default)]
+struct WindowFailures {
+    gap: Option<f64>,
+    attempts: u8,
+}
+
+impl WindowFailures {
+    fn record(&mut self, gap: f64) -> bool {
+        if self.gap.is_none_or(|previous| (previous - gap).abs() > EPS) {
+            self.gap = Some(gap);
+            self.attempts = 0;
         }
+        self.attempts += 1;
+        self.attempts < 3
+    }
+}
+
+async fn retry_window(
+    failures: &mut WindowFailures,
+    gap: f64,
+    error: String,
+    cancellation: &RuntimeCancellation,
+) -> Result<bool, String> {
+    if cancellation.is_cancelled() {
+        return Ok(false);
+    }
+    if !failures.record(gap) {
+        return Err(format!(
+            "{error} (after 3 attempts at {gap:.1}s; this gap remains retryable)"
+        ));
+    }
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Ok(false),
+        _ = tokio::time::sleep(Duration::from_millis(500 * u64::from(failures.attempts))) => Ok(true),
     }
 }
 
@@ -655,15 +824,15 @@ fn split_complete(
     segments: &[TranscriptSegment],
     gap_start: f64,
     window_end: f64,
+    reached_eof: bool,
 ) -> (Vec<TranscriptSegment>, f64) {
     if segments.is_empty() {
         // Nothing here (silence / extraction gap): cover the whole span.
         return (Vec::new(), window_end);
     }
     let max_end = segments.iter().fold(0.0_f64, |m, s| m.max(s.end_sec));
-    let reached_eof = max_end < window_end - EOF_SHORTFALL_SEC;
     if reached_eof {
-        return (segments.to_vec(), max_end);
+        return (segments.to_vec(), window_end);
     }
 
     let cut = window_end - TRAILING_GUARD_SEC;
@@ -672,7 +841,11 @@ fn split_complete(
         .filter(|s| s.end_sec <= cut)
         .cloned()
         .collect();
-    if let Some(last) = complete.last() {
+    if complete.len() == segments.len() {
+        // The decoded remainder is silence, not EOF. It is safe coverage and
+        // need not be extracted/recognized again on the next window.
+        (complete, window_end)
+    } else if let Some(last) = complete.last() {
         (complete.clone(), last.end_sec.max(gap_start + EPS))
     } else {
         // One long segment fills the window with no clean break — keep it all
@@ -869,6 +1042,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn empty_cached_windows_do_not_force_a_guessed_language_onto_later_speech() {
+        let language = cached_speech_language("en", false, None);
+        assert_eq!(normalize_whisper_lang(&language), None);
+        assert_eq!(speech_language("ar", None), "ar");
+        assert_eq!(cached_speech_language("en", false, Some("ar_EG")), "ar");
+        assert_eq!(cached_speech_language("fr", true, None), "fr");
+        assert_eq!(speech_language("en", Some("ar_EG")), "ar");
+    }
+
     #[tokio::test]
     async fn translation_is_scoped_bounded_and_cancelled_with_the_caption_session() {
         let manager = CaptionSessionManager::new();
@@ -951,6 +1134,91 @@ mod tests {
     }
 
     #[test]
+    fn final_and_late_windows_are_bounded_by_the_actual_media_duration() {
+        assert_eq!(window_bounds(7_185.0, 7_200.0), (7_182.0, 7_200.0, 18.0));
+        assert_eq!(
+            window_bounds(7_185.0, f64::INFINITY),
+            (7_182.0, 7_215.0, 33.0)
+        );
+        assert_eq!(window_bounds(0.0, 11.0), (0.0, 11.0, 11.0));
+    }
+
+    #[test]
+    fn partial_upstream_audio_cannot_truncate_a_known_movie() {
+        assert!(short_window_needs_retry(7_200.0, 63.0, 42.0, None));
+        assert!(
+            short_window_needs_retry(7_200.0, 63.0, 42.0, Some(42.0)),
+            "repeatable early short data still is not a declared finite EOF"
+        );
+        assert!(
+            short_window_needs_retry(7_200.0, 7_200.0, 7_183.0, None),
+            "a partial final window cannot discard seventeen seconds"
+        );
+        assert!(!short_window_needs_retry(7_200.0, 7_200.0, 7_199.5, None));
+        assert!(short_window_needs_retry(f64::INFINITY, 63.0, 42.0, None));
+        assert!(short_window_needs_retry(
+            f64::INFINITY,
+            63.0,
+            42.0,
+            Some(43.0)
+        ));
+        assert!(!short_window_needs_retry(
+            f64::INFINITY,
+            63.0,
+            42.0,
+            Some(42.0)
+        ));
+    }
+
+    #[test]
+    fn silent_windows_remain_decoded_coverage_without_implying_eof() {
+        let mut covered = Vec::new();
+        for start in [0.0, 30.0, 60.0, 90.0] {
+            let (_, end) = split_complete(&[], start, start + WINDOW_SEC, false);
+            merge_interval(&mut covered, start, end);
+        }
+        assert_eq!(covered, vec![(0.0, 120.0)]);
+        assert!(!covers_to(&covered, f64::INFINITY));
+        assert_eq!(next_gap(&covered, 120.0, 210.0), Some(120.0));
+        let (_, end) = split_complete(
+            &[seg(120.0, 125.0, "dialogue after music")],
+            120.0,
+            150.0,
+            false,
+        );
+        assert_eq!(end, 150.0, "decoded silence after speech is safe coverage");
+    }
+
+    #[tokio::test]
+    async fn failures_retry_without_covering_the_gap_and_cancel_during_backoff() {
+        let coverage = vec![(0.0, 30.0)];
+        let mut failures = WindowFailures::default();
+        assert!(failures.record(30.0));
+        assert!(failures.record(30.0));
+        assert!(
+            !failures.record(30.0),
+            "three failed attempts exhaust the budget"
+        );
+        assert_eq!(next_gap(&coverage, 0.0, 90.0), Some(30.0));
+        assert!(failures.record(60.0), "a new gap has a separate budget");
+        let cancel = RuntimeCancellation::default();
+        let other = cancel.clone();
+        let cancel_task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            other.cancel();
+        });
+        let started = std::time::Instant::now();
+        assert!(
+            !retry_window(&mut failures, 90.0, "transient failure".into(), &cancel)
+                .await
+                .unwrap()
+        );
+        cancel_task.await.unwrap();
+        assert!(started.elapsed() < Duration::from_millis(400));
+        assert_eq!(next_gap(&coverage, 0.0, 90.0), Some(30.0));
+    }
+
+    #[test]
     fn split_complete_drops_truncated_tail_segment() {
         let gap = 0.0;
         let window_end = 30.0;
@@ -960,32 +1228,32 @@ mod tests {
             seg(5.2, 24.0, "second"),
             seg(24.5, 29.9, "cut off"),
         ];
-        let (keep, advance) = split_complete(&segs, gap, window_end);
+        let (keep, advance) = split_complete(&segs, gap, window_end, false);
         assert_eq!(keep.len(), 2, "trailing truncated segment dropped");
         assert!((advance - 24.0).abs() < 1e-9, "cursor at last complete end");
     }
 
     #[test]
-    fn split_complete_keeps_all_at_eof() {
-        // Whisper found much less than the 30s window → end of file.
+    fn split_complete_keeps_all_at_decoded_eof() {
+        // Actual decoded PCM ends at 11s; speech ends earlier at 9s.
         let segs = [seg(0.5, 5.0, "a"), seg(5.2, 9.0, "b")];
-        let (keep, advance) = split_complete(&segs, 0.0, 30.0);
+        let (keep, advance) = split_complete(&segs, 0.0, 11.0, true);
         assert_eq!(keep.len(), 2);
-        assert!((advance - 9.0).abs() < 1e-9);
+        assert!((advance - 11.0).abs() < 1e-9);
     }
 
     #[test]
     fn split_complete_forces_progress_on_one_long_segment() {
         // A single segment spans the whole window with no clean break.
         let segs = [seg(0.2, 29.8, "an unbroken monologue")];
-        let (keep, advance) = split_complete(&segs, 0.0, 30.0);
+        let (keep, advance) = split_complete(&segs, 0.0, 30.0, false);
         assert_eq!(keep.len(), 1);
         assert!(advance >= MIN_ADVANCE_SEC);
     }
 
     #[test]
     fn split_complete_empty_covers_whole_span() {
-        let (keep, advance) = split_complete(&[], 10.0, 40.0);
+        let (keep, advance) = split_complete(&[], 10.0, 40.0, false);
         assert!(keep.is_empty());
         assert!((advance - 40.0).abs() < 1e-9);
     }

@@ -27,6 +27,7 @@ import { PosterFallback } from "@/features/browse/PosterFallback";
 import { TitleLogo } from "@/features/browse/TitleLogo";
 import { CastStrip } from "@/features/browse/detail/CastStrip";
 import { TrailerButton } from "@/features/browse/detail/TrailerButton";
+import { MovieAudioLanguageBanner } from "@/features/browse/detail/AudioLanguageBanner";
 import {
   canonicalMovieQuery,
   useRelatedTitles,
@@ -81,12 +82,13 @@ export function MoviePage({ item }: { item: BrowseItem }) {
   const activate = useActivate();
   const { toggleFavorite, toggleWatchlist } = useLibraryActions();
   const { settings, saveSettings } = useProfileSettings(profile.id);
-  const { data: detail } = useQuery({
+  const detailQuery = useQuery({
     subscribed: useScreenActive(),
     ...canonicalMovieQuery(profile.id, item.entityId),
     enabled: !!item.entityId,
     staleTime: 0,
   });
+  const { data: detail } = detailQuery;
   const movie: CanonicalMediaSummary | undefined = detail ?? item.movie;
   const subject = titleArtSubject(item);
   const art = useTitleArt(profile.id, item);
@@ -112,6 +114,16 @@ export function MoviePage({ item }: { item: BrowseItem }) {
         logoUrl={art?.logoUrl ?? null}
         backdropUrl={art?.backdropUrl ?? movie?.backdropUrl ?? item.posterUrl}
         audio={settings.preferredAudioLang ?? null}
+        audioBanner={
+          <MovieAudioLanguageBanner
+            profileId={profile.id}
+            entityId={item.entityId}
+            detail={detail}
+            loadingDetail={detailQuery.isPending}
+            detailError={detailQuery.isError}
+            onRetryDetail={() => void detailQuery.refetch()}
+          />
+        }
         onAudio={setAudio}
         onPlay={() => void playItem(item)}
         onToggleFavorite={(next) => void toggleFavorite(item, next)}
@@ -173,6 +185,7 @@ function MovieHero({
   logoUrl,
   backdropUrl,
   audio,
+  audioBanner,
   onAudio,
   onPlay,
   onToggleFavorite,
@@ -186,6 +199,7 @@ function MovieHero({
   logoUrl: string | null;
   backdropUrl: string | null | undefined;
   audio: string | null;
+  audioBanner: React.ReactNode;
   onAudio: (value: string | null) => void;
   onPlay: () => void;
   onToggleFavorite: (next: boolean) => void;
@@ -265,6 +279,7 @@ function MovieHero({
               </>
             )}
           </p>
+          {audioBanner}
           {genres.length > 0 && (
             <ul className="flex flex-wrap gap-2">
               {genres.slice(0, 4).map((g) => (
@@ -374,7 +389,7 @@ function Credits({
   if (detail?.originalTitle) rows.push({ k: "Original title", v: detail.originalTitle });
   const runtime = facts?.runtimeMin ?? movie?.runtimeMin;
   if (runtime) rows.push({ k: "Runtime", v: formatRuntime(runtime) });
-  if (audio.length) rows.push({ k: "Audio in your versions", v: audio.join(" · ") });
+  if (audio.length) rows.push({ k: "Provider labels", v: audio.join(" · ") });
 
   if (!facts?.cast?.length && rows.length === 0 && !detail?.keywords?.length) return null;
   return (

@@ -39,12 +39,14 @@ export function usePrefetchTitle(item: BrowseItem) {
   };
   useEffect(() => cancel, []);
   return {
-    onEnter: () => {
+    onEnter: (event: { currentTarget: Element }) => {
       if (!profileId || !titleArtSubject(item)) return;
       cancel();
+      const card = event.currentTarget;
+      if (card.closest(".nova-scrolling, [inert]")) return;
       timer.current = window.setTimeout(() => {
         timer.current = null;
-        prefetchTitle(qc, profileId, item);
+        if (!card.closest(".nova-scrolling, [inert]")) prefetchTitle(qc, profileId, item);
       }, DWELL_MS);
     },
     onLeave: cancel,
