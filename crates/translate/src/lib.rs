@@ -213,5 +213,32 @@ mod tests {
                 .any(|c| ('\u{0600}'..='\u{06FF}').contains(&c)),
             "Arabic output: {out:?}"
         );
+        let run = |model: &str, source: &str, target: &str, text: &str| {
+            let translator = MarianTranslator::load(&root.join(model), source, target).unwrap();
+            let segments = vec![text.to_string()];
+            let out = translator
+                .translate(TranslateBatch {
+                    source,
+                    target,
+                    context: &[],
+                    segments: &segments,
+                })
+                .unwrap();
+            eprintln!("{source}->{target}: {text:?} => {out:?}");
+            out.into_iter().next().unwrap()
+        };
+        let fr_en = run("opus-mt-fr-en", "fr", "en", "Il fait beau aujourd'hui.");
+        assert!(fr_en.to_lowercase().contains("today"), "{fr_en}");
+        let ar_en = run("opus-mt-ar-en", "ar", "en", "الطقس جميل اليوم.");
+        assert!(ar_en.to_lowercase().contains("today"), "{ar_en}");
+        // fr → ar has no direct model: the route pivots through English.
+        let via = run("opus-mt-fr-en", "fr", "en", "Bonsoir et bienvenue.");
+        let fr_ar = run("opus-mt-en-ar", "en", "ar", &via);
+        assert!(
+            fr_ar
+                .chars()
+                .any(|c| ('\u{0600}'..='\u{06FF}').contains(&c)),
+            "{fr_ar}"
+        );
     }
 }

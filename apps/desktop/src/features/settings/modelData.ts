@@ -15,6 +15,7 @@ export const modelKeys = {
 export type ModelAction =
   | "download_whisper_model"
   | "download_enrich_models"
+  | "download_translation_models"
   | "remove_whisper_model";
 export function useModelStatus() {
   const whisper = useQuery({
@@ -64,13 +65,28 @@ export function useModelAction() {
   };
 }
 
+const controlsQuery = {
+  queryKey: [...modelKeys.all, "controls"],
+  queryFn: () => invoke<LocalModelStatus[]>("list_model_controls"),
+  refetchInterval: 5000,
+};
+
+/** Translation models as the runtime sees them (internal or external library). */
+export function useTranslationModels() {
+  const models = useQuery(controlsQuery);
+  const translation = models.data?.filter((m) => m.capability === "translation") ?? [];
+  return {
+    query: models,
+    total: translation.length,
+    installed: translation.filter((m) => m.availability === "available").length,
+    /** Files present but not yet checked (or incomplete): download repairs or verifies them. */
+    unverified: translation.filter((m) => m.availability === "unverified").length,
+  };
+}
+
 export function useModelControls() {
   const client = useQueryClient();
-  const models = useQuery({
-    queryKey: [...modelKeys.all, "controls"],
-    queryFn: () => invoke<LocalModelStatus[]>("list_model_controls"),
-    refetchInterval: 5000,
-  });
+  const models = useQuery(controlsQuery);
   const change = useMutation({
     mutationFn: async (action: { modelId: string; enabled?: boolean }) => {
       if (action.enabled === undefined)

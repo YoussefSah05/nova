@@ -3,18 +3,23 @@ import { listen } from "@tauri-apps/api/event";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ModelDownloadEvent } from "@/types/generated/ModelDownloadEvent";
 import { SettingsButton, SettingsCard, SettingsError, SettingRow } from "../SettingsUI";
-import { useModelAction, useModelStatus } from "../modelData";
+import { useModelAction, useModelStatus, useTranslationModels } from "../modelData";
 import { formatBytes } from "../format";
 import { ModelControls } from "./ModelControls";
 import { ExternalModelLibraries } from "./ExternalModelLibraries";
 
 export function ModelsSection() {
   const { whisper, embedding, runtime } = useModelStatus();
+  const translation = useTranslationModels();
   const action = useModelAction();
   const [progress, setProgress] = useState<ModelDownloadEvent | null>(null);
   useEffect(() => {
     setProgress(null);
-    if (action.pending !== "download_whisper_model") return;
+    if (
+      action.pending !== "download_whisper_model" &&
+      action.pending !== "download_translation_models"
+    )
+      return;
     let cancelled = false;
     const unlisten = listen<ModelDownloadEvent>("model:download:progress", ({ payload }) => {
       if (!cancelled) setProgress(payload);
@@ -31,6 +36,28 @@ export function ModelsSection() {
           Math.max(0, Math.round((progress.downloadedBytes / progress.totalBytes) * 100))
         )
       : null;
+  const downloadProgress = (label: string) => (
+    <div className="space-y-2 py-4" role="status">
+      <p className="text-xs text-muted-foreground">
+        {progress
+          ? `${progress.artifact} · ${formatBytes(progress.downloadedBytes)}${progress.totalBytes ? ` of ${formatBytes(progress.totalBytes)}` : " downloaded"}`
+          : "Preparing download…"}
+      </p>
+      <div
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent ?? undefined}
+        className="h-1 overflow-hidden rounded bg-white/10"
+      >
+        <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        You can leave Settings while the download continues.
+      </p>
+    </div>
+  );
   return (
     <div className="flex flex-col gap-6">
       <p className="text-sm leading-relaxed text-muted-foreground">
@@ -83,28 +110,46 @@ export function ModelsSection() {
             )}
           </SettingRow>
         )}
-        {action.pending === "download_whisper_model" && (
-          <div className="space-y-2 py-4" role="status">
-            <p className="text-xs text-muted-foreground">
-              {progress
-                ? `${progress.artifact} · ${formatBytes(progress.downloadedBytes)}${progress.totalBytes ? ` of ${formatBytes(progress.totalBytes)}` : " downloaded"}`
-                : "Preparing download…"}
-            </p>
-            <div
-              role="progressbar"
-              aria-label="Caption model download"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={percent ?? undefined}
-              className="h-1 overflow-hidden rounded bg-white/10"
-            >
-              <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              You can leave Settings while the download continues.
-            </p>
+        {action.pending === "download_whisper_model" && downloadProgress("Caption model download")}
+      </SettingsCard>
+      <SettingsCard title="Translated captions">
+        {translation.query.isError ? (
+          <div className="py-4">
+            <SettingsError
+              message="Couldn’t check the translation models."
+              retry={() => void translation.query.refetch()}
+            />
           </div>
+        ) : translation.query.isPending ? (
+          <Skeleton className="my-4 h-20" />
+        ) : (
+          <SettingRow
+            title="English · French · Arabic"
+            description={`Opus-MT · ${translation.installed} of ${translation.total} directions installed · French ↔ Arabic goes through English`}
+          >
+            {translation.total > 0 && translation.installed >= translation.total ? (
+              <span className="rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">
+                Installed
+              </span>
+            ) : (
+              <SettingsButton
+                variant="primary"
+                disabled={!!action.pending}
+                onClick={() => action.run("download_translation_models")}
+              >
+                {action.pending === "download_translation_models"
+                  ? "Downloading…"
+                  : translation.unverified > 0
+                    ? "Verify or repair"
+                    : translation.installed > 0
+                      ? "Download the rest"
+                      : "Download translation (~450 MB)"}
+              </SettingsButton>
+            )}
+          </SettingRow>
         )}
+        {action.pending === "download_translation_models" &&
+          downloadProgress("Translation model download")}
       </SettingsCard>
       <SettingsCard title="Catalog intelligence">
         {embedding.isError ? (

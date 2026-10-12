@@ -36,6 +36,7 @@ nova-jobs = { path = "../../../crates/jobs" }
 sqlx = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
+thiserror = { workspace = true }
 dirs = "5"
 reqwest = { workspace = true }
 nova-artwork = { path = "../../../crates/artwork" }

@@ -137,6 +137,11 @@ pub struct ManifestEntry {
     pub probe: Probe,
     #[serde(default)]
     pub files: Vec<ManifestFile>,
+    /// HTTPS base a pinned install downloads from: each file is fetched from
+    /// `{source}/{path}` and must still match its sha256. Pin it to an
+    /// immutable revision, never a moving branch.
+    #[serde(default)]
+    pub source: Option<String>,
     /// Spoken or written languages; empty means language-independent.
     #[serde(default)]
     pub languages: Vec<String>,
@@ -176,6 +181,15 @@ fn valid_sha256(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+fn valid_source(url: &str) -> bool {
+    url.strip_prefix("https://")
+        .is_some_and(|rest| rest.contains('/') && !rest.starts_with('/'))
+        && !url.ends_with('/')
+        && !url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '?' | '#' | '\\'))
+}
+
 impl ModelManifest {
     /// Parse and validate. An invalid manifest is a build defect, so callers
     /// treat the error as fatal for discovery rather than skipping entries.
@@ -212,6 +226,14 @@ impl ModelManifest {
                 Probe::Files => {}
                 _ if !entry.files.is_empty() => return fail("only the files probe pins files"),
                 _ => {}
+            }
+            if let Some(source) = &entry.source {
+                if entry.probe != Probe::Files {
+                    return fail("only the files probe has a download source");
+                }
+                if !valid_source(source) {
+                    return fail("source must be an https URL without query, fragment or spaces");
+                }
             }
             let mut paths = HashSet::new();
             for file in &entry.files {
@@ -544,6 +566,39 @@ mod tests {
             ModelManifest::parse(&entry_json("").replace("opus/en-fr", "../escape")),
             Err(ManifestError::Entry(_, "invalid relative_path"))
         ));
+    }
+
+    #[test]
+    fn download_sources_are_pinned_https_bases() {
+        let with = |source: &str| entry_json(&format!(r#","source":"{source}""#));
+        let ok = with("https://huggingface.co/Xenova/opus-mt-en-fr/resolve/0123abcd");
+        assert!(ModelManifest::parse(&ok).is_ok());
+        for bad in [
+            "http://huggingface.co/x/resolve/1",
+            "https://huggingface.co/x/resolve/1/",
+            "https://huggingface.co/x?y=1",
+            "https://huggingface.co/x y",
+            "https://",
+            "file:///tmp/x",
+        ] {
+            assert!(
+                matches!(
+                    ModelManifest::parse(&with(bad)),
+                    Err(ManifestError::Entry(..))
+                ),
+                "{bad}"
+            );
+        }
+        let wrong_probe = r#"{"schema":1,"models":[{"id":"e5","revision":"r","capability":"embedding",
+            "backend":"fastembed","relative_path":"embeddings","probe":"fastembed-cache",
+            "source":"https://example.com/x","licence":"MIT","latency_class":"batch"}]}"#;
+        assert_eq!(
+            ModelManifest::parse(wrong_probe),
+            Err(ManifestError::Entry(
+                "e5".into(),
+                "only the files probe has a download source"
+            ))
+        );
     }
 
     #[test]

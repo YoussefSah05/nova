@@ -8,6 +8,20 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### M18 translation model installer — 2026-10-12
+
+Settings → Models now has a "Translated captions" card that downloads the four pinned Opus-MT
+directions (~450 MB). Every file streams through a sha256/size check against the manifest pin,
+pinned to an exact Hugging Face commit, and the directory is attested before the runtime may load
+it. Only models that need work take the runtime lock; external-library models are not duplicated.
+No migration; pinning the revision voids older verification markers (shown as "Verify or repair").
+
+All four real models installed through this code and translated correctly in every direction,
+including the previously unmeasured fr→en and ar→en and the fr→ar pivot. `just lint`,
+`just typecheck`, `just test` (753 Rust tests/doctests, 226 frontend tests) pass; independent
+review findings were fixed. The native Settings click and provider-stream translation remain
+unqualified. See [the contract and validation record](implementation/m18-translation-install.md).
+
 ### Available audio tracks and caption startup — 2026-10-10
 
 Movie and episode Audio selectors now list only ordered, probe-confirmed tracks for the
@@ -163,7 +177,7 @@ the next separate dependencies; existing user work is preserved.
 | M15 Recovery / QoE | PARTIAL | Bounded recovery (same item once, then other sources, ≤ 5 per 10 min per title) and per-source health (`variant_health`, 0039). | No decoder fallback; no QoE metrics (startup latency, rebuffering); buffering stalls aren't failures. |
 | M16 Jobs / bounded queues | PARTIAL | Persisted `JobQueue` for import, EPG, enrichment and scheduled refresh: dedup, cancel, startup recovery. Opt-in per-playlist auto-refresh (migration 0043) runs as background work for the active profile, one import per source (2026-10-05, `implementation/m05-m16-governed-work.md`). | No retry/backoff (slice B2 contracted). |
 | M17 Streaming transcription | PARTIAL | VOD caption sessions: segment-aligned windows, Realtime leases, subprocess kill on cancel. Resident streaming engine (2026-10-07, ADR-0011): whisper.cpp in a worker process of Nova's binary, Metal first then Core ML, LocalAgreement-2 sessions over a bounded `PcmQueue`, runtime-owned lifecycle and `prewarm_speech`. | Not yet wired to captions: no playback audio tap (ADR 0012), VOD still uses `whisper-cli` windows. |
-| M18 Timed translation | PARTIAL | Evaluated Opus-MT engine on the single ORT; verified runtime leases and manifest direct/English-pivot routing. VOD/episode captions now consume committed IDs in bounded batches, cache with source/model provenance, and expose Translation/Dual modes with en/fr/ar targets (2026-10-09). | Resident/live audio capture is still unwired. Translation model installer and native end-to-end qualification remain open; fr→en / ar→en unmeasured. Cache provenance reuses the existing backend key, so no 0044 migration is needed. |
+| M18 Timed translation | PARTIAL | Evaluated Opus-MT engine on the single ORT; verified runtime leases and manifest direct/English-pivot routing. VOD/episode captions now consume committed IDs in bounded batches, cache with source/model provenance, and expose Translation/Dual modes with en/fr/ar targets (2026-10-09). | Resident/live audio capture is still unwired. Checksum-verified installer added (2026-10-12); all four directions measured on real models. Native end-to-end qualification remains open. Cache provenance reuses the existing backend key, so no 0044 migration is needed. |
 | M19 Embeddings / dialogue search | PARTIAL | Per-title dialogue search seeks playback (`TranscriptPanel` → `seekTo`). | Entity vectors belong to provider rows, not entities; no cross-library dialogue search. |
 | M20 Command-K typed intents | MISSING | `CommandPalette` is search + navigation. | No intent model or validator. |
 | M21 Smart discovery / personalization | PARTIAL | TMDB related/collections/trending intersected with the library. | No embedding similarity or history-based personalization. |

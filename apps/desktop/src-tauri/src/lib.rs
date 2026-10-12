@@ -8,6 +8,7 @@ pub mod lifecycle;
 pub mod log_redaction;
 #[cfg(target_os = "macos")]
 pub mod mac_model_library;
+pub mod model_install;
 pub mod model_registry;
 pub mod model_runtime;
 #[cfg(target_os = "macos")]
@@ -248,6 +249,7 @@ pub fn run() {
             commands::transcription::set_caption_playhead,
             commands::transcription::stop_caption_session,
             commands::translation::translate_caption_segments,
+            commands::translation::download_translation_models,
             // Phase 8 — Search (transcript companion panel + dialogue FTS)
             commands::search::get_transcript,
             commands::search::search_transcript,
