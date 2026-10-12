@@ -8,6 +8,25 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Scroll frame pacing at 120 Hz — 2026-10-12
+
+A toggleable frame-rate overlay (⌘⌥F) measured the real library on a ProMotion MacBook Pro.
+WebKit's 60 fps page-rendering cap is now lifted (Settings → Appearance → High refresh rate,
+on by default; ~125 Hz measured). At 120 Hz Home held 117 fps, Movies 107, Shows 74–87 and
+Live 76–82, with 11–30% of frames over budget outside Home. Fixes from that report:
+
+- Shows: title `drop-shadow` filters became `text-shadow`; landscape rows are estimated from
+  the real card width; continue-watching backdrops use w780.
+- Grids: one shared context menu per grid instead of a Radix menu per card (measured ~66 µs
+  per card mount; ~0.5 ms per row of eight).
+- Live: logo-tone sampling decodes off the main thread (`img.decode()` before drawing), waits
+  for scrolling to stop, runs four at a time, and persists results across launches; the
+  tint-logo `drop-shadow` filter is gone.
+- Virtualized cards no longer use `loading="lazy"`, so overscan rows fetch and decode before
+  they enter the viewport.
+
+Lint, typecheck and 240 frontend tests pass. The post-fix frame rates still need a measurement.
+
 ### Live loading performance — 2026-10-12
 
 Opening Live on the real playlist (8,658 channels) showed a skeleton for about a minute, a

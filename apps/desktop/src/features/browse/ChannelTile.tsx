@@ -37,7 +37,6 @@ export const ChannelTile = memo(function ChannelTile({
       <img
         src={src}
         alt=""
-        loading="lazy"
         decoding="async"
         onError={onError}
         className={cn(
@@ -45,8 +44,7 @@ export const ChannelTile = memo(function ChannelTile({
           tone ? "opacity-100" : "opacity-0",
           t.mode === "cover"
             ? "h-full w-full object-cover"
-            : cn("max-h-[58%] max-w-[70%] object-contain", logoClassName),
-          t.mode === "tint" && "drop-shadow-[0_2px_10px_rgba(0,0,0,0.45)]"
+            : cn("max-h-[58%] max-w-[70%] object-contain", logoClassName)
         )}
       />
       {/* A faint top sheen gives the flat colour some depth. */}

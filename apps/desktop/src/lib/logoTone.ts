@@ -12,12 +12,16 @@
 //! - `light`: a transparent logo with dark ink, which would vanish on a dark
 //!   tile. A light, faintly hue-tinted tile.
 //!
-//! Results are cached per URL for the session. Unreadable logos (cross-origin,
-//! broken) get the neutral tint.
+//! Results are cached per URL and persisted on this Mac, so a logo is analysed
+//! once, not on every launch. Sampling waits until scrolling pauses, decodes
+//! the image off the main thread first, and runs at most a few at a time.
+//! Unreadable logos (cross-origin, broken) get the neutral tint for the
+//! session only, so a logo that comes back later is analysed then.
 
 import { useEffect, useState } from "react";
 
 import { artworkSrc } from "@/lib/artwork";
+import { whenScrollIdle } from "@/lib/scrollActivity";
 
 export type LogoMode = "fill" | "cover" | "tint" | "light";
 
@@ -139,53 +143,153 @@ export function analyzeLogoPixels(
   };
 }
 
+const STORAGE_KEY = "nova.logoTones.v1";
+const MAX_STORED = 15_000;
+const CONCURRENCY = 4;
+const MODES: readonly LogoMode[] = ["fill", "cover", "tint", "light"];
+
 const cache = new Map<string, LogoTone>();
 const pending = new Map<string, Promise<LogoTone>>();
+/** Tones worth keeping across launches: stored ones plus successful analyses. */
+const persisted = new Map<string, LogoTone>();
+let loaded = false;
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let running = 0;
+const queue: (() => void)[] = [];
+
+function isTone(value: unknown): value is LogoTone {
+  if (typeof value !== "object" || value === null) return false;
+  const tone = value as Record<string, unknown>;
+  return (
+    typeof tone.background === "string" &&
+    typeof tone.mode === "string" &&
+    (MODES as readonly string[]).includes(tone.mode)
+  );
+}
+
+/** Load persisted tones once; storage may be unavailable or corrupt. */
+function loadStored() {
+  if (loaded) return;
+  loaded = true;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === "object") {
+      for (const [url, tone] of Object.entries(parsed)) {
+        if (!isTone(tone)) continue;
+        cache.set(url, tone);
+        persisted.set(url, tone);
+      }
+    }
+  } catch {
+    // Start empty: tones are recomputed as logos appear.
+  }
+}
+
+function scheduleSave() {
+  if (saveTimer !== undefined) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = undefined;
+    try {
+      const entries = [...persisted.entries()].slice(-MAX_STORED);
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)));
+    } catch {
+      // Quota or private storage: the in-memory cache still serves this session.
+    }
+  }, 2_000);
+}
+
+/** Run `task` when a sampling slot is free. */
+function limited<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const start = () => {
+      running += 1;
+      task()
+        .then(resolve, reject)
+        .finally(() => {
+          running -= 1;
+          queue.shift()?.();
+        });
+    };
+    if (running < CONCURRENCY) start();
+    else queue.push(start);
+  });
+}
+
+async function analyse(url: string): Promise<{ tone: LogoTone; keep: boolean }> {
+  // Optional work: never while content is moving.
+  await whenScrollIdle();
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.decoding = "async";
+  img.src = artworkSrc(url);
+  try {
+    // Decode off the main thread; drawing an undecoded image would decode it
+    // synchronously in the middle of a frame.
+    await img.decode();
+  } catch {
+    return { tone: NEUTRAL_TONE, keep: false };
+  }
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = SIZE;
+    canvas.height = SIZE;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return { tone: NEUTRAL_TONE, keep: false };
+    ctx.drawImage(img, 0, 0, SIZE, SIZE);
+    return {
+      tone: analyzeLogoPixels(ctx.getImageData(0, 0, SIZE, SIZE).data, SIZE, SIZE),
+      keep: true,
+    };
+  } catch {
+    return { tone: NEUTRAL_TONE, keep: false }; // tainted canvas
+  }
+}
+
+/** A cached tone, if this logo was analysed before (this launch or earlier). */
+export function cachedLogoTone(url: string): LogoTone | undefined {
+  loadStored();
+  return cache.get(url);
+}
 
 /** Sample a logo (through the artwork cache) and classify it; cached. */
 export function sampleLogoTone(url: string): Promise<LogoTone> {
-  const hit = cache.get(url);
+  const hit = cachedLogoTone(url);
   if (hit) return Promise.resolve(hit);
   const inflight = pending.get(url);
   if (inflight) return inflight;
-  const promise = new Promise<LogoTone>((resolve) => {
-    const done = (tone: LogoTone) => {
-      cache.set(url, tone);
-      pending.delete(url);
-      resolve(tone);
-    };
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.decoding = "async";
-    img.onload = () => {
-      try {
-        const canvas = document.createElement("canvas");
-        canvas.width = SIZE;
-        canvas.height = SIZE;
-        const ctx = canvas.getContext("2d", { willReadFrequently: true });
-        if (!ctx) return done(NEUTRAL_TONE);
-        ctx.drawImage(img, 0, 0, SIZE, SIZE);
-        done(analyzeLogoPixels(ctx.getImageData(0, 0, SIZE, SIZE).data, SIZE, SIZE));
-      } catch {
-        done(NEUTRAL_TONE); // tainted canvas
-      }
-    };
-    img.onerror = () => done(NEUTRAL_TONE);
-    img.src = artworkSrc(url);
+  const promise = limited(() => analyse(url)).then(({ tone, keep }) => {
+    cache.set(url, tone);
+    pending.delete(url);
+    if (keep) {
+      persisted.set(url, tone);
+      scheduleSave();
+    }
+    return tone;
   });
   pending.set(url, promise);
   return promise;
 }
 
+/** Test hook: forget every cached and persisted tone. */
+export function resetLogoTones() {
+  cache.clear();
+  pending.clear();
+  persisted.clear();
+  loaded = false;
+}
+
 /** The tone for `url`; `null` while sampling or without a URL. */
 export function useLogoTone(url: string | null | undefined): LogoTone | null {
-  const [tone, setTone] = useState<LogoTone | null>(() => (url ? (cache.get(url) ?? null) : null));
+  const [tone, setTone] = useState<LogoTone | null>(() =>
+    url ? (cachedLogoTone(url) ?? null) : null
+  );
   useEffect(() => {
     if (!url) {
       setTone(null);
       return;
     }
-    const hit = cache.get(url);
+    const hit = cachedLogoTone(url);
     if (hit) {
       setTone(hit);
       return;

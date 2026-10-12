@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualRows } from "./VirtualRows";
+import { GridContextMenu } from "./CardMenu";
 import { PosterCard, type PosterCardHandlers } from "./PosterCard";
 import { ShowCard } from "./ShowCard";
 import {
@@ -183,28 +184,30 @@ function BrowseGridBody({
           </Button>
         </div>
       </div>
-      <VirtualRows
-        items={rows}
-        scrollRef={scrollRef}
-        estimateSize={landscape ? landscapeRowHeight(width, columns, gap) : live ? 150 : 280}
-        overscan={6}
-        className="rounded-none border-0 bg-transparent"
-        keyFor={(_, index) => index}
-        renderRow={(row) => (
-          <div
-            className="grid"
-            style={{
-              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-              gap,
-              paddingBottom: gap,
-            }}
-          >
-            {row.map((item) => (
-              <Card_ key={item.key} item={item} {...handlers} />
-            ))}
-          </div>
-        )}
-      />
+      <GridContextMenu items={items} {...handlers}>
+        <VirtualRows
+          items={rows}
+          scrollRef={scrollRef}
+          estimateSize={landscape ? landscapeRowHeight(width, columns, gap) : live ? 150 : 280}
+          overscan={6}
+          className="rounded-none border-0 bg-transparent"
+          keyFor={(_, index) => index}
+          renderRow={(row) => (
+            <div
+              className="grid"
+              style={{
+                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                gap,
+                paddingBottom: gap,
+              }}
+            >
+              {row.map((item) => (
+                <Card_ key={item.key} item={item} sharedMenu {...handlers} />
+              ))}
+            </div>
+          )}
+        />
+      </GridContextMenu>
     </div>
   );
 }
