@@ -32,7 +32,12 @@ just lint && just typecheck && just test
 ```
 
 CI runs the same checks (Clippy with `-D warnings`, rustfmt, ESLint, `tsc`, Vitest) and a failing
-check blocks the merge.
+check blocks the merge. The [pull-request template](.github/PULL_REQUEST_TEMPLATE.md) lists what
+reviewers look for.
+
+For anything visible or performance-related, also check a release build (`just build`). Measure
+scrolling with the frame-rate overlay (⌘⌥F) and queries with the `live_perf` probe, and include
+before/after numbers; see [Performance engineering](docs/architecture/performance.md).
 
 ## Conventions
 

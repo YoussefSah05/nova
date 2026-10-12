@@ -86,5 +86,8 @@ your Mac; later windows take a couple of seconds.
 | Import fails with HTTP 403 | Many providers block unknown clients or too many connections; close other players using the same account and retry. |
 | Tool version drift | `just doctor` reports what differs from the pinned stack. |
 
+Next, read the [user guide](user-guide.md) for a tour of every screen and the keyboard
+shortcuts, or the [FAQ](../FAQ.md).
+
 Still stuck? Open an issue with the output of `just doctor` and the steps to reproduce. Leave
 out playlist URLs and credentials.

@@ -152,6 +152,13 @@ All model work goes through one **model runtime** and one **resource governor**:
 The capabilities themselves are described in
 [On-device intelligence](../features/intelligence.md).
 
+## Performance
+
+Interface work is budgeted for 120 Hz (8.3 ms per frame), and catalog queries for milliseconds on
+a real 42k-entry playlist. The tools, measurements and rules are in
+[Performance engineering](performance.md); why the interface is web-based at all is
+[ADR 0013](../adr/0013-web-ui-on-tauri-with-native-video.md).
+
 ## The IPC boundary
 
 Commands return `Result<T, ApiError>` with a typed error enum; events use colon-namespaced names

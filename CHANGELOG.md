@@ -2,6 +2,16 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- Run the interface at 120 Hz on ProMotion displays (Settings → Appearance → High refresh
+  rate), lifting WebKit's default 60 fps pacing.
+- Add a frame-rate overlay (⌘⌥F) that records per-screen scroll smoothness with a copyable
+  report.
+- Smooth scrolling at 120 Hz: shared grid context menus, off-main-thread and persisted
+  channel-logo colours, cheaper show-card text, accurate virtual row sizes, eager image loading
+  in virtualized grids.
+- Stop showing the removed NLLB model as an installed translation direction.
+- Add a user guide, FAQ, roadmap, performance engineering notes, ADR 0013, a code of conduct,
+  and issue and pull-request templates.
 - Make Live fast on large playlists: a guide page drops from ~73 s to ~2 ms and channel
   switching from ~5.5 s to under 1 ms on an 8.7k-channel playlist (profile migration 0046).
 - Group live channels into families with source-scoped variants (edition, language, region,

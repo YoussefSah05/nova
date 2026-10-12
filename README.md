@@ -11,9 +11,9 @@ words you typed. All of it runs on your Mac. Nothing is sent to a cloud service.
 
 ![Nova home screen](docs/assets/screenshots/home.png)
 
-[Features](#features) · [Getting started](#getting-started) ·
-[Architecture](docs/architecture/overview.md) · [Intelligence](docs/features/intelligence.md) ·
-[Docs](docs/README.md) · [Contributing](CONTRIBUTING.md)
+[Features](#features) · [Getting started](#getting-started) · [User guide](docs/guides/user-guide.md) ·
+[Architecture](docs/architecture/overview.md) · [Docs](docs/README.md) ·
+[Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md)
 
 ![Status: alpha](https://img.shields.io/badge/status-alpha-orange)
 ![Platform: macOS 14+ Apple Silicon](https://img.shields.io/badge/platform-macOS%2014%2B%20%C2%B7%20Apple%20Silicon-black)
@@ -36,7 +36,8 @@ service on top of that mess, without handing your viewing habits or credentials 
 - **Local-first.** Your library, history and AI models live on your Mac. Provider URLs and
   credentials never reach the UI layer or the AI models.
 - **Fast at real scale.** Built and measured on a real ~42k-entry playlist: import completes in
-  a couple of seconds, and browsing stays smooth.
+  a couple of seconds, every screen's catalog queries take milliseconds, and the interface runs
+  at 120 Hz on ProMotion displays.
 - **Intelligent, not dependent on intelligence.** Every AI feature degrades honestly. If a model
   is missing, disabled or fails, playback, browsing and exact search keep working.
 
@@ -48,14 +49,12 @@ service on top of that mess, without handing your viewing habits or credentials 
 |---|---|
 | ![Movies](docs/assets/screenshots/movies.png) | ![Title detail](docs/assets/screenshots/title-detail.png) |
 | **Films and shows.** Titles are cleaned, de-duplicated across sources and matched to TMDB (optional, your own key) for artwork, cast, ratings, collections and related titles. | **Detail pages.** Per-title versions, audio languages confirmed from the actual streams, resume points and "Up next" for series. |
-| ![Live channels](docs/assets/screenshots/live.png) | ![Search](docs/assets/screenshots/search.png) |
-| **Live TV with a guide.** Channels grouped into families (one card for every edition of a channel), XMLTV guide data, now/next, and a variant picker for language, quality and region. | **Search that understands.** Hybrid search blends exact (FTS5) and on-device semantic matching across films, shows and channels, and falls back to exact matching if the model is unavailable. |
+| ![Shows](docs/assets/screenshots/series.png) | ![Search](docs/assets/screenshots/search.png) |
+| **Shows that remember.** Continue each series at the right episode, see what airs this week, and let autoplay move to the next episode. | **Search that understands.** Hybrid search blends exact (FTS5) and on-device semantic matching across films, shows and channels, and falls back to exact matching if the model is unavailable. |
+| ![Live channels](docs/assets/screenshots/live.png) | ![Live guide](docs/assets/screenshots/live-guide.png) |
+| **Live TV, untangled.** Dozens of provider entries for one channel become a single family, with editions by language, region and quality. | **A real programme guide.** XMLTV data on a timeline, now and next on every card, and a variant picker that remembers the stream that works. |
 
 ### On-device intelligence
-
-| | |
-|---|---|
-| ![Shows](docs/assets/screenshots/series.png) | ![Live guide](docs/assets/screenshots/live-guide.png) |
 
 ![Models settings](docs/assets/screenshots/settings-models.png)
 
@@ -79,7 +78,16 @@ what it costs, and how it fails.
 - Embedded **libmpv** rendering (CAOpenGLLayer) for wide codec and container support.
 - Rust-owned playback state: resume, progress, completion, next episode and recovery to another
   source when a stream fails.
-- Audio-track selection, caption styling, AirPlay, and lifecycle handling across sleep and wake.
+- Audio-track selection, caption styling, AirPlay, picture-in-picture and lifecycle handling
+  across sleep and wake.
+- Full keyboard control: see the [shortcuts](docs/guides/user-guide.md#keyboard-shortcuts).
+
+### Smooth at 120 Hz
+
+Nova lifts WebKit's default 60 fps cap on ProMotion displays, and every performance claim is
+measured on a real 42k-entry playlist. A built-in frame-rate overlay (**⌘⌥F**) records each scroll,
+and fixes are driven by its reports: a Live guide page went from 73 s to 2 ms, a channel switch
+from 5.5 s to under 1 ms. See [Performance engineering](docs/architecture/performance.md).
 
 ## Getting started
 
@@ -166,9 +174,12 @@ nova/
 |---|---|
 | [Documentation index](docs/README.md) | Everything, organised by audience |
 | [Getting started](docs/guides/getting-started.md) | Install, first playlist, models, troubleshooting |
+| [User guide](docs/guides/user-guide.md) | Every screen, the player, captions, settings, keyboard shortcuts |
+| [FAQ](docs/FAQ.md) | Playlists, privacy, supported Macs, 120 Hz, captions |
 | [Architecture overview](docs/architecture/overview.md) | How Nova fits together |
 | [On-device intelligence](docs/features/intelligence.md) | Captions, translation, search, model management |
-| [Implementation status](docs/nova-implementation-status.md) | Verified milestones and open gates |
+| [Performance engineering](docs/architecture/performance.md) | Budgets, measurement tools, case studies |
+| [Roadmap](docs/roadmap.md) and [status](docs/nova-implementation-status.md) | Where Nova is going, and what is verified |
 | [Contributing](CONTRIBUTING.md) | Workflow, conventions and checks |
 
 ## Privacy
@@ -184,12 +195,21 @@ Nova is **0.2.0-alpha**. Import, browsing, native playback, captions, translated
 hybrid search work and are exercised on a real large playlist. Next up:
 
 - Live-channel captions (audio capture from the live player)
-- A Command-K assistant with typed, validated intents
+- **Ask Nova**: a ⌘K assistant with typed, validated intents
 - "About this title" summaries from a local LLM
 - Signed, notarised builds with a bundled media SDK
 
-The [implementation status](docs/nova-implementation-status.md) tracks every milestone against
-the [long-term architecture](docs/architecture/long-term-architecture.md).
+See the [roadmap](docs/roadmap.md); the [implementation status](docs/nova-implementation-status.md)
+tracks every milestone against the [long-term architecture](docs/architecture/long-term-architecture.md).
+
+## Community
+
+- Questions: start with the [FAQ](docs/FAQ.md) and the [user guide](docs/guides/user-guide.md).
+- Bugs and ideas: [open an issue](https://github.com/YoussefSah05/nova/issues/new/choose). Please
+  never include playlist URLs or credentials.
+- Security: report privately, see [SECURITY.md](SECURITY.md).
+- Contributing: read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+  [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Acknowledgements
 

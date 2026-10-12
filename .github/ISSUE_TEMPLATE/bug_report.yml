@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in Nova does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please **never paste playlist URLs, provider usernames or passwords,
+        or TMDB keys**. Security problems go to a private advisory instead (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Live → Wall
+        2. Scroll quickly to the bottom
+        3. …
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Import / playlists / guide
+        - Browsing (Home, Movies, Shows, Live, Library)
+        - Search
+        - Playback
+        - Captions / translation
+        - Models & settings
+        - Performance (attach a frame-rate report from ⌘⌥F)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Nova version or commit
+      placeholder: 0.2.0-alpha.0 / c803a9f
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS version
+      placeholder: MacBook Pro M3 Pro, macOS 26.6
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `just doctor` (when building from source)
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshots or a frame-rate report
+      description: Logs reduce URLs to scheme://host, but please double-check before pasting.
