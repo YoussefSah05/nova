@@ -66,3 +66,12 @@ This does not test HTTP array streaming or app import/publication.
 Next gates: bounded array framing/provenance and signed-app Keychain/reference-aware retention integration;
 then real macOS app E2E using an isolated test profile. Playable media, segmented
 fault injection, sleep/wake, caption quality and AirPlay still need distinct coverage.
+
+## Measuring scroll smoothness
+
+Press **⌘⌥F** in the app to toggle the frame-rate overlay (remembered on this Mac; off by
+default and free while off). It shows the live frame rate and the measured display refresh
+rate, and records each scroll gesture with the screen it happened on: average FPS, 1% low,
+95th-percentile and worst frame time, and the share of janky frames (longer than 1.5 refresh
+intervals, i.e. at least one dropped frame). **Copy report** puts every recorded scroll on the
+clipboard. Measure release builds (`just build`), not `just dev`, which runs unoptimized React.

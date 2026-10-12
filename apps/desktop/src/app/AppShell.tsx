@@ -5,6 +5,7 @@
 //! so switching sections and going back are instant and land exactly where
 //! they were. Sections are mounted the first time they are visited.
 
+import { FrameRateOverlay } from "@/components/FrameRateOverlay";
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertCircleIcon, XIcon } from "lucide-react";
 
@@ -103,6 +104,7 @@ function Frame() {
       })}
       <ErrorBanner />
       <Palette />
+      <FrameRateOverlay />
     </div>
   );
 }
