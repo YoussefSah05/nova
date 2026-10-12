@@ -147,3 +147,56 @@ it("refreshes Search capability after catalog-model installation", async () => {
   expect(await qc.fetchQuery(capability)).toBe(true);
   expect(read).toHaveBeenCalledTimes(2);
 });
+
+it("downloads the missing translation directions with one shared progress bar", async () => {
+  const user = userEvent.setup();
+  let done = false;
+  let finish!: () => void;
+  const base = mocks.invoke.getMockImplementation()!;
+  const translation = (modelId: string, ready: boolean) => ({
+    modelId,
+    capability: "translation",
+    availability: ready ? "available" : "missing",
+    library: "internal",
+    enabled: true,
+    activity: "idle",
+  });
+  mocks.invoke.mockImplementation((command: string) => {
+    if (command === "list_model_controls")
+      return Promise.resolve([
+        translation("opus-mt-en-fr", true),
+        translation("opus-mt-fr-en", done),
+        translation("opus-mt-en-ar", done),
+        translation("opus-mt-ar-en", done),
+      ]);
+    if (command === "download_translation_models")
+      return new Promise<void>((resolve) => {
+        finish = () => {
+          done = true;
+          resolve();
+        };
+      });
+    return base(command);
+  });
+  let progress!: (event: { payload: ModelDownloadEvent }) => void;
+  mocks.listen.mockImplementation(async (_event, cb) => {
+    progress = cb;
+    return mocks.off;
+  });
+  mount();
+  expect(await screen.findByText(/1 of 4 directions installed/)).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Download the rest" }));
+  await waitFor(() => expect(progress).toBeDefined());
+  act(() =>
+    progress({ payload: { artifact: "opus-mt-fr-en", downloadedBytes: 25, totalBytes: 100 } })
+  );
+  expect(screen.getByRole("progressbar", { name: "Translation model download" })).toHaveAttribute(
+    "aria-valuenow",
+    "25"
+  );
+  await act(async () => finish());
+  expect(await screen.findByText(/4 of 4 directions installed/)).toBeInTheDocument();
+  expect(mocks.invoke.mock.calls.filter(([c]) => c === "download_translation_models")).toHaveLength(
+    1
+  );
+});

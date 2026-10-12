@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM embedding_text_cache WHERE model = ? AND used_at < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "cefe2e1cd78ae6c70986d5f55ee60b8d31bffa97340b869fc34098a7e8a61ce4"
+}

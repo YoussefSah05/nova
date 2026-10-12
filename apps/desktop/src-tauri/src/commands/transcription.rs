@@ -24,12 +24,12 @@ use super::require_profile_pool;
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export, export_to = "../../src/types/generated/"))]
 #[serde(rename_all = "camelCase")]
-struct ModelDownloadEvent {
-    artifact: String,
+pub(crate) struct ModelDownloadEvent {
+    pub(crate) artifact: String,
     #[cfg_attr(test, ts(type = "number"))]
-    downloaded_bytes: u64,
+    pub(crate) downloaded_bytes: u64,
     #[cfg_attr(test, ts(type = "number | null"))]
-    total_bytes: Option<u64>,
+    pub(crate) total_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

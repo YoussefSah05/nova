@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO embedding_text_cache (model, text, vector, used_at)\n                     VALUES (?, ?, ?, ?)\n                     ON CONFLICT (model, text) DO UPDATE\n                     SET vector = excluded.vector, used_at = excluded.used_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "af04bdbdf55a2a97301306866db4d464076edb0d9fa51debb1e8e11a36c4da24"
+}

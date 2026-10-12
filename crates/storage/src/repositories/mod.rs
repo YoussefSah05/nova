@@ -35,7 +35,7 @@ pub use caption_style::CaptionStyleRepository;
 pub use catalog_search::{CatalogSearchRepository, MovieSearchCandidate, MOVIE_SEARCH_VERSION};
 pub use channel_logos::{ChannelLogoRepository, DirectoryLogoWrite, LogoCandidate};
 pub use channels::{ChannelRepository, LiveOverview};
-pub use embeddings::{from_blob, to_blob, EmbeddingRepository};
+pub use embeddings::{from_blob, to_blob, EmbeddingRepository, MAX_CACHED_TEXT};
 pub use enrich::{EnrichUpdate, SeriesTmdbQuery, SeriesTmdbWrite, UnenrichedRow};
 pub use epg_sources::{EpgFeedStatus, EpgSource, EpgSourcesRepository};
 pub use external_matches::{

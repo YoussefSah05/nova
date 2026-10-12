@@ -93,6 +93,7 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `get_enrich_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | enrichment / M2 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
 | `start_caption_session` | `{ sessionId, profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
+| `download_translation_models` | `{}` | `void` (streams `model:download:progress`; installs every unverified pinned translation model, checksum-verified, then attested) | M18 |
 | `translate_caption_segments` | `{ profileId, sessionId, transcriptId, segmentIds: number[], targetLang: string }` | `CaptionCue[]` (`segmentId,start,end,text`) | M18 |
 | `set_caption_playhead` | `{ sec: number }` | `void` | 6 |
 | `stop_caption_session` | `{}` | `void` | 6 |
@@ -262,7 +263,7 @@ Event names use colon namespaces because Tauri rejects dots in event names.
 | `artwork:channel-logos` | `{ stage: 'downloading'\|'matching'\|'complete'\|'failed', sourceId?, matched, candidates, done, error? }` | artwork v1 |
 | `transcription:cues` | `{ sessionId, mediaKind, mediaId, transcriptId, language, cues: [{segmentId,start,end,text}] }` (committed, incremental, absolute times) | 6/M18 |
 | `transcription:status` | Generated `CaptionStatusEvent`: `{ sessionId, mediaKind, mediaId, state: 'preparing'\|'streaming'\|'complete'\|'failed', phase: string\|null, coveredSec: number\|null, error: string\|null }`; phase reports preparation/extraction/model waiting/recognition, null clears active work | 6 / Model controls |
-| `model:download:progress` | `{ artifact: 'weights'\|'coreml', downloadedBytes, totalBytes? }` | 6 |
+| `model:download:progress` | `{ artifact: 'weights'\|'coreml'\|<translation model id>, downloadedBytes, totalBytes? }` (translation totals span all models being installed) | 6, M18 |
 | `translation:progress` | `{ job_id: number, pct: number }` | 7 |
 | `translation:complete` | `{ job_id: number, transcript_id: number, target_lang: string }` | 7 |
 | `live:caption` | `{ channel_id: number, cue: VttCue }` | 9 |

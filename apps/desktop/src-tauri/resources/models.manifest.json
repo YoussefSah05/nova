@@ -29,10 +29,11 @@
     },
     {
       "id": "opus-mt-en-fr",
-      "revision": "Xenova/opus-mt-en-fr@main, pinned 2026-10-07",
+      "revision": "Xenova/opus-mt-en-fr@28726206f80896b90035bd99cccd5cc1e151f916",
       "capability": "translation",
       "backend": "onnx-seq2seq",
       "relative_path": "opus/opus-mt-en-fr",
+      "source": "https://huggingface.co/Xenova/opus-mt-en-fr/resolve/28726206f80896b90035bd99cccd5cc1e151f916",
       "probe": "files",
       "files": [
         {
@@ -68,10 +69,11 @@
     },
     {
       "id": "opus-mt-fr-en",
-      "revision": "Xenova/opus-mt-fr-en@main, pinned 2026-10-07",
+      "revision": "Xenova/opus-mt-fr-en@6b166a182780e118c997879d0ad5be4b53671644",
       "capability": "translation",
       "backend": "onnx-seq2seq",
       "relative_path": "opus/opus-mt-fr-en",
+      "source": "https://huggingface.co/Xenova/opus-mt-fr-en/resolve/6b166a182780e118c997879d0ad5be4b53671644",
       "probe": "files",
       "files": [
         {
@@ -107,10 +109,11 @@
     },
     {
       "id": "opus-mt-en-ar",
-      "revision": "Xenova/opus-mt-en-ar@main, pinned 2026-10-07",
+      "revision": "Xenova/opus-mt-en-ar@034a684356c19021a187cda4d7f823298b913921",
       "capability": "translation",
       "backend": "onnx-seq2seq",
       "relative_path": "opus/opus-mt-en-ar",
+      "source": "https://huggingface.co/Xenova/opus-mt-en-ar/resolve/034a684356c19021a187cda4d7f823298b913921",
       "probe": "files",
       "files": [
         {
@@ -146,10 +149,11 @@
     },
     {
       "id": "opus-mt-ar-en",
-      "revision": "Xenova/opus-mt-ar-en@main, pinned 2026-10-07",
+      "revision": "Xenova/opus-mt-ar-en@09c7556866400dcc53562ba8d7035119e7d9a2c1",
       "capability": "translation",
       "backend": "onnx-seq2seq",
       "relative_path": "opus/opus-mt-ar-en",
+      "source": "https://huggingface.co/Xenova/opus-mt-ar-en/resolve/09c7556866400dcc53562ba8d7035119e7d9a2c1",
       "probe": "files",
       "files": [
         {

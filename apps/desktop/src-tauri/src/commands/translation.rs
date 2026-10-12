@@ -1,17 +1,19 @@
 //! Translate bounded committed dialogue, using the caption session's lifecycle.
 
 use nova_core::intelligence::TranslateBatch;
-use nova_core::model_manifest::{ManifestEntry, TranslationRoute};
+use nova_core::model_manifest::{Capability, ManifestEntry, TranslationRoute};
 use nova_storage::{SourceSegment, TranscriptRepository, TranslationRepository, TranslationRow};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::caption_session::CaptionCue;
 use crate::ipc::ApiError;
-use crate::model_registry::bundled_manifest;
+use crate::model_install::{install_pinned, pending_bytes};
+use crate::model_registry::{bundled_manifest, internal_library};
 use crate::model_runtime::{ModelRuntimeManager, RuntimeCancellation};
 use crate::resource_policy::WorkClass;
 use crate::state::AppState;
+use nova_core::model_manifest::is_attested;
 
 const BATCH_SIZE: usize = 8;
 
@@ -202,6 +204,91 @@ pub async fn translate_caption_segments(
         },
     )
     .await
+}
+
+/// Install every downloadable translation model that is not yet verified, one
+/// model at a time under its runtime lock, so nothing loads a half-written
+/// install. Progress is one `model:download:progress` stream over all of them.
+#[tauri::command]
+pub async fn download_translation_models(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    let manifest = bundled_manifest()
+        .map_err(|_| ApiError::Internal("Translation configuration unavailable".into()))?;
+    let root = internal_library()
+        .map_err(|_| ApiError::Internal("Model library unavailable".into()))?
+        .relative_root
+        .resolve(&super::transcription::app_data_dir(&app)?);
+    // Only models that need work take the runtime lock: a verified model may
+    // be leased by live captions, and one usable from an external library
+    // needs no internal copy.
+    crate::model_registry::refresh_external(&state.pool).await?;
+    let external = nova_storage::ModelRepository::new(&state.pool)
+        .list_external_models()
+        .await?;
+    let entries: Vec<ManifestEntry> = manifest
+        .models
+        .iter()
+        .filter(|e| e.capability == Capability::Translation && e.source.is_some())
+        .filter(|e| !is_attested(&root.join(&e.relative_path), e))
+        .filter(|e| {
+            !external.iter().any(|m| {
+                m.model.descriptor.id.as_str() == e.id
+                    && m.model.availability == nova_core::models::ModelAvailability::Available
+            })
+        })
+        .cloned()
+        .collect();
+    let total: u64 = entries
+        .iter()
+        .map(|e| pending_bytes(&root.join(&e.relative_path), e))
+        .sum();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .read_timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|_| ApiError::Internal("Could not start the download".into()))?;
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    for entry in entries {
+        let dir = root.join(&entry.relative_path);
+        let (app, client, done) = (app.clone(), client.clone(), done.clone());
+        let id = entry.id.clone();
+        state
+            .model_runtime
+            .mutate(&id, async move {
+                use std::sync::atomic::Ordering;
+                let emit = |now: u64| {
+                    // A corrupt same-size file is fetched again, beyond `total`.
+                    let _ = app.emit(
+                        "model:download:progress",
+                        super::transcription::ModelDownloadEvent {
+                            artifact: entry.id.clone(),
+                            downloaded_bytes: now,
+                            total_bytes: Some(total.max(now)),
+                        },
+                    );
+                };
+                let mut last_emit = done.load(Ordering::Relaxed);
+                let result = install_pinned(&client, &dir, &entry, |bytes| {
+                    let now = done.fetch_add(bytes, Ordering::Relaxed) + bytes;
+                    // About one event per MiB keeps IPC quiet on fast links.
+                    if now - last_emit >= 1 << 20 {
+                        last_emit = now;
+                        emit(now);
+                    }
+                })
+                .await;
+                if result.is_ok() {
+                    emit(done.load(Ordering::Relaxed));
+                }
+                result
+            })
+            .await
+            .map_err(super::models::runtime_api_error)?
+            .map_err(|e| ApiError::Internal(format!("Translation download stopped: {e}")))?;
+    }
+    Ok(())
 }
 
 /// Cache-first orchestration shared by the command and offline failure tests.
