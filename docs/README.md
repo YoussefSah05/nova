@@ -34,6 +34,7 @@
 - [Implementation status](nova-implementation-status.md): verified milestones, the reconciliation matrix and open gates
 - [Implementation contracts](implementation/): per-milestone contracts and validation records
 - [Evaluations](evaluations/): model and benchmark reports
+- [Brand](brand.md): the logo, its story, colours and usage
 - [Changelog](../CHANGELOG.md)
 - [Security policy](../SECURITY.md)
 - [Archive](archive/README.md): superseded plans, kept for history only
