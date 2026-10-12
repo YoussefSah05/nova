@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
-pub const LIVE_RULESET: i64 = 1;
+/// Bump when the projection changes; channels then recompile on next use.
+/// 2: edition and sort key are also stored as indexed columns.
+pub const LIVE_RULESET: i64 = 2;
 
 #[derive(Debug, Clone)]
 pub struct LiveEvidence {

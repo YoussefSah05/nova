@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE channels SET live_ruleset = NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "7e4df34d1afb5015a83fd0c09ecbbe3320c8a7b72856afcfe85740e9601186c6"
+}

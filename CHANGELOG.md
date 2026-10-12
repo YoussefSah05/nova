@@ -2,6 +2,8 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- Make Live fast on large playlists: a guide page drops from ~73 s to ~2 ms and channel
+  switching from ~5.5 s to under 1 ms on an 8.7k-channel playlist (profile migration 0046).
 - Group live channels into families with source-scoped variants (edition, language, region,
   quality, codec), a bundle detail page, a variant picker with per-variant health and a
   remembered choice (profile migration 0044).

@@ -251,3 +251,35 @@ async fn recompile_and_refresh_preserve_preferences_and_rollback() {
         hd.variant_key
     );
 }
+
+/// Regression: the page of keys was a plain CTE that SQLite re-ran for every
+/// channel row (quadratic: ~75 s per page on a real 8.7k-channel playlist).
+/// The bound is far above the linear cost and far below the quadratic one.
+#[tokio::test]
+async fn live_pages_stay_fast_on_large_playlists() {
+    let (_dir, pool, source) = fixture().await;
+    let names: Vec<Channel> = (0..4_000)
+        .map(|i| channel(source, &format!("FR - Channel {} HD", i % 1_500), i))
+        .collect();
+    let repo = ChannelRepository::new(&pool);
+    repo.insert_batch(&names).await.unwrap();
+    let start = std::time::Instant::now();
+    let page = repo
+        .live_channels(source, None, None, None, None, None, false, false, 200, 400)
+        .await
+        .unwrap();
+    let key = page[0].key.clone();
+    repo.resolve_live(source, &key, None, &[]).await.unwrap();
+    let elapsed = start.elapsed();
+    assert_eq!(page.len(), 200);
+    assert!(
+        elapsed < std::time::Duration::from_secs(3),
+        "live page + resolve took {elapsed:?}"
+    );
+    // Pages are disjoint and follow edition, then natural title order.
+    let next = repo
+        .live_channels(source, None, None, None, None, None, false, false, 200, 600)
+        .await
+        .unwrap();
+    assert!(page.iter().all(|a| next.iter().all(|b| a.key != b.key)));
+}

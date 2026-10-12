@@ -73,7 +73,7 @@ impl ChannelRepository<'_> {
                 };
                 let variant = live::digest(&["live-variant-v1", &locator]);
                 let metadata = serde_json::to_string(&meta)?;
-                sqlx::query!("UPDATE channels SET channel_group = ?, live_channel_key = ?, live_variant_key = ?, live_metadata = ?, live_ruleset = ? WHERE id = ?", meta.family, meta.channel_key, variant, metadata, version, row.id)
+                sqlx::query!("UPDATE channels SET channel_group = ?, live_channel_key = ?, live_variant_key = ?, live_metadata = ?, live_ruleset = ?, live_edition = ?, live_sort_key = ? WHERE id = ?", meta.family, meta.channel_key, variant, metadata, version, meta.edition, meta.sort_key, row.id)
                     .execute(&mut **tx).await?;
             }
         }
@@ -124,7 +124,9 @@ impl ChannelRepository<'_> {
         let fav = i64::from(favorites);
         let wl = i64::from(watchlist);
         // Filters choose identities; every variant of those identities is returned.
-        let rows = sqlx::query!(r#"WITH selected AS (
+        // The page of keys is materialized once and drives the join through
+        // the identity index; a plain CTE was re-run for every channel row.
+        let rows = sqlx::query!(r#"WITH selected AS MATERIALIZED (
             SELECT DISTINCT live_channel_key FROM channels
             WHERE source_id = ? AND (? IS NULL OR channel_group = ?)
               AND (? IS NULL OR live_channel_key = ?)
@@ -137,16 +139,17 @@ impl ChannelRepository<'_> {
                   ELSE instr(lower(COALESCE(raw_name, name) || ' ' || channel_group || ' ' || COALESCE(raw_group, '') || ' ' || COALESCE(json_extract(live_metadata, '$.edition'), '') || ' ' || COALESCE(json_extract(live_metadata, '$.quality'), '')), lower(t.value)) = 0
                 END))
               AND (? = 0 OR is_favorite = 1) AND (? = 0 OR is_in_watchlist = 1)
-            ORDER BY json_extract(live_metadata, '$.edition'), json_extract(live_metadata, '$.sortKey'), live_channel_key LIMIT ? OFFSET ?
+            ORDER BY live_edition, live_sort_key, live_channel_key LIMIT ? OFFSET ?
         ) SELECT c.id as "id!: i64", c.source_id, c.live_channel_key as "key!: String",
             c.live_variant_key as "variant!: String", c.live_metadata as "metadata!: String",
             COALESCE(c.raw_name, c.name) as "raw!: String", c.logo_url, c.category, c.region,
             c.is_favorite, c.is_in_watchlist, h.last_success_at, h.last_failure_at,
             p.variant_key as "preferred?: String"
-          FROM channels c JOIN selected s ON s.live_channel_key = c.live_channel_key
+          FROM selected s CROSS JOIN channels c
+            ON c.source_id = ? AND c.live_channel_key = s.live_channel_key
           LEFT JOIN live_variant_health h ON h.source_id = c.source_id AND h.variant_key = c.live_variant_key
           LEFT JOIN live_channel_preferences p ON p.source_id = c.source_id AND p.channel_key = c.live_channel_key
-          WHERE c.source_id = ? ORDER BY c.id"#,
+          ORDER BY c.id"#,
           source, family, family, key, key, category, category, region, region, country, country,
           q, q, fav, wl, limit, offset, source)
           .fetch_all(self.pool).await?;

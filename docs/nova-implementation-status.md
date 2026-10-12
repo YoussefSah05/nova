@@ -8,6 +8,23 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Live loading performance — 2026-10-12
+
+Opening Live on the real playlist (8,658 channels) showed a skeleton for about a minute, a
+channel family page took ~6 s, and every live channel switch ~5.5 s. Cause: the page-of-keys
+CTE in `live_channels` ran as a co-routine on the inner side of the join, so SQLite re-sorted
+every channel by JSON fields once per channel row (quadratic). The CTE is now `MATERIALIZED`
+and drives the join through the `(source_id, live_channel_key)` index, and pages order by new
+indexed `live_edition` / `live_sort_key` columns (profile migration 0046, live ruleset 2, filled
+by the existing projection; the one-time recompile takes ~0.2 s).
+
+Measured on a copy of the real profile (`crates/storage/examples/live_perf.rs`): guide page
+72,838 → 1.9 ms, family page 6,122 → 2.9 ms, `resolve_live` 5,502 → 0.4 ms,
+`live_channel_for_row` 5,453 → 0.6 ms; the wall (28 ms) and overview (13 ms warm) were already
+fine. A 4,000-channel regression test fails on the old query (23 s) and passes now. Six unused
+offline query files were removed. `just lint`, `just typecheck`, `just test` (767 Rust, 228
+frontend) pass.
+
 ### Live channel identity and variants (M24/M06) — 2026-10-12
 
 Live channels now carry a reversible, source-scoped identity projection (profile migration
