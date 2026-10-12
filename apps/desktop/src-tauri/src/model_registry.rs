@@ -296,7 +296,15 @@ pub async fn refresh_internal(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let repo = ModelRepository::new(pool);
     repo.record_internal(&library, &models).await?;
-    Ok(repo.list_internal().await?)
+    // Rows for models this build no longer ships (for example the removed
+    // NLLB engine) stay persisted but are not offered as installed models.
+    let manifest = bundled_manifest().map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(repo
+        .list_internal()
+        .await?
+        .into_iter()
+        .filter(|model| manifest.get(model.descriptor.id.as_str()).is_some())
+        .collect())
 }
 
 #[cfg(test)]
@@ -311,6 +319,37 @@ mod tests {
         std::fs::write(&paths.ggml, b"fixture").unwrap();
         std::fs::create_dir_all(&paths.coreml_dir).unwrap();
         std::fs::write(paths.coreml_dir.join("fixture"), b"x").unwrap();
+    }
+
+    #[tokio::test]
+    async fn retired_registry_rows_are_not_reported_as_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_app_db(dir.path().join("app.db").to_str().unwrap())
+            .await
+            .unwrap();
+        refresh_internal(dir.path().to_path_buf(), &pool).await.unwrap();
+        // A database upgraded from the removed NLLB engine keeps its rows.
+        sqlx::query(
+            "INSERT INTO model_descriptors (id, capability, backend) \
+             VALUES ('nllb-200-distilled-600M', 'translation', 'ctranslate2')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO model_locations (model_id, library_id, relative_path, availability, observed_at) \
+             VALUES ('nllb-200-distilled-600M', 'internal', 'nllb', 'available', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let listed = refresh_internal(dir.path().to_path_buf(), &pool)
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), bundled_manifest().unwrap().models.len());
+        assert!(listed
+            .iter()
+            .all(|m| m.descriptor.id.as_str() != "nllb-200-distilled-600M"));
     }
 
     #[test]
