@@ -2215,9 +2215,9 @@ Updated: 2026-09-26. Branch `m2-model-runtime-manager`, uncommitted on top of
 in-progress work that routed imports, EPG refresh and enrichment through the
 persisted `JobQueue` and had each job take (and immediately drop) an
 admission permit before claiming. P06 preserved and evolved that work rather
-than adding a second scheduler. Code search located the `AdmissionController` ↔ `ModelRuntimeManager` ↔
-`DesktopJobs` paths; three read-only investigations (jobs, model runtime,
-playback/failure) mapped them; conclusions were verified against source.
+than adding a second scheduler. Code search located the `AdmissionController` ↔
+`ModelRuntimeManager` ↔ `DesktopJobs` paths; three read-only investigations (jobs,
+model runtime, playback/failure) mapped them; conclusions were verified against source.
 
 ### Findings that shaped the slice
 

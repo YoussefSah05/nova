@@ -3185,20 +3185,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nova-mcp"
-version = "0.1.0"
-dependencies = [
- "axum",
- "nova-core",
- "nova-storage",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "nova-media"
 version = "0.1.0"
 dependencies = [

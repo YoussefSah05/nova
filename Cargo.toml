@@ -18,7 +18,6 @@ members = [
     "crates/storage",
     "crates/jobs",
     "crates/search",
-    "crates/mcp",
     "crates/enrich",
     "crates/artwork",
     "crates/translate",

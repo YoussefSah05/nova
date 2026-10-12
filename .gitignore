@@ -80,8 +80,6 @@ models/
 # Nova-specific: generated bindings
 packages/types/src/generated/
 
-
-
 # Dev SQLite DBs used to regenerate the sqlx offline cache
 nova_dev.db
 nova_dev.db-journal
@@ -94,6 +92,6 @@ playwright-report/
 test-results/
 .nova-validation/
 
-
-# Private interview notes (never committed)
+# Private notes (never committed)
 interview-prep/
+docs/learning/

@@ -1,8 +1,8 @@
 //! Audio extraction for transcription.
 //!
-//! Whisper needs 16 kHz mono PCM. The reference recipe pipes raw PCM to
-//! stdout for the FFI path, but Nova drives `whisper-cli` as a subprocess and
-//! that wants a real input file, so we extract to a temp WAV (`-f wav`,
+//! Whisper needs 16 kHz mono PCM (see `docs/reference/ffmpeg.md`). Nova drives
+//! `whisper-cli` as a subprocess, which wants a real input file, so we extract
+//! to a temp WAV (`-f wav`,
 //! `pcm_s16le`) instead. The caller owns the lifetime of `out_wav` (typically a
 //! file inside a `tempfile::TempDir`) and deletes it once transcription is done.
 

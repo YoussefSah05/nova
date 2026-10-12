@@ -23,6 +23,9 @@
 - [IPC contract](ipc-contract.md): every Tauri command and event
 - [Testing strategy](testing.md), including measuring scroll smoothness
 - [Design tokens](design-tokens.md) and the [player motion contract](player-motion-frontend-contract.md)
+- Reference notes: [FFmpeg](reference/ffmpeg.md), [stream proxy](reference/hls-proxy.md),
+  [Whisper](reference/whisper.md), [XMLTV guides](reference/xmltv-epg.md),
+  [validating imports](reference/import-validation.md)
 - [Stack and environment](../STACK.md)
 
 ## Project records

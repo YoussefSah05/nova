@@ -24,7 +24,7 @@ new AI pipeline, dubbing, automatic model activation or live captions.
 Add focused tests for real track metadata, EN-only/duplicate/unknown menus, stale target changes,
 startup propagation/default precedence/resume readiness, reopen and next episode continuity.
 Run focused checks then repository lint/typecheck/tests, independent review, serial app bundling
-and native UI validation; record limitations, update status. Commit only owned
+and native UI validation; record limitations and update status. Commit only owned
 files and fast-forward main locally, preserving preexisting user work; never push.
 
 ## Delivered behavior

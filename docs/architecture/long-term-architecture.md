@@ -2,7 +2,7 @@
 
 > **Purpose**
 >
-> This document describes where Nova's architecture should converge, and the process used to get there: rebuild accurate context from the actual repository, reconcile the codebase against the intended architecture, detect milestones that are already complete/partial/superseded, identify anything that was skipped, and then continue implementation from the first real dependency gap.
+> This document describes where Nova's architecture should converge, and the process used to get there: rebuild accurate context from the actual repository, reconcile the codebase against the intended architecture, detect milestones that are already complete, partial or superseded, identify anything that was skipped, and continue from the first real dependency gap.
 >
 > **Important:** the repository is the source of truth for what exists today. This document is the source of truth for where Nova should converge.
 
@@ -28,12 +28,11 @@ Before broad changes:
 
 1. read `CONTRIBUTING.md`, `docs/archive/master-plan.md` (historical), and `docs/nova-implementation-status.md`;
 2. inspect recent git history for architectural work already completed;
-3. locate relevant dependencies with code search and the crate map;
-4. trace their callers and dependents;
-5. inspect actual Rust/Tauri/React/SQLite source, tests, migrations, DTOs, and runtime contracts;
-6. build a milestone reconciliation matrix;
-7. identify the first real missing/partial/risky dependency;
-8. only then begin implementation.
+3. locate relevant dependencies with code search and the crate map in `docs/architecture/overview.md`;
+4. inspect actual Rust/Tauri/React/SQLite source, tests, migrations, DTOs, and runtime contracts;
+5. build a milestone reconciliation matrix;
+6. identify the first real missing/partial/risky dependency;
+7. only then begin implementation.
 
 Do not restart completed milestones.
 
@@ -2418,20 +2417,18 @@ Examples:
 
 # 63. Investigation and review
 
-Substantial milestones may split the investigation into independent, read-only areas.
+Substantial milestones may split the investigation into independent, read-only areas:
 
-Suggested roles:
-
-- architecture/current-state;
-- persistence/migration;
-- tests/failure;
-- frontend/UX;
-- lifecycle/security;
+- architecture and current state;
+- persistence and migrations;
+- tests and failure paths;
+- frontend and UX;
+- lifecycle and security;
 - AI runtime.
 
 Split only when the questions are genuinely independent.
 
-Prefer one implementation owner for overlapping production code.
+Keep one implementation owner for overlapping production code.
 
 ---
 

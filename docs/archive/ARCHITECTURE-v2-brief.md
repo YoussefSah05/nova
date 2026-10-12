@@ -144,22 +144,10 @@ stream/
 │   ├── media/                   # FFmpeg wrapper
 │   ├── storage/                 # SQLite + migrations + repositories
 │   ├── jobs/                    # Background job scheduler
-│   ├── search/                  # FTS5 query builder
-│   └── mcp/                     # Dev-only MCP server
+│   └── search/                  # FTS5 query builder
 ├── packages/
 │   ├── ui/                      # Shared React components, design system
 │   └── types/                   # Generated TS bindings (output of ts-rs)
-│   ├── ffmpeg-recipes/
-│   ├── hls-manifest/
-│   ├── whisper-config/
-│   ├── translate-config/
-│   ├── caption-renderer/
-│   ├── frontend-design/
-│   ├── xmltv-epg/
-│   ├── api-conventions/
-│   ├── rust-patterns/
-│   ├── sqlite-patterns/
-│   └── video-player-ux/
 ├── scripts/
 │   ├── convert-whisper-models.sh    # Whisper → Core ML conversion
 │   ├── convert-nllb-models.sh       # NLLB → CTranslate2 conversion
@@ -954,48 +942,13 @@ the existing per-profile `caption_style`. Sections reuse existing commands and a
 
 ## 11. Engineering reference notes
 
-Domain rules for each area are kept as short reference notes.
-
-| Skill | Purpose |
-|---|---|
-| `ffmpeg-recipes` | Canonical FFmpeg commands: HLS repackaging, audio extraction (16kHz mono PCM), thumbnail sprite gen, probe-for-codec. |
-| `hls-manifest` | Manifest rewriting rules: subtitle track injection (source + translations), segment URL rewriting, master playlist structure. |
-| `whisper-config` | Model selection, VAD, language tuning (esp. Arabic), VTT post-processing, word-timestamp handling. |
-| `translate-config` | NLLB/DeepL/Google backend selection, language-code mapping (BCP-47 ↔ NLLB-200 codes), batching, caching, error handling. |
-| `caption-renderer` | Rendering rules for both modes, fonts per script, RTL handling, dual-mode alignment, repositioning behavior. |
-| `xmltv-epg` | EPG parsing rules, timezone normalization, channel ID matching. |
-| `frontend-design` | Design tokens, motion timing, typography scale, spacing rhythm, component patterns. |
-| `video-player-ux` | The mandatory player UX checklist from §10. |
-| `api-conventions` | Tauri command naming, error shapes, event payload conventions. |
-| `rust-patterns` | Async patterns, error handling with `thiserror`, repository pattern, FFI safety wrappers. |
-| `sqlite-patterns` | Migration conventions, query patterns, FTS5 best practices, WAL tuning. |
-
-Each note covers scope, rules, examples and pitfalls, and is updated as the project develops.
+Domain rules that every change in an area must respect are kept as short reference notes
+(now in `docs/reference/`): FFmpeg invocations, stream-proxy manifest rules, Whisper
+configuration, XMLTV parsing and import validation.
 
 ---
 
-## 12. MCP integration plan
-
-Build a thin MCP server inside the app (gated to localhost, dev mode only) exposing daemon APIs as MCP tools:
-
-| Tool | Purpose |
-|---|---|
-| `list_profiles` | Read profile registry |
-| `list_channels(filter)` | Browse channels during dev |
-| `get_transcript(media_id)` | Fetch a transcript |
-| `get_translation(media_id, target_lang)` | Fetch a translation |
-| `enqueue_transcription(media_id, lang)` | Trigger transcription |
-| `enqueue_translation(transcript_id, target_lang, backend)` | Trigger translation |
-| `list_jobs(state)` | Inspect queue |
-| `search_transcripts(query, lang_filter)` | Test FTS5 across source + translations |
-| `tail_logs(level, n)` | Recent log lines |
-| `db_query(sql)` | Read-only query (dev mode only) |
-
-Server at `crates/mcp`, mounted at `127.0.0.1:<mcp_port>` only when `STREAM_DEV=1`.
-
----
-
-## 13. First-run experience
+## 12. First-run experience
 
 1. **Welcome screen**. Brand mark, single CTA "Get started".
 2. **Hardware probe** (background). Chip, RAM, disk free, GPU/ANE.
@@ -1012,7 +965,7 @@ Target wall-clock: under 3 minutes on a typical connection (longer if both ML mo
 
 ---
 
-## 14. Build, sign, distribute
+## 13. Build, sign, distribute
 
 ### macOS
 - Apple Silicon first; universal binary later via `cargo build --target` + `lipo`.
@@ -1035,7 +988,7 @@ Target wall-clock: under 3 minutes on a typical connection (longer if both ML mo
 
 ---
 
-## 15. Initial implementation order
+## 14. Initial implementation order
 
 Each step ends with something runnable.
 
@@ -1046,7 +999,7 @@ Each step ends with something runnable.
 4. Stub all crates in `crates/` (including `translate`) with empty `lib.rs`.
 5. ESLint, Prettier, clippy, rustfmt. `just lint`, `just typecheck` pass.
 6. CI workflow on every push.
-7. Reference notes for each area in §11 (including `translate-config`, `caption-renderer`).
+7. Reference notes for each area in §11.
 
 **Phase 1 — Profiles and storage**
 1. `storage` crate with `app.db` migrations.
@@ -1153,7 +1106,7 @@ Each step ends with something runnable.
 
 ---
 
-## 16. Open questions (defaults assumed, called out for override)
+## 15. Open questions (defaults assumed, called out for override)
 
 The following defaults are assumed by this document. Each can be revisited.
 
@@ -1174,7 +1127,7 @@ The following defaults are assumed by this document. Each can be revisited.
 
 ---
 
-## 17. Notes on premium feel
+## 16. Notes on premium feel
 
 - **Typography**: Inter Variable (Latin), IBM Plex Sans Arabic or Cairo (Arabic), Noto Sans CJK (CJK). One scale: 12/14/16/18/22/28/36. Two weights: 400 and 500.
 - **Motion**: every state change has motion. Entries: `cubic-bezier(0.16, 1, 0.3, 1)`. Exits: `cubic-bezier(0.7, 0, 0.84, 0)`. 200ms default; 400ms for layout shifts.
@@ -1187,7 +1140,7 @@ The following defaults are assumed by this document. Each can be revisited.
 
 ---
 
-## 18. Definition of done for Phase 0
+## 17. Definition of done for Phase 0
 
 When scaffolding is finished:
 

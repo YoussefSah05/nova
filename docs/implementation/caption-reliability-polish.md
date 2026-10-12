@@ -86,7 +86,7 @@ artifacts during rustdoc; final test validation runs after bundling has finished
 
 Final validation: `just lint`, `just typecheck`, `just test` (743 Rust tests/doctests,
 205 frontend tests), frontend production build, locked native build, debug app bundling,
-`cargo fmt --all -- --check`, and scoped whitespace checks pass.
+`cargo fmt --all -- --check` and scoped whitespace checks pass.
 Twelve opt-in Rust tests remain ignored in the normal suite; the three targeted real
 speech/late-media/audio-tag checks described above were run explicitly and passed.
 Only this change's files are committed; existing user edits and untracked work are preserved.

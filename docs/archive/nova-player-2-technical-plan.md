@@ -619,7 +619,7 @@ Rollback is constrained by database compatibility. Prefer forward fixes; if reve
 - Verify archives before extraction, constrain entries/size/symlinks, install into staging and atomically activate. A model is installed only after its manifest files and hashes validate.
 - Audit Rust/JS/native/model licenses and advisories. Use cargo-deny and equivalent JS checks, pin CI actions by commit, record exceptions with owners/expiry, and generate an SBOM covering more than Cargo/npm.
 - Resolve the exact mpv/FFmpeg build's licensing obligations, including enabled dependencies and source/relinking requirements. Choosing an LGPL-compatible configuration is a build decision, not something inferred from a package name. [mpv copyright](https://github.com/mpv-player/mpv/blob/master/Copyright), [FFmpeg licensing](https://ffmpeg.org/doxygen/trunk/md_LICENSE.html)
-- Test release bundles for absent dev driver/MCP endpoints and unwanted shell/network access. Keep signing secrets out of PR jobs.
+- Test release bundles for absent dev driver endpoints and unwanted shell/network access. Keep signing secrets out of PR jobs.
 
 Mac App Store distribution is not the initial target. Sandbox, downloadable artifacts, media dependencies and licensing require their own feasibility review; do not distort the working architecture around an uncommitted store requirement.
 

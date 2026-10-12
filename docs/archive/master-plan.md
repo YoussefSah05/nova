@@ -993,7 +993,7 @@ Verify production bundle resources, native dependencies, entitlements, security-
 
 ---
 
-# 19. Implementation status format
+# 17. Implementation status format
 
 Maintain:
 
@@ -1041,7 +1041,7 @@ It is a handoff document, not a second copy of the architecture specification.
 
 ---
 
-# 20. Definition of done for any milestone
+# 18. Definition of done for any milestone
 
 A milestone is done only when:
 
@@ -1058,7 +1058,7 @@ A milestone is done only when:
 
 ---
 
-# 21. Recommended initial execution order
+# 19. Recommended initial execution order
 
 Source-aware audit completed on 2026-09-25. The phase goals remain unchanged;
 the dependency adjustments below follow the executable boundaries documented in
@@ -1163,7 +1163,7 @@ was performed as part of this ordering update.
 
 ---
 
-# 22. Final target
+# 20. Final target
 
 Nova should evolve from an IPTV application with AI features into a local media intelligence platform.
 
