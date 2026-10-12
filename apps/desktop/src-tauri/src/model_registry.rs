@@ -327,7 +327,9 @@ mod tests {
         let pool = init_app_db(dir.path().join("app.db").to_str().unwrap())
             .await
             .unwrap();
-        refresh_internal(dir.path().to_path_buf(), &pool).await.unwrap();
+        refresh_internal(dir.path().to_path_buf(), &pool)
+            .await
+            .unwrap();
         // A database upgraded from the removed NLLB engine keeps its rows.
         sqlx::query(
             "INSERT INTO model_descriptors (id, capability, backend) \
