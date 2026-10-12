@@ -15,7 +15,6 @@
     "sqlx": "0.8.6",
     "libsqlite3-sys": "0.30.1",
     "tokio": "1.52.3",
-    "ct2rs": "0.9.19",
     "fastembed": "4.9.1",
     "ort": "2.0.0-rc.9",
     "sha2": "0.10.9",
@@ -39,7 +38,7 @@
   "macos": { "minimumSystemVersion": "14.0" },
   "database": {
     "registryMigration": "0003_external_model_libraries.sql",
-    "profileMigration": "0020_catalog_state_cleanup.sql"
+    "profileMigration": "0046_live_order_columns.sql"
   },
   "unverified": [
     "Native SDK dependency closure, hashes and build configuration",

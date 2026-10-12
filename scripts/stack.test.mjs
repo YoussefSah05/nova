@@ -27,7 +27,7 @@ test("reports independent drift instead of silently repairing files", () => {
     const data = structuredClone(inventory);
     data.pkg.version = "99.0.0";
     data.mise = data.mise.replace('node = "22.22.3"', 'node = "latest"');
-    data.profile.push("0020_future.sql");
+    data.profile.push("9999_future.sql");
     const issues = validateInventory(data);
     assert(issues.includes("root app version differs from manifest"));
     assert(issues.includes("mise node differs from manifest"));
