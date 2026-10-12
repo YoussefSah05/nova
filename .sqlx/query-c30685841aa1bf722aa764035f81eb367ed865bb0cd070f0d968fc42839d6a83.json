@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT source_id, channel_group, live_channel_key FROM channels WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "source_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "channel_group",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "live_channel_key",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "c30685841aa1bf722aa764035f81eb367ed865bb0cd070f0d968fc42839d6a83"
+}

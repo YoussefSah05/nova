@@ -42,7 +42,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { ChannelGroup } from "@/types";
+import type { ChannelGroup, LiveChannelSummary, LivePlaybackTarget } from "@/types";
 import { fetchChannelsInGroup, type BrowseItem } from "@/features/browse/queries";
 import { useProfileSettings } from "@/features/settings/useProfileSettings";
 
@@ -50,6 +50,7 @@ import { CaptionOverlay, type CaptionMode, type Cue } from "./CaptionOverlay";
 import { CaptionButton } from "./CaptionPicker";
 import { PlayerCompanion, type CompanionTab } from "./PlayerCompanion";
 import { CaptionStyleButton } from "./CaptionStylePanel";
+import { LiveVariantPicker } from "./LiveVariantPicker";
 import { CinemaEpisodeBrowser } from "./CinemaEpisodeBrowser";
 import { episodeToMedia } from "./episodeMedia";
 import { usePlaybackEnded, usePlaybackRecover } from "./usePlaybackEnded";
@@ -77,6 +78,8 @@ export interface PlayMedia {
   subtitle?: string | null;
   posterUrl?: string | null;
   /// Live context for cinema mode (layer 1 = brand bundle, layer 2 = same type).
+  liveChannelKey?: string;
+  liveVariantKey?: string;
   channelGroup?: string | null;
   category?: string | null;
   region?: string | null;
@@ -148,6 +151,8 @@ interface NativePlayerState {
   audioTrackId: number | null;
   subTrackId: number | null;
   videoTrackId: number | null;
+  videoWidth?: number | null;
+  videoHeight?: number | null;
   tracks: NativeTrack[];
   error: string | null;
 }
@@ -232,6 +237,7 @@ export function PlayerModal({
   }, [onProgressSaved]);
 
   const isLive = media.kind === "live";
+  const [videoResolution, setVideoResolution] = useState<string | null>(null);
   const guide = useChannelGuide(media.id, { profileId, enabled: isLive });
 
   // -- playback / stream state --------------------------------------------
@@ -308,6 +314,7 @@ export function PlayerModal({
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
+  const [liveVariantMenuOpen, setLiveVariantMenuOpen] = useState(false);
   const audioTracks = tracks.filter((t) => t.kind === "audio");
   const videoTracks = tracks.filter((t) => t.kind === "video");
   const latestPlaybackRef = useRef({ currentTime: 0, duration: 0, playing: false });
@@ -394,6 +401,25 @@ export function PlayerModal({
     );
     if (attempt.mediaKind === media.kind && attempt.mediaId === media.id) {
       setReopenNonce((n) => n + 1);
+    } else if (attempt.mediaKind === "live") {
+      void invoke<LiveChannelSummary | null>("get_live_channel", {
+        profileId,
+        channelId: attempt.mediaId,
+      })
+        .then((channel) => {
+          if (nativeTokenRef.current !== attempt.token) return;
+          const variant = channel?.variants.find((v) => v.channelId === attempt.mediaId);
+          setRecoveryNote(`Trying ${variant?.quality ?? "another variant"}…`);
+          onPlayMediaRef.current?.({
+            ...media,
+            id: attempt.mediaId,
+            title: channel?.title ?? media.title,
+            subtitle: channel?.edition ?? media.subtitle,
+            liveChannelKey: channel?.key,
+            liveVariantKey: variant?.variantKey,
+          });
+        })
+        .catch(() => setError("Could not resolve the alternate channel. Retry playback."));
     } else {
       onPlayMediaRef.current?.({
         ...media,
@@ -547,6 +573,9 @@ export function PlayerModal({
     setTracks(state.tracks);
     setAudioTrackId(state.audioTrackId);
     setVideoTrackId(state.videoTrackId);
+    setVideoResolution(
+      state.videoWidth && state.videoHeight ? `${state.videoWidth}×${state.videoHeight}` : null
+    );
 
     if (state.phase === "error") {
       setReady(false);
@@ -1287,6 +1316,7 @@ export function PlayerModal({
       captionStyleOpen ||
       audioMenuOpen ||
       qualityMenuOpen ||
+      liveVariantMenuOpen ||
       speedMenuOpen ||
       companionOpen;
     const shouldAutoHide = !menuOpen && (USE_MPV_ENGINE ? playing : !videoRef.current?.paused);
@@ -1302,6 +1332,7 @@ export function PlayerModal({
     captionStyleOpen,
     audioMenuOpen,
     qualityMenuOpen,
+    liveVariantMenuOpen,
     speedMenuOpen,
     companionOpen,
   ]);
@@ -1879,6 +1910,17 @@ export function PlayerModal({
                 />
               )}
 
+              {isLive && (
+                <LiveVariantPicker
+                  profileId={profileId}
+                  media={media}
+                  open={liveVariantMenuOpen}
+                  onOpenChange={setLiveVariantMenuOpen}
+                  onPlay={onPlayMedia}
+                  measured={videoResolution}
+                />
+              )}
+
               {videoTracks.length >= 2 && (
                 <ChromeMenu
                   icon={<MonitorCog className="h-5 w-5" />}
@@ -2229,19 +2271,35 @@ function CinemaChannelStrip({
                 title={c.title}
                 logoUrl={c.posterUrl}
                 channelId={c.id}
-                active={c.id === currentChannelId}
-                onClick={() =>
-                  onSelectChannel({
-                    kind: "live",
-                    id: c.id,
-                    title: c.title,
-                    subtitle: c.subtitle,
-                    posterUrl: c.posterUrl,
-                    channelGroup: c.channel?.channelGroup ?? group,
-                    category: c.channel?.category ?? category,
-                    region: c.channel?.region ?? region,
-                  })
+                active={
+                  c.liveChannel?.variants.some((v) => v.channelId === currentChannelId) ??
+                  c.id === currentChannelId
                 }
+                onClick={() => {
+                  const channel = c.liveChannel;
+                  if (!channel) return;
+                  void invoke<LivePlaybackTarget>("resolve_live_channel", {
+                    profileId,
+                    sourceId: channel.sourceId,
+                    channelKey: channel.key,
+                    variantKey: null,
+                  })
+                    .then((target) =>
+                      onSelectChannel({
+                        kind: "live",
+                        id: target.channelId,
+                        title: target.channel.title,
+                        subtitle: target.channel.edition,
+                        posterUrl: target.channel.logoUrl,
+                        channelGroup: target.channel.family,
+                        category: target.channel.category,
+                        region: target.channel.region,
+                        liveChannelKey: target.channel.key,
+                        liveVariantKey: target.variantKey,
+                      })
+                    )
+                    .catch(() => undefined);
+                }}
               />
             ))}
           </div>

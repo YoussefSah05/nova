@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO live_variant_health (source_id, variant_key, last_success_at, last_failure_at) VALUES (?, ?, ?, ?) ON CONFLICT(source_id, variant_key) DO UPDATE SET last_success_at = COALESCE(excluded.last_success_at, last_success_at), last_failure_at = COALESCE(excluded.last_failure_at, last_failure_at)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "30ff308e6eaad5e83efd233c917c7fc62bd3ddd0725d4b01873708413f877b36"
+}

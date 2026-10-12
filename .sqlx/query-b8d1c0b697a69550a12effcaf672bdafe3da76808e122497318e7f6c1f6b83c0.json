@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO live_channel_preferences (source_id, channel_key, variant_key) VALUES (?, ?, ?) ON CONFLICT(source_id, channel_key) DO UPDATE SET variant_key = excluded.variant_key",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "b8d1c0b697a69550a12effcaf672bdafe3da76808e122497318e7f6c1f6b83c0"
+}

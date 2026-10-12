@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as \"n!: i64\" FROM channels WHERE (? IS NULL OR source_id = ?) AND (live_ruleset IS NULL OR live_ruleset <> ?)",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5fdcd0cd4f59a5ed69c2ecab371a355aedba9b1588c03d1f6e9ceeb8c95ff3bc"
+}

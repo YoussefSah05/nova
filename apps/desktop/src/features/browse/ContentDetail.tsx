@@ -5,9 +5,9 @@ import { useAudioTrackChoice } from "./detail/useAudioTrackChoice";
 //! trailer, Translate (coming later), watchlist and favourite. Live brand
 //! bundles get a channel grid instead.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -19,12 +19,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { FavoriteButton } from "./FavoriteButton";
 import { WatchlistButton } from "./WatchlistButton";
-import { fetchChannelsInGroup, movieToItem, type BrowseItem } from "./queries";
+import { movieToItem, type BrowseItem } from "./queries";
 import { ItemRail } from "./ItemRail";
 import { titleArtSubject, useTitleArt } from "./titleArt";
-import { ChannelTile } from "./ChannelTile";
-import { useChannelGuide } from "./guide";
-import { GuideLine } from "./GuideViews";
+import { LiveBundleDetail } from "./LiveBundleDetail";
 import { CastStrip } from "./detail/CastStrip";
 import { TitleHero } from "./detail/TitleHero";
 import { TrailerButton } from "./detail/TrailerButton";
@@ -46,89 +44,6 @@ interface ContentDetailProps {
   onToggleWatchlist: (item: BrowseItem, next: boolean) => void;
   /// Open another title (from "More like this" or the collection).
   onOpenTitle: (item: BrowseItem) => void;
-}
-
-/// Live brand bundle: a backdrop-less header + a grid of the bundle's channels.
-function LiveBundleDetail({
-  profileId,
-  sourceId,
-  item,
-  onBack,
-  onPlay,
-}: {
-  profileId: string;
-  sourceId: number | null;
-  item: BrowseItem;
-  onBack: () => void;
-  onPlay: (item: BrowseItem, options?: PlaybackLaunchOptions) => void;
-}) {
-  const [channels, setChannels] = useState<BrowseItem[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (sourceId == null || !item.groupKey) return;
-    let cancelled = false;
-    setLoading(true);
-    fetchChannelsInGroup(profileId, sourceId, item.groupKey)
-      .then((c) => !cancelled && setChannels(c))
-      .catch(() => !cancelled && setChannels([]))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [profileId, sourceId, item.groupKey]);
-
-  return (
-    <div className="min-h-screen bg-neutral-950 px-[88px] pb-6 pt-[96px] text-white">
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={onBack}
-        className="gap-2 text-white/70 hover:text-white"
-      >
-        <ArrowLeft className="h-4 w-4" /> Back
-      </Button>
-      <div className="mt-4 flex items-center gap-4">
-        <div className="h-16 w-28 shrink-0 overflow-hidden rounded-xl shadow-lg shadow-black/40">
-          <ChannelTile logoUrl={item.posterUrl} title={item.title} />
-        </div>
-        <div>
-          <h1 className="font-display text-2xl font-semibold">{item.title}</h1>
-          <p className="mt-1 text-sm text-white/55">
-            {channels.length || item.memberCount} channels
-            {item.subtitle ? ` · ${item.subtitle}` : ""}
-          </p>
-        </div>
-      </div>
-
-      {loading ? (
-        <p className="mt-8 text-sm text-white/50">Loading channels…</p>
-      ) : (
-        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-          {channels.map((c) => (
-            <BundleChannel key={c.key} item={c} onPlay={onPlay} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/// One channel of a brand bundle, with what it's showing now.
-function BundleChannel({ item, onPlay }: { item: BrowseItem; onPlay: (item: BrowseItem) => void }) {
-  const guide = useChannelGuide(item.id);
-  return (
-    <button
-      onClick={() => onPlay(item)}
-      className="group flex flex-col gap-2 text-left focus:outline-none"
-    >
-      <div className="aspect-video w-full overflow-hidden rounded-xl shadow-lg shadow-black/30 transition-transform duration-200 group-hover:-translate-y-1 group-hover:ring-1 group-hover:ring-white/25 group-focus-visible:ring-2 group-focus-visible:ring-ring">
-        <ChannelTile logoUrl={item.posterUrl} title={item.title} />
-      </div>
-      <span className="line-clamp-2 text-xs font-medium text-white/85">{item.title}</span>
-      <GuideLine guide={guide} />
-    </button>
-  );
 }
 
 /// `m:ss` / `h:mm:ss` for a resume hint.
@@ -197,6 +112,7 @@ export function ContentDetail({
   if (item.kind === "live") {
     return (
       <LiveBundleDetail
+        key={`${profileId}:${sourceId}:${item.groupKey}`}
         profileId={profileId}
         sourceId={sourceId}
         item={item}

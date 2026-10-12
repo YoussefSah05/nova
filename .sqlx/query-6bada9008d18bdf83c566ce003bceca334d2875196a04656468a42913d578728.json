@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT source_id, live_channel_key, live_variant_key FROM channels WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "source_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "live_channel_key",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "live_variant_key",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "6bada9008d18bdf83c566ce003bceca334d2875196a04656468a42913d578728"
+}

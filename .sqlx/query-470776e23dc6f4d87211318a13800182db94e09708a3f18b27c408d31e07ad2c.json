@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE channels SET channel_group = ?, live_channel_key = ?, live_variant_key = ?, live_metadata = ?, live_ruleset = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "470776e23dc6f4d87211318a13800182db94e09708a3f18b27c408d31e07ad2c"
+}

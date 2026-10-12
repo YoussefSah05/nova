@@ -186,6 +186,8 @@ function groupFrom(c: Channel): ChannelGroup {
   return {
     group: c.name.toLowerCase(),
     memberCount: 1,
+    streamCount: 1,
+    editions: [c.country ?? "Unknown"],
     representativeId: c.id,
     title: c.name,
     logoUrl: c.logoUrl,
@@ -203,6 +205,36 @@ function setupInvoke(
 ) {
   mocks.invoke.mockImplementation((command: string, args?: InvokeArgs): Promise<unknown> => {
     switch (command) {
+      case "list_live_channels":
+        return Promise.resolve(
+          channelsFor(args ?? {}).map((c) => ({
+            key: `channel-${c.id}`,
+            sourceId: c.sourceId,
+            family: c.channelGroup ?? c.name,
+            title: c.name,
+            edition: c.country ?? "Unknown",
+            language: null,
+            country: c.country,
+            number: null,
+            representativeId: c.id,
+            logoUrl: c.logoUrl,
+            category: c.category,
+            region: c.region,
+            isFavorite: c.isFavorite,
+            isInWatchlist: c.isInWatchlist,
+            variants: [
+              {
+                variantKey: `variant-${c.id}`,
+                channelId: c.id,
+                rawName: c.name,
+                quality: null,
+                codecs: [],
+                recentlyFailed: false,
+                lastSuccessAt: null,
+              },
+            ],
+          }))
+        );
       case "list_sources":
         return Promise.resolve(sourceList);
       case "get_trending_in_library":
@@ -473,7 +505,7 @@ describe("AppShell", () => {
 
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith(
-        "list_channels",
+        "list_live_channels",
         expect.objectContaining({ filters: expect.objectContaining({ query: "news" }) })
       )
     );

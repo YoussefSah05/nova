@@ -649,10 +649,8 @@ pub async fn semantic_search_channels(
     let ordered: Vec<String> = if sem_keys.is_empty() {
         lexical_keys
     } else {
-        nova_search::rrf_fuse(&[&lexical_keys[..], &sem_keys[..]], nova_search::RRF_K)
-            .into_iter()
-            .map(|(k, _)| k)
-            .collect()
+        // Deterministic name matches stay ahead of optional semantic suggestions.
+        dedup_preserve_order(lexical_keys.iter().cloned().chain(sem_keys))
     };
     let ordered: Vec<String> = ordered.into_iter().take(limit as usize).collect();
 

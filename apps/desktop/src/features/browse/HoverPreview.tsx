@@ -50,7 +50,10 @@ export interface HoverPreviewProps {
 
 function metaLine(item: BrowseItem, live: boolean): string {
   const parts: string[] = [];
-  if (live && item.memberCount && item.memberCount > 1) parts.push(`${item.memberCount} channels`);
+  if (live && item.memberCount && item.memberCount > 1)
+    parts.push(
+      `${item.memberCount} channels${item.streamCount ? ` · ${item.streamCount} streams` : ""}`
+    );
   const year = item.movie?.year ?? item.vod?.year;
   if (year) parts.push(String(year));
   if (item.series) {

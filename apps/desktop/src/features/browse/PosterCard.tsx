@@ -130,6 +130,7 @@ export const PosterCard = memo(function PosterCard({
             {item.memberCount && item.memberCount > 1 ? (
               <span className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/75 px-1.5 py-0.5 text-xs font-medium text-white">
                 {item.memberCount} channels
+                {item.streamCount ? ` · ${item.streamCount} streams` : ""}
               </span>
             ) : versions > 1 ? (
               <span className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/75 px-1.5 py-0.5 text-xs font-medium text-white">

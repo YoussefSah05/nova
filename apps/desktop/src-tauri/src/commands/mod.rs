@@ -551,6 +551,65 @@ pub async fn list_channel_groups(
         .map_err(Into::into)
 }
 
+/// Logical channels, with all advertised variants and no authenticated locators.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn list_live_channels(
+    profile_id: String,
+    source_id: i64,
+    group: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    filters: Option<ChannelFilters>,
+    state: State<'_, AppState>,
+) -> Result<Vec<nova_core::live::LiveChannelSummary>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    let f = filters.unwrap_or_default();
+    ChannelRepository::new(&pool)
+        .live_channels(
+            source_id,
+            group.as_deref(),
+            f.category.as_deref(),
+            f.region.as_deref(),
+            f.country.as_deref(),
+            f.query.as_deref(),
+            f.favorites_only,
+            f.watchlist_only,
+            limit.unwrap_or(200),
+            offset.unwrap_or(0),
+        )
+        .await
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn get_live_channel(
+    profile_id: String,
+    channel_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Option<nova_core::live::LiveChannelSummary>, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    ChannelRepository::new(&pool)
+        .live_channel_for_row(channel_id)
+        .await
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn resolve_live_channel(
+    profile_id: String,
+    source_id: i64,
+    channel_key: String,
+    variant_key: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<nova_core::live::LivePlaybackTarget, ApiError> {
+    let pool = require_profile_pool(&profile_id, &state).await?;
+    ChannelRepository::new(&pool)
+        .resolve_live(source_id, &channel_key, variant_key.as_deref(), &[])
+        .await
+        .map_err(Into::into)
+}
+
 /// All channels of one brand-family (for the bundle start screen / cinema layer 1).
 #[tauri::command]
 pub async fn list_channels_in_group(
@@ -1268,6 +1327,10 @@ async fn build_candidate(
             .await
             .map_err(ImportFailure::storage)?;
     }
+
+    ChannelRepository::compile_live_tx(tx, Some(source_id), true)
+        .await
+        .map_err(ImportFailure::storage)?;
 
     // Catalog compiler: bind this generation's movie records to canonical
     // entities, then resolve identities across every source of the profile.
@@ -3469,6 +3532,8 @@ mod stabilization_tests {
             audio_track_id: None,
             sub_track_id: None,
             video_track_id: None,
+            video_width: None,
+            video_height: None,
             tracks: Vec::new(),
             error: None,
         }

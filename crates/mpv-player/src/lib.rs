@@ -93,6 +93,8 @@ pub struct MpvPlayerState {
     pub audio_track_id: Option<i64>,
     pub sub_track_id: Option<i64>,
     pub video_track_id: Option<i64>,
+    pub video_width: Option<i64>,
+    pub video_height: Option<i64>,
     pub tracks: Vec<MpvTrack>,
     pub error: Option<String>,
 }
@@ -292,6 +294,8 @@ impl MpvEngine {
                 audio_track_id: None,
                 sub_track_id: None,
                 video_track_id: None,
+                video_width: None,
+                video_height: None,
                 tracks: Vec::new(),
                 error: None,
             });
@@ -622,6 +626,8 @@ impl MpvSession {
             audio_track_id,
             sub_track_id,
             video_track_id,
+            video_width: self.property_track_id("video-params/w"),
+            video_height: self.property_track_id("video-params/h"),
             tracks,
             error: self.last_error.clone(),
         })

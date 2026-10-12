@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(raw_name, name) as \"raw!: String\", tvg_id, country, category, raw_group, region FROM channels ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "raw!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "tvg_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "country",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "category",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "raw_group",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "region",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "9768dd3a4b4229e6d8f05e0778993a0da8d553229f695060dc4ed30bf9c90e0b"
+}

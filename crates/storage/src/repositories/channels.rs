@@ -1,3 +1,4 @@
+mod live;
 use nova_core::{now_ts, Channel, ChannelGroup, ContentSort, SourceEvidence};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
@@ -17,6 +18,7 @@ impl<'a> ChannelRepository<'a> {
     pub async fn insert_batch(&self, entries: &[Channel]) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
         Self::insert_batch_tx(&mut tx, entries).await?;
+        Self::compile_live_tx(&mut tx, None, true).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -300,72 +302,17 @@ impl<'a> ChannelRepository<'a> {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<ChannelGroup>, StorageError> {
-        let search = like_query(query);
-        let search = search.as_deref();
-        let fav_flag: i64 = if favorites_only { 1 } else { 0 };
-        let wl_flag: i64 = if watchlist_only { 1 } else { 0 };
-        // Group key: COALESCE(channel_group, name) so ungrouped channels are their
-        // own singleton. Representative = lowest id; the card poster uses any
-        // non-empty logo in the family. `member_count` drives the bundle badge.
-        let rows = sqlx::query!(
-            r#"SELECT
-                 COALESCE(NULLIF(channel_group, ''), name) as "group_key!: String",
-                 COUNT(*) as "member_count!: i64",
-                 MIN(id) as "rep_id!: i64",
-                 MIN(name) as "name!: String",
-                 COALESCE(MIN(NULLIF(logo_url, '')),
-                          MIN((SELECT l.url FROM epg_channel_logos l
-                            WHERE l.source_id = channels.source_id
-                              AND l.channel_key = lower(channels.tvg_id)
-                            ORDER BY l.updated_at DESC LIMIT 1)),
-                          MIN((SELECT d.url FROM directory_channel_logos d
-                            WHERE d.source_id = channels.source_id
-                              AND d.channel_key = COALESCE(lower(NULLIF(channels.tvg_id, '')),
-                                                           'name:' || lower(channels.name))))) as "logo_url?: String",
-                 MIN(category) as "category?: String",
-                 MIN(region) as "region?: String",
-                 MAX(is_favorite) as "is_favorite!: i64",
-                 MAX(is_in_watchlist) as "is_in_watchlist!: i64"
-               FROM channels
-               WHERE source_id = ?
-                 AND (? IS NULL OR category = ?)
-                 AND (? IS NULL OR region = ?)
-                 AND (? IS NULL OR name LIKE ? OR category LIKE ? OR raw_group LIKE ?)
-                 AND (? = 0 OR is_favorite = 1)
-                 AND (? = 0 OR is_in_watchlist = 1)
-               GROUP BY COALESCE(NULLIF(channel_group, ''), name)
-               ORDER BY COUNT(*) DESC, COALESCE(NULLIF(channel_group, ''), name) ASC
-               LIMIT ? OFFSET ?"#,
+        self.live_groups(
             source_id,
             category,
-            category,
             region,
-            region,
-            search,
-            search,
-            search,
-            search,
-            fav_flag,
-            wl_flag,
+            query,
+            favorites_only,
+            watchlist_only,
             limit,
             offset,
         )
-        .fetch_all(self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| ChannelGroup {
-                group: r.group_key,
-                member_count: r.member_count,
-                representative_id: r.rep_id,
-                title: r.name,
-                logo_url: r.logo_url,
-                category: r.category,
-                region: r.region,
-                is_favorite: r.is_favorite != 0,
-                is_in_watchlist: r.is_in_watchlist != 0,
-            })
-            .collect())
+        .await
     }
 
     /// The brand-family group key (`COALESCE(channel_group, name)`, same as
@@ -377,6 +324,7 @@ impl<'a> ChannelRepository<'a> {
         source_id: i64,
         ids: &[i64],
     ) -> Result<Vec<(i64, String)>, StorageError> {
+        self.ensure_live().await?;
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -401,52 +349,18 @@ impl<'a> ChannelRepository<'a> {
         source_id: i64,
         keys: &[String],
     ) -> Result<Vec<ChannelGroup>, StorageError> {
-        if keys.is_empty() {
-            return Ok(Vec::new());
-        }
-        let keys_json = serde_json::to_string(keys)?;
-        let rows = sqlx::query!(
-            r#"SELECT
-                 COALESCE(NULLIF(channel_group, ''), name) as "group_key!: String",
-                 COUNT(*) as "member_count!: i64",
-                 MIN(id) as "rep_id!: i64",
-                 MIN(name) as "name!: String",
-                 COALESCE(MIN(NULLIF(logo_url, '')),
-                          MIN((SELECT l.url FROM epg_channel_logos l
-                            WHERE l.source_id = channels.source_id
-                              AND l.channel_key = lower(channels.tvg_id)
-                            ORDER BY l.updated_at DESC LIMIT 1)),
-                          MIN((SELECT d.url FROM directory_channel_logos d
-                            WHERE d.source_id = channels.source_id
-                              AND d.channel_key = COALESCE(lower(NULLIF(channels.tvg_id, '')),
-                                                           'name:' || lower(channels.name))))) as "logo_url?: String",
-                 MIN(category) as "category?: String",
-                 MIN(region) as "region?: String",
-                 MAX(is_favorite) as "is_favorite!: i64",
-                 MAX(is_in_watchlist) as "is_in_watchlist!: i64"
-               FROM channels
-               WHERE source_id = ?
-                 AND COALESCE(NULLIF(channel_group, ''), name) IN (SELECT value FROM json_each(?))
-               GROUP BY COALESCE(NULLIF(channel_group, ''), name)"#,
+        self.live_groups_with_keys(
             source_id,
-            keys_json,
+            None,
+            None,
+            None,
+            false,
+            false,
+            200,
+            0,
+            Some(keys),
         )
-        .fetch_all(self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| ChannelGroup {
-                group: r.group_key,
-                member_count: r.member_count,
-                representative_id: r.rep_id,
-                title: r.name,
-                logo_url: r.logo_url,
-                category: r.category,
-                region: r.region,
-                is_favorite: r.is_favorite != 0,
-                is_in_watchlist: r.is_in_watchlist != 0,
-            })
-            .collect())
+        .await
     }
 
     /// All channels of one brand-family, in display order.

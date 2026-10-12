@@ -5,7 +5,7 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
 
-import type { MoviePlaybackTarget } from "@/types";
+import type { MoviePlaybackTarget, LiveChannelSummary, LivePlaybackTarget } from "@/types";
 import { PlayerModal, type PlayMedia } from "@/features/player/PlayerModal";
 import { browseKeys, type BrowseItem } from "@/features/browse/queries";
 import { canonicalMovieQuery, invalidateDetailProgress } from "@/features/browse/detail/data";
@@ -88,6 +88,47 @@ export function PlaybackProvider({ children }: { children: ReactNode }) {
         await resolveMovie(item, null, options);
         return;
       }
+      if (item.kind === "live") {
+        const id = ++sequence.current;
+        try {
+          const channel =
+            item.liveChannel ??
+            (await invoke<LiveChannelSummary | null>("get_live_channel", {
+              profileId: profile.id,
+              channelId: item.id,
+            }));
+          if (id !== sequence.current) return;
+          if (channel) {
+            const target = await invoke<LivePlaybackTarget>("resolve_live_channel", {
+              profileId: profile.id,
+              sourceId: channel.sourceId,
+              channelKey: options?.liveChannelKey ?? channel.key,
+              variantKey: options?.liveVariantKey ?? null,
+            });
+            if (id !== sequence.current) return;
+            setRequest({
+              id,
+              options,
+              media: {
+                kind: "live",
+                id: target.channelId,
+                title: target.channel.title,
+                subtitle: target.channel.edition,
+                posterUrl: target.channel.logoUrl,
+                channelGroup: target.channel.family,
+                category: target.channel.category,
+                region: target.channel.region,
+                liveChannelKey: target.channel.key,
+                liveVariantKey: target.variantKey,
+              },
+            });
+            return;
+          }
+        } catch (e: unknown) {
+          if (id === sequence.current) setError(errorMessage(e));
+          return;
+        }
+      }
       playMedia(
         {
           kind: item.kind === "live" ? "live" : "vod",
@@ -102,7 +143,7 @@ export function PlaybackProvider({ children }: { children: ReactNode }) {
         options
       );
     },
-    [resolveMovie, playMedia]
+    [resolveMovie, playMedia, profile.id, setError]
   );
 
   const refreshProgress = useCallback(() => {

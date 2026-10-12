@@ -56,6 +56,9 @@ async fn initialize_profile_pool(pool: &SqlitePool) -> Result<(), StorageError> 
     crate::repositories::CatalogSearchRepository::new(pool)
         .ensure_movies()
         .await?;
+    crate::repositories::ChannelRepository::new(pool)
+        .ensure_live()
+        .await?;
     Ok(())
 }
 

@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH selected AS (\n            SELECT DISTINCT live_channel_key FROM channels\n            WHERE source_id = ? AND (? IS NULL OR channel_group = ?)\n              AND (? IS NULL OR category = ?) AND (? IS NULL OR region = ?)\n              AND (? IS NULL OR country = ?)\n              AND (? IS NULL OR name LIKE ? OR raw_name LIKE ? OR channel_group LIKE ? OR raw_group LIKE ?)\n              AND (? = 0 OR is_favorite = 1) AND (? = 0 OR is_in_watchlist = 1)\n            ORDER BY json_extract(live_metadata, '$.edition'), json_extract(live_metadata, '$.sortKey'), live_channel_key LIMIT ? OFFSET ?\n        ) SELECT c.id as \"id!: i64\", c.source_id, c.live_channel_key as \"key!: String\",\n            c.live_variant_key as \"variant!: String\", c.live_metadata as \"metadata!: String\",\n            COALESCE(c.raw_name, c.name) as \"raw!: String\", c.logo_url, c.category, c.region,\n            c.is_favorite, c.is_in_watchlist, h.last_success_at, h.last_failure_at,\n            p.variant_key as \"preferred?: String\"\n          FROM channels c JOIN selected s ON s.live_channel_key = c.live_channel_key\n          LEFT JOIN live_variant_health h ON h.source_id = c.source_id AND h.variant_key = c.live_variant_key\n          LEFT JOIN live_channel_preferences p ON p.source_id = c.source_id AND p.channel_key = c.live_channel_key\n          WHERE c.source_id = ? ORDER BY c.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "key!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "variant!: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata!: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "raw!: String",
+        "ordinal": 5,
+        "type_info": "Null"
+      },
+      {
+        "name": "logo_url",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "category",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "region",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_favorite",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_in_watchlist",
+        "ordinal": 10,
+        "type_info": "Integer"
+      },
+      {
+        "name": "last_success_at",
+        "ordinal": 11,
+        "type_info": "Integer"
+      },
+      {
+        "name": "last_failure_at",
+        "ordinal": 12,
+        "type_info": "Integer"
+      },
+      {
+        "name": "preferred?: String",
+        "ordinal": 13,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 19
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      true,
+      true,
+      null,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "d6b723abc76bb9b24abfdfdd5b0751a09887760169d38e2d828f8de26645b5a7"
+}

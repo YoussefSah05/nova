@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, source_id, COALESCE(raw_name, name) as \"raw!: String\", country, raw_group, tvg_id, stream_url FROM channels WHERE (? IS NULL OR source_id = ?) ORDER BY source_id, id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "source_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "raw!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "country",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "raw_group",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "tvg_id",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "stream_url",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "8d74bb9414d8ae08be1bde19c1988e7f17c9f61a46b9ab8f5fc69e0feb0c4cab"
+}

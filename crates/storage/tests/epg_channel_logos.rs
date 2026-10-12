@@ -125,7 +125,7 @@ async fn epg_icons_fill_missing_logos_and_survive_a_channel_rebuild() {
         .unwrap();
     let bein = groups.iter().find(|g| g.group == "bein sports").unwrap();
     assert_eq!(bein.logo_url.as_deref(), Some("https://provider/bein2.png"));
-    let bbc = groups.iter().find(|g| g.group == "BBC One").unwrap();
+    let bbc = groups.iter().find(|g| g.group == "bbc one").unwrap();
     assert_eq!(bbc.logo_url.as_deref(), Some("https://epg/bbc1.png"));
 
     // A catalog refresh rebuilds channel rows; the logos are keyed by tvg-id.

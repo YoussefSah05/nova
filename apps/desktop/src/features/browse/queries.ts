@@ -1,3 +1,4 @@
+import type { LiveChannelSummary } from "@/types";
 //! Browse data layer. Every read of catalog content goes through these typed
 //! query keys + fetchers so TanStack Query can cache, dedupe, prefetch, and
 //! background-revalidate. Switching tabs becomes a cache read (instant) instead
@@ -48,6 +49,10 @@ export interface BrowseItem {
   /// `memberCount > 1` the card opens the bundle screen instead of playing.
   groupKey?: string;
   memberCount?: number;
+  streamCount?: number;
+  editions?: string[];
+  searchQuery?: string;
+  liveChannel?: LiveChannelSummary;
   channel?: Channel;
   vod?: VodItem;
   series?: SeriesSummary;
@@ -98,19 +103,12 @@ export function channelToItem(c: Channel): BrowseItem {
   };
 }
 
-/// Trailing standalone number stripped for a bundle's display title
-/// ("beIN Sports 1" → "beIN Sports") when it groups multiple channels.
-function prettyBrand(title: string): string {
-  return title.replace(/\s+\d+$/, "").trim() || title;
-}
-
 export function channelGroupToItem(g: ChannelGroup): BrowseItem {
-  const bundle = g.memberCount > 1;
   return {
     key: `live-group-${g.group}`,
     kind: "live",
     id: g.representativeId,
-    title: bundle ? prettyBrand(g.title) : g.title,
+    title: g.title,
     subtitle: [g.region, g.category].filter(Boolean).join(" / ") || null,
     posterUrl: g.logoUrl,
     tvgId: null,
@@ -118,6 +116,8 @@ export function channelGroupToItem(g: ChannelGroup): BrowseItem {
     isInWatchlist: g.isInWatchlist,
     groupKey: g.group,
     memberCount: g.memberCount,
+    streamCount: g.streamCount,
+    editions: g.editions,
   };
 }
 
@@ -262,12 +262,13 @@ async function fetchItems(
         query: q,
         limit,
       });
-      return hits.map(channelGroupToItem);
+      return hits.map((g) => ({ ...channelGroupToItem(g), searchQuery: q }));
     }
     // Live is grouped into brand-family bundles server-side (one card per brand).
-    return counted(await invoke<ChannelGroup[]>("list_channel_groups", args)).map(
-      channelGroupToItem
-    );
+    return counted(await invoke<ChannelGroup[]>("list_channel_groups", args)).map((g) => ({
+      ...channelGroupToItem(g),
+      searchQuery: q,
+    }));
   }
   if (tab === "movies") {
     // A free-text search with no other restrictive filter goes through the
@@ -393,8 +394,8 @@ export async function fetchChannelsInGroup(
   sourceId: number,
   group: string
 ): Promise<BrowseItem[]> {
-  const chans = await invoke<Channel[]>("list_channels_in_group", { profileId, sourceId, group });
-  return chans.map(channelToItem);
+  const channels = await fetchLiveChannels(profileId, sourceId, group);
+  return channels.map(liveChannelToItem);
 }
 
 /// Each tab owns its rail; the backend section names match the tab ids.
@@ -817,5 +818,49 @@ export function invalidateMembershipRails(
       const filters = q.queryKey[5] as BrowseFilters | undefined;
       return Boolean(filters?.favoritesOnly || filters?.watchlistOnly);
     },
+  });
+}
+
+export function liveChannelToItem(c: LiveChannelSummary): BrowseItem {
+  const channel: Channel = {
+    id: c.representativeId,
+    sourceId: c.sourceId,
+    tvgId: null,
+    name: c.title,
+    country: c.country,
+    category: c.category,
+    rawGroup: null,
+    logoUrl: c.logoUrl,
+    isFavorite: c.isFavorite,
+    isInWatchlist: c.isInWatchlist,
+    lastPlayedAt: null,
+    addedAt: null,
+    dedupGroup: null,
+    channelGroup: c.family,
+    region: c.region,
+  };
+  return {
+    ...channelToItem(channel),
+    key: `live-channel-${c.sourceId}-${c.key}`,
+    subtitle: c.edition,
+    liveChannel: c,
+    streamCount: c.variants.length,
+  };
+}
+
+export async function fetchLiveChannels(
+  profileId: string,
+  sourceId: number,
+  group: string,
+  offset = 0,
+  query?: string
+): Promise<LiveChannelSummary[]> {
+  return invoke<LiveChannelSummary[]>("list_live_channels", {
+    profileId,
+    sourceId,
+    group,
+    limit: GRID_PAGE_SIZE,
+    offset,
+    filters: query ? { query } : null,
   });
 }

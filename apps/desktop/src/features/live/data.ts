@@ -12,8 +12,8 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { useMemo, useRef } from "react";
 
-import type { Channel, ChannelGuide, LiveOverview, Program } from "@/types";
-import { browseKeys } from "@/features/browse/queries";
+import type { Channel, ChannelGuide, LiveOverview, LiveChannelSummary, Program } from "@/types";
+import { liveChannelToItem, browseKeys } from "@/features/browse/queries";
 import { guideKeys } from "@/features/browse/guide";
 import { useScreenActive } from "@/lib/screenActive";
 import type { GuideWindow } from "./timeline";
@@ -52,25 +52,29 @@ export function useGuideChannels(profileId: string, sourceId: number | null, sco
   return useInfiniteQuery({
     subscribed: useScreenActive(),
     queryKey: [...browseKeys.source(profileId, sourceId ?? -1), "guideChannels", scope] as const,
-    queryFn: ({ pageParam }): Promise<Channel[]> =>
-      scope.kind === "bundle"
-        ? invoke<Channel[]>("list_channels_in_group", { profileId, sourceId, group: scope.group })
-        : invoke<Channel[]>("list_channels", {
-            profileId,
-            sourceId,
-            limit: GUIDE_PAGE,
-            offset: pageParam,
-            filters: {
-              category: scope.category,
-              region: scope.region,
-              country: scope.country,
-              favoritesOnly: scope.favoritesOnly,
-              query: scope.query,
-            },
-          }),
+    queryFn: async ({ pageParam }): Promise<Channel[]> => {
+      const rows = await invoke<LiveChannelSummary[]>("list_live_channels", {
+        profileId,
+        sourceId,
+        limit: GUIDE_PAGE,
+        offset: pageParam,
+        group: scope.kind === "bundle" ? scope.group : null,
+        filters:
+          scope.kind === "playlist"
+            ? {
+                category: scope.category,
+                region: scope.region,
+                country: scope.country,
+                favoritesOnly: scope.favoritesOnly,
+                query: scope.query,
+              }
+            : null,
+      });
+      return rows.map((c) => liveChannelToItem(c).channel).filter((c): c is Channel => !!c);
+    },
     initialPageParam: 0,
     getNextPageParam: (last, _pages, offset) =>
-      scope.kind === "playlist" && last.length === GUIDE_PAGE ? offset + GUIDE_PAGE : undefined,
+      last.length === GUIDE_PAGE ? offset + GUIDE_PAGE : undefined,
     enabled: sourceId !== null,
     // A new search keeps the rows on screen until its results arrive.
     placeholderData: keepPreviousData,
@@ -128,6 +132,12 @@ export function useGuidePrograms(
   });
   // What each channel last showed, across window moves.
   const last_ = useRef(new Map<number, Program[]>());
+  const previousScope = useRef("");
+  const currentScope = `${profileId}:${channels[0]?.sourceId ?? ""}`;
+  if (previousScope.current !== currentScope) {
+    last_.current.clear();
+    previousScope.current = currentScope;
+  }
   // Rebuilt each render (a few blocks); each channel's programme array keeps
   // its identity, so memoized rows don't re-render.
   const programs = new Map<number, Program[]>();

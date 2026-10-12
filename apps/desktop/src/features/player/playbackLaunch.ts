@@ -2,6 +2,8 @@ import type { CaptionMode } from "./CaptionOverlay";
 
 /** Per-request choices. They never update a profile or choose a provider version. */
 export interface PlaybackLaunchOptions {
+  liveChannelKey?: string;
+  liveVariantKey?: string;
   captionMode?: CaptionMode;
   translationTarget?: "en" | "fr" | "ar";
   audioTrack?: {

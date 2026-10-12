@@ -94,3 +94,6 @@ playwright-report/
 test-results/
 .nova-validation/
 
+
+# Private interview notes (never committed)
+interview-prep/

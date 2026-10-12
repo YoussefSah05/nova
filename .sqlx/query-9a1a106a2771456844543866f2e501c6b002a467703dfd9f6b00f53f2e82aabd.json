@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT channel_group FROM channels WHERE source_id = ? AND live_channel_key = ? LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "channel_group",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9a1a106a2771456844543866f2e501c6b002a467703dfd9f6b00f53f2e82aabd"
+}

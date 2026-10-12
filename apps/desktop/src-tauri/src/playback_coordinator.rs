@@ -23,7 +23,8 @@ use nova_core::catalog::{EntityId, VariantId};
 use nova_core::SeriesEpisode;
 use nova_mpv_player::{MpvEngine, MpvPlaybackPhase, MpvPlayerState};
 use nova_storage::{
-    CanonicalRepository, ProfileSettingsRepository, SeriesRepository, WatchHistoryRepository,
+    CanonicalRepository, ChannelRepository, ProfileSettingsRepository, SeriesRepository,
+    WatchHistoryRepository,
 };
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -345,6 +346,7 @@ struct ActiveSession {
     media_id: i64,
     /// A movie's canonical entity and the variant being played.
     variant: Option<(EntityId, VariantId)>,
+    live_identity: Option<(i64, String, String)>,
     preferred_lang: Option<String>,
     caption_mode: Option<String>,
     policy: SessionPolicy,
@@ -355,7 +357,11 @@ impl ActiveSession {
     fn chain_key(&self) -> String {
         match &self.variant {
             Some((entity, _)) => entity.as_str().to_string(),
-            None => format!("{}:{}", self.media_kind, self.media_id),
+            None => self
+                .live_identity
+                .as_ref()
+                .map(|(source, key, _)| format!("live:{source}:{key}"))
+                .unwrap_or_else(|| format!("{}:{}", self.media_kind, self.media_id)),
         }
     }
 }
@@ -366,6 +372,7 @@ struct RecoveryChain {
     retried_same: bool,
     switches: u32,
     tried_variants: Vec<VariantId>,
+    tried_live: Vec<String>,
     window_start_ms: i64,
     recoveries_in_window: u32,
 }
@@ -377,6 +384,7 @@ impl RecoveryChain {
         self.retried_same = false;
         self.switches = 0;
         self.tried_variants.clear();
+        self.tried_live.clear();
     }
 }
 
@@ -718,6 +726,21 @@ impl PlaybackCoordinator {
         } else {
             None
         };
+        let live_identity = if live {
+            ChannelRepository::new(&pool)
+                .live_channel_for_row(media_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|c| {
+                    c.variants
+                        .iter()
+                        .find(|v| v.channel_id == media_id)
+                        .map(|v| (c.source_id, c.key.clone(), v.variant_key.clone()))
+                })
+        } else {
+            None
+        };
         let preferred_lang = ProfileSettingsRepository::new(&pool)
             .get()
             .await
@@ -741,6 +764,7 @@ impl PlaybackCoordinator {
             media_kind,
             media_id,
             variant,
+            live_identity,
             preferred_lang,
             caption_mode: None,
             policy: SessionPolicy::new(live, resume).with_moment(start_sec),
@@ -804,6 +828,15 @@ impl PlaybackCoordinator {
     }
 
     async fn record_outcome(session: &ActiveSession, success: bool) {
+        if let Some((source, key, variant)) = &session.live_identity {
+            if let Err(e) = ChannelRepository::new(&session.pool)
+                .record_live_variant(*source, key, variant, success)
+                .await
+            {
+                tracing::warn!(error = %e, "could not record live variant health");
+            }
+            return;
+        }
         let Some((_, variant)) = &session.variant else {
             return;
         };
@@ -835,6 +868,19 @@ impl PlaybackCoordinator {
         let (media_id, other_source) = if !chain.retried_same {
             chain.retried_same = true;
             (session.media_id, false)
+        } else if let Some((source, key, variant)) = &session.live_identity {
+            if chain.switches >= MAX_SOURCE_SWITCHES {
+                return None;
+            }
+            if !chain.tried_live.contains(variant) {
+                chain.tried_live.push(variant.clone());
+            }
+            let next = ChannelRepository::new(&session.pool)
+                .resolve_live(*source, key, None, &chain.tried_live)
+                .await
+                .ok()?;
+            chain.switches += 1;
+            (next.channel_id, true)
         } else {
             let (entity, variant) = session.variant.as_ref()?;
             if chain.switches >= MAX_SOURCE_SWITCHES {

@@ -74,6 +74,7 @@ typecheck:
 
 # Regenerate Rust-owned IPC bindings and format the generated TypeScript
 bindings:
+    cargo test -p nova-core --lib export_bindings --locked
     cargo test -p nova-storage --lib export_bindings --locked
     cargo test -p nova-desktop --lib export_bindings --locked
     pnpm -C apps/desktop exec prettier --write src/types/generated

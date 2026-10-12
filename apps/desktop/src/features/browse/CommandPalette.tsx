@@ -99,7 +99,7 @@ export function CommandPalette(props: CommandPaletteProps) {
       ]);
       if (cancelled) return;
       setResults({
-        live: live.slice(0, PER_TYPE).map(channelGroupToItem),
+        live: live.slice(0, PER_TYPE).map((g) => ({ ...channelGroupToItem(g), searchQuery: q })),
         movies: movies.slice(0, PER_TYPE).map(movieToItem),
         series: series.slice(0, PER_TYPE).map(seriesToItem),
       });

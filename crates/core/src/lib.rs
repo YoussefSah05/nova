@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod classify;
 pub mod clean;
 pub mod intelligence;
+pub mod live;
 pub mod model_manifest;
 pub mod models;
 pub mod naming;
@@ -393,9 +394,21 @@ pub struct SeriesEpisode {
 /// for; `member_count` drives the "N channels" badge.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(
+    test,
+    ts(export, export_to = "../../../apps/desktop/src/types/generated/")
+)]
 pub struct ChannelGroup {
     pub group: String,
+    #[cfg_attr(test, ts(type = "number"))]
     pub member_count: i64,
+    #[serde(default)]
+    #[cfg_attr(test, ts(type = "number"))]
+    pub stream_count: i64,
+    #[serde(default)]
+    pub editions: Vec<String>,
+    #[cfg_attr(test, ts(type = "number"))]
     pub representative_id: i64,
     pub title: String,
     pub logo_url: Option<String>,

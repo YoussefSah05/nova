@@ -54,17 +54,10 @@ export interface Channel {
 }
 
 /// One live brand-family bundle (e.g. all "beIN Sports N"), from list_channel_groups.
-export interface ChannelGroup {
-  group: string;
-  memberCount: number;
-  representativeId: number;
-  title: string;
-  logoUrl: string | null;
-  category: string | null;
-  region: string | null;
-  isFavorite: boolean;
-  isInWatchlist: boolean;
-}
+export type { ChannelGroup } from "./generated/ChannelGroup";
+export type { LiveChannelSummary } from "./generated/LiveChannelSummary";
+export type { LiveStreamVariant } from "./generated/LiveStreamVariant";
+export type { LivePlaybackTarget } from "./generated/LivePlaybackTarget";
 
 export interface VodItem {
   id: number;
