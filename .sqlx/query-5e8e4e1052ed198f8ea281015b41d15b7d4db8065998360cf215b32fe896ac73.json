@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT vector FROM embedding_text_cache WHERE model = ? AND text = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "vector",
+        "ordinal": 0,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5e8e4e1052ed198f8ea281015b41d15b7d4db8065998360cf215b32fe896ac73"
+}

@@ -8,6 +8,17 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### AI10 embedding reuse across refreshes — 2026-10-12
+
+Enrichment now reuses catalog vectors by model and exact embedded text (profile migration 0045,
+`embedding_text_cache`), embedding only titles it has not seen and loading the model only when
+something misses. On this Mac the installed E5 model embeds ~202 titles/s, so the active
+~37k-row playlist cost ~3 minutes of inference after every refresh; cached, an unchanged refresh
+is under 1 s of SQLite work. `just lint`, `just typecheck`, `just test` (756 Rust, 226 frontend)
+pass; independent review found no correctness bugs and its robustness points were applied. Unused entries are pruned after 90 days. 0044
+stays reserved for the uncommitted live-channel work. See
+[the contract and measurements](implementation/ai10-embedding-reuse.md).
+
 ### M18 translation model installer — 2026-10-12
 
 Settings → Models now has a "Translated captions" card that downloads the four pinned Opus-MT
@@ -202,7 +213,7 @@ the next separate dependencies; existing user work is preserved.
 | AI06 ASR baseline | COMPLETE | Whisper subprocess, Core ML, DTW timestamps. |
 | AI07 Streaming transcription | PARTIAL | = M17 |
 | AI08 / AI09 Translation | PARTIAL | = M18 |
-| AI10 Entity embeddings | PARTIAL | Provider-row owners; lost on refresh. |
+| AI10 Entity embeddings | PARTIAL | Provider-row owners; vectors are reused across refreshes from a model/text cache (0045, 2026-10-12), so a refresh no longer re-runs the model for unchanged titles. Not yet entity-owned. |
 | AI11 Transcript embeddings | COMPLETE (per title) | Lazy segment embedding, model-keyed. |
 | AI12 Semantic search | PARTIAL | Optional leg with lexical fallback; vectors on provider rows (AI10). |
 | AI13 Dialogue search | PARTIAL | Within the playing title only. |

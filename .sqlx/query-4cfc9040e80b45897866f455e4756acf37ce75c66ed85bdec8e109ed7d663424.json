@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE embedding_text_cache SET used_at = ? WHERE model = ? AND text = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "4cfc9040e80b45897866f455e4756acf37ce75c66ed85bdec8e109ed7d663424"
+}

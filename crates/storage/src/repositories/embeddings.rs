@@ -10,6 +10,10 @@ use sqlx::SqlitePool;
 
 use crate::error::StorageError;
 
+/// Longest embedding text kept in `embedding_text_cache`; catalog titles are
+/// far shorter, and longer texts are simply embedded again.
+pub const MAX_CACHED_TEXT: usize = 1024;
+
 pub struct EmbeddingRepository<'a> {
     pool: &'a SqlitePool,
 }
@@ -60,6 +64,87 @@ impl<'a> EmbeddingRepository<'a> {
             .await?;
         }
         tx.commit().await?;
+        Ok(())
+    }
+
+    /// Cached vectors for exactly these texts, aligned with `texts` (`None`
+    /// for a miss). One lookup per text on one connection.
+    pub async fn cached_text_vectors(
+        &self,
+        model: &str,
+        texts: &[String],
+    ) -> Result<Vec<Option<Vec<f32>>>, StorageError> {
+        let mut conn = self.pool.acquire().await?;
+        let mut out = Vec::with_capacity(texts.len());
+        for text in texts {
+            let row = sqlx::query_scalar!(
+                "SELECT vector FROM embedding_text_cache WHERE model = ? AND text = ?",
+                model,
+                text,
+            )
+            .fetch_optional(&mut *conn)
+            .await?;
+            out.push(row.map(|blob| from_blob(&blob)));
+        }
+        Ok(out)
+    }
+
+    /// Store newly embedded `fresh` vectors and mark `reused` texts as used
+    /// at `now` (only their timestamp is written), then drop this model's
+    /// entries unused since `stale_before`. Writes commit in chunks so a large
+    /// catalog never holds the profile's write lock for long. Texts longer
+    /// than [`MAX_CACHED_TEXT`] bytes are not cached.
+    pub async fn remember_text_vectors(
+        &self,
+        model: &str,
+        fresh: &[(&str, &[f32])],
+        reused: &[&str],
+        now: i64,
+        stale_before: i64,
+    ) -> Result<(), StorageError> {
+        for chunk in fresh.chunks(2_000) {
+            let mut tx = self.pool.begin().await?;
+            for (text, vector) in chunk {
+                if text.len() > MAX_CACHED_TEXT || vector.is_empty() {
+                    continue;
+                }
+                let blob = to_blob(vector);
+                sqlx::query!(
+                    "INSERT INTO embedding_text_cache (model, text, vector, used_at)
+                     VALUES (?, ?, ?, ?)
+                     ON CONFLICT (model, text) DO UPDATE
+                     SET vector = excluded.vector, used_at = excluded.used_at",
+                    model,
+                    text,
+                    blob,
+                    now,
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+            tx.commit().await?;
+        }
+        for chunk in reused.chunks(2_000) {
+            let mut tx = self.pool.begin().await?;
+            for text in chunk {
+                sqlx::query!(
+                    "UPDATE embedding_text_cache SET used_at = ? WHERE model = ? AND text = ?",
+                    now,
+                    model,
+                    text,
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+            tx.commit().await?;
+        }
+        sqlx::query!(
+            "DELETE FROM embedding_text_cache WHERE model = ? AND used_at < ?",
+            model,
+            stale_before,
+        )
+        .execute(self.pool)
+        .await?;
         Ok(())
     }
 

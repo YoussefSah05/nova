@@ -226,6 +226,93 @@ async fn embed_checkpointed(
     Ok(vectors)
 }
 
+/// Cached vectors are dropped after this long without a refresh using them.
+const TEXT_CACHE_TTL_SECS: i64 = 90 * 24 * 3600;
+
+/// [`embed_checkpointed`] for only the texts this model has not embedded
+/// before. A playlist refresh replaces provider rows but rarely their titles,
+/// so most of a large catalog comes back from `embedding_text_cache`.
+#[allow(clippy::too_many_arguments)]
+async fn embed_cached(
+    pool: &sqlx::SqlitePool,
+    runtime: &ModelRuntimeManager,
+    model_root: &Path,
+    lease: &mut Option<ModelLease>,
+    texts: &[String],
+    slot: &mut JobSlot,
+    cancellation: &RuntimeCancellation,
+    on_wait: impl Fn(usize),
+    on_progress: impl Fn(usize),
+) -> Result<Vec<Vec<f32>>, ApiError> {
+    let repo = EmbeddingRepository::new(pool);
+    let mut vectors = repo.cached_text_vectors(MODEL_ID, texts).await?;
+    // Distinct missed texts, each embedded once (channels often share names).
+    let mut misses: Vec<String> = Vec::new();
+    let mut slot_of: HashMap<&str, usize> = HashMap::new();
+    for (text, vector) in texts.iter().zip(&vectors) {
+        if vector.is_none() && !slot_of.contains_key(text.as_str()) {
+            slot_of.insert(text, misses.len());
+            misses.push(text.clone());
+        }
+    }
+    let hits = vectors.iter().filter(|v| v.is_some()).count();
+    tracing::info!(
+        total = texts.len(),
+        reused = hits,
+        "catalog embeddings: reusing cached vectors"
+    );
+    on_progress(hits);
+    let fresh = embed_checkpointed(
+        runtime,
+        model_root,
+        lease,
+        &misses,
+        slot,
+        cancellation,
+        |processed| on_wait(hits + processed),
+        |processed| on_progress(hits + processed),
+    )
+    .await?;
+    let reused: Vec<&str> = texts
+        .iter()
+        .zip(&vectors)
+        .filter(|(_, v)| v.is_some())
+        .map(|(t, _)| t.as_str())
+        .collect();
+    let now = nova_core::now_ts();
+    let fresh_rows: Vec<(&str, &[f32])> = misses
+        .iter()
+        .zip(&fresh)
+        .map(|(t, v)| (t.as_str(), v.as_slice()))
+        .collect();
+    // The cache is an optimisation: failing to record it must not discard
+    // the catalog work that was just done.
+    if let Err(error) = repo
+        .remember_text_vectors(
+            MODEL_ID,
+            &fresh_rows,
+            &reused,
+            now,
+            now - TEXT_CACHE_TTL_SECS,
+        )
+        .await
+    {
+        tracing::warn!(%error, "catalog embeddings: could not update the reuse cache");
+    }
+    for (text, vector) in texts.iter().zip(vectors.iter_mut()) {
+        if vector.is_none() {
+            *vector = slot_of
+                .get(text.as_str())
+                .and_then(|&i| fresh.get(i))
+                .cloned();
+        }
+    }
+    let vectors: Option<Vec<Vec<f32>>> = vectors.into_iter().collect();
+    let vectors = vectors
+        .ok_or_else(|| ApiError::Internal("embedding returned fewer vectors than texts".into()))?;
+    Ok(vectors)
+}
+
 pub(crate) async fn run_enrichment(
     pool: Arc<sqlx::SqlitePool>,
     source_id: i64,
@@ -261,28 +348,36 @@ pub(crate) async fn run_enrichment(
     // could never catch up on rows it hasn't matched yet.
     if total > 0 {
         yield_point(slot, cancellation, || emit("queued", 0, false)).await?;
-        // The first model load is slow (cold ONNX init); tell the UI before we block.
+        // The model loads lazily, only for texts the cache does not hold; the
+        // first load is slow (cold ONNX init), so tell the UI before blocking.
         emit("loading-model", 0, false);
-        let mut lease = Some(acquire_embedder(&runtime, &model_root, cancellation).await?);
+        let mut lease = None;
 
         // Generic buckets ("Movies", "Series") describe nothing; never infer them.
         let genres: Vec<String> = nova_core::classify::specific_genres()
             .iter()
             .map(|g| g.to_string())
             .collect();
-        let label_vectors = lease
-            .as_ref()
-            .ok_or(ApiError::Internal("model lease missing".into()))?
-            .embed_documents_at(&genres, WorkClass::Background, cancellation, |_| {})
-            .await
-            .map_err(super::models::runtime_api_error)?;
+        let label_vectors = embed_cached(
+            &pool,
+            &runtime,
+            &model_root,
+            &mut lease,
+            &genres,
+            slot,
+            cancellation,
+            |_| emit("queued", 0, false),
+            |_| {},
+        )
+        .await?;
         let classifier = GenreClassifier::new(genres.into_iter().zip(label_vectors).collect());
         let texts: Vec<String> = ch_rows
             .iter()
             .chain(&vod_rows)
             .map(|row| row.text.clone())
             .collect();
-        let vectors = embed_checkpointed(
+        let vectors = embed_cached(
+            &pool,
             &runtime,
             &model_root,
             &mut lease,

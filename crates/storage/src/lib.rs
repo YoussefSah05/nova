@@ -31,5 +31,5 @@ pub use repositories::{
     StoredFacts, StoredTitleArt, StoredTranscript, TitleArtMedia, TitleArtRepository,
     TitleFactsRepository, TmdbCacheRepository, TranscriptLine, TranscriptRepository,
     TranslationRepository, TranslationRow, UnenrichedRow, VodRepository, WatchHistoryRepository,
-    WatchSnapshot, TMDB_MOVIE,
+    WatchSnapshot, MAX_CACHED_TEXT, TMDB_MOVIE,
 };
