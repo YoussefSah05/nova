@@ -47,6 +47,22 @@ lights come up.
 All files are in [`assets/brand/`](assets/brand/); PNG exports are in
 [`assets/brand/png/`](assets/brand/png/).
 
+## Where it appears
+
+- **macOS app icon** (`apps/desktop/src-tauri/icons/`): the detailed icon from 128 px up, the
+  small-size icon at 16–64 px.
+- **Boot screen**, before the interface loads: the mark.
+- **Top bar**: the mark (small-size drawing).
+- **Launch screen header**: the full logo; **welcome screen**: the large mark.
+- **Empty library** ("Your library starts with a playlist"): the large mark.
+- **Settings → Profile & about**: the full logo.
+- **README** header, switching between the dark and light versions with GitHub's theme.
+
+The video player is deliberately unbranded: nothing competes with the picture.
+
+In the app, use `NovaMark` and `NovaLogo` from `apps/desktop/src/components/NovaLogo.tsx`; below
+48 px `NovaMark` switches to the bold-ray drawing automatically.
+
 ## Colour
 
 | Role | Value |

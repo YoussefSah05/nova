@@ -1,6 +1,9 @@
 <div align="center">
 
-# Nova
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/png/nova-lockup-dark.png">
+  <img alt="Nova" src="docs/assets/brand/png/nova-lockup-light.png" width="340">
+</picture>
 
 **A local-first IPTV player for macOS, with on-device AI for captions, translation and search.**
 
@@ -13,7 +16,7 @@ words you typed. All of it runs on your Mac. Nothing is sent to a cloud service.
 
 [Features](#features) · [Getting started](#getting-started) · [User guide](docs/guides/user-guide.md) ·
 [Architecture](docs/architecture/overview.md) · [Docs](docs/README.md) ·
-[Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md)
+[Roadmap](docs/roadmap.md) · [Brand](docs/brand.md) · [Contributing](CONTRIBUTING.md)
 
 ![Status: alpha](https://img.shields.io/badge/status-alpha-orange)
 ![Platform: macOS 14+ Apple Silicon](https://img.shields.io/badge/platform-macOS%2014%2B%20%C2%B7%20Apple%20Silicon-black)

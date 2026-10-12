@@ -68,10 +68,10 @@ def mark(fr, k, mono=None, small=False):
 
 def icon(small=False):
     h=400; k=h/392
-    # bounding box of N + star (font units -> px) to centre optically
-    s=h/CAP; width=(630.6-45.4)*s; star_up=168*k; star_right=124*k-(630.6-STAR_X)*s
-    bw=width+max(0,star_right); bh=h+star_up
-    ox=512-bw/2-45.4*s; base=528+bh/2
+    # The letter is centred on the tile, a touch below the middle; the star then
+    # rises into the open upper-right space instead of pulling the N off-centre.
+    s=h/CAP; width=(630.6-45.4)*s
+    ox=512-width/2-45.4*s; base=556+h/2
     fr=Frame(ox, base, h); cx,cy=fr.star
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs>{defs(fr,"dark",k,330,True)}'
             '<clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath></defs>'
@@ -92,12 +92,12 @@ def lockup(pal, bg=None, mono=None):
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{" ".join(f"{v:.0f}" for v in vb)}" width="{vb[2]:.0f}" height="{vb[3]:.0f}">'
             f'{d}{back}{glow}{mark(fr,k,mono=mono)}{word}</svg>')
 
-def symbol(pal, mono=None):
+def symbol(pal, mono=None, small=False):
     h=392; k=1; fr=Frame(0,0,h); s=fr.s
     left=45.4*s-24; right=max(630.6*s, fr.star[0]+124*k)+24; top=-h-168*k-24; bottom=24
     vb=(left,top,right-left,bottom-top)
     d = "" if mono else f"<defs>{defs(fr,pal,k)}</defs>"
-    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{" ".join(f"{v:.0f}" for v in vb)}" width="{vb[2]:.0f}" height="{vb[3]:.0f}">{d}{mark(fr,k,mono=mono)}</svg>'
+    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{" ".join(f"{v:.0f}" for v in vb)}" width="{vb[2]:.0f}" height="{vb[3]:.0f}">{d}{mark(fr,k,mono=mono,small=small)}</svg>'
 
 if __name__=="__main__":
     open("icon.svg","w").write(icon())
@@ -108,6 +108,7 @@ if __name__=="__main__":
     open("prev-lockup-light.svg","w").write(lockup("light","#f6f4f1"))
     open("symbol-dark.svg","w").write(symbol("dark"))
     open("symbol-light.svg","w").write(symbol("light"))
+    open("symbol-small-dark.svg","w").write(symbol("dark", small=True))
     open("lockup-mono-white.svg","w").write(lockup("dark",mono="#ffffff"))
     open("lockup-mono-black.svg","w").write(lockup("light",mono="#000000"))
     print("ok")

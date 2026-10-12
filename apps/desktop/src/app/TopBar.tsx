@@ -8,6 +8,7 @@
 //! on every scroll frame, even when its own opacity is unchanged.
 
 import { memo, useRef } from "react";
+import { NovaMark } from "@/components/NovaLogo";
 import {
   ChevronLeftIcon,
   LogOutIcon,
@@ -68,9 +69,7 @@ export const TopBar = memo(function TopBar({ glass }: { glass: boolean }) {
           aria-label="Nova home"
           className="flex items-center gap-2.5 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <span className="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-gradient-to-br from-[var(--color-brand-hi)] to-[var(--color-brand-lo)] font-display text-lg font-medium text-primary-foreground shadow-[0_6px_20px_rgba(224,163,62,.25)]">
-            N
-          </span>
+          <NovaMark size={34} />
         </button>
         {nav.canGoBack && (
           <button

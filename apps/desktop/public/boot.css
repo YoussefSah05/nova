@@ -20,19 +20,9 @@ html {
   opacity: 0;
   pointer-events: none;
 }
-#nova-boot span {
-  display: flex;
-  width: 56px;
-  height: 56px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #e9b65f, #dd9f37);
-  color: #16120a;
-  font:
-    500 28px/1 system-ui,
-    sans-serif;
-  box-shadow: 0 12px 40px rgba(224, 163, 62, 0.28);
+#nova-boot img {
+  height: 112px;
+  width: auto;
   animation: nova-boot-in 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 @keyframes nova-boot-in {
@@ -43,7 +33,7 @@ html {
 }
 @media (prefers-reduced-motion: reduce) {
   #nova-boot,
-  #nova-boot span {
+  #nova-boot img {
     animation: none;
     transition: none;
   }

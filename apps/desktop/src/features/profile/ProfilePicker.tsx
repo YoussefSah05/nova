@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { NovaLogo, NovaMark } from "@/components/NovaLogo";
 import { PlusIcon, SlidersHorizontal, Check } from "lucide-react";
 import type { Profile, ProfileOverview } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -126,13 +127,7 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
         data-tauri-drag-region="deep"
         className="relative z-10 flex h-[72px] shrink-0 items-center gap-3 pl-[88px] pr-6"
       >
-        <span
-          aria-hidden
-          className="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-gradient-to-br from-[var(--color-brand-hi)] to-[var(--color-brand-lo)] font-display text-lg font-medium text-primary-foreground shadow-[0_6px_20px_rgba(224,163,62,.25)]"
-        >
-          N
-        </span>
-        <span className="font-display text-lg font-medium text-white">Nova</span>
+        <NovaLogo height={30} />
         <div className="flex-1" />
         {profiles && profiles.length > 0 && (
           <Button
@@ -157,6 +152,7 @@ export function ProfilePicker({ onSelect }: ProfilePickerProps) {
       <main className="flex min-h-0 flex-1 flex-col justify-center gap-10 px-[88px]">
         {empty ? (
           <Reveal className="flex max-w-xl flex-col items-start gap-4">
+            <NovaMark size={96} className="-ml-2 mb-2" />
             <h1 className="font-display text-4xl font-medium tracking-tight text-white">
               Welcome to Nova
             </h1>

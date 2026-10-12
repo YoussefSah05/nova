@@ -2,6 +2,8 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- New Nova logo, "the star that brightens": app icon, boot screen, top bar, launch and welcome
+  screens, empty library, Settings → About and README, with a brand guide.
 - Run the interface at 120 Hz on ProMotion displays (Settings → Appearance → High refresh
   rate), lifting WebKit's default 60 fps pacing.
 - Add a frame-rate overlay (⌘⌥F) that records per-screen scroll smoothness with a copyable

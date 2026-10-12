@@ -14,7 +14,7 @@ describe("App", () => {
         <App />
       </QueryClientProvider>
     );
-    expect(screen.getByText("Nova")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Nova" })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Loading profiles" })).toBeInTheDocument();
   });
 });

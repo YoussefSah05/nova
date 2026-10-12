@@ -1,6 +1,7 @@
 //! Settings → Profile & About: edit/switch/delete profile + app info.
 
 import { useEffect, useState } from "react";
+import { NovaLogo } from "@/components/NovaLogo";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { Profile } from "@/types";
@@ -117,6 +118,12 @@ export function ProfileAboutSection({
       </SettingsCard>
 
       <SettingsCard title="About">
+        <div className="flex items-center gap-4 border-b border-white/[0.06] py-5">
+          <NovaLogo height={34} />
+          <p className="text-xs leading-relaxed text-white/50">
+            The star that brightens: your playlist, turned into a cinema that understands it.
+          </p>
+        </div>
         <SettingRow title="Version" description={info?.version ?? "…"} />
         <SettingRow title="Data folder" description={info?.dataDir ?? "…"} />
         <SettingRow
