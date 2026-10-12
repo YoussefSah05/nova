@@ -21,6 +21,7 @@ pub mod audio_languages;
 pub mod caption_style;
 pub mod channel_logos;
 pub mod discovery;
+pub mod display;
 pub mod enrich;
 pub mod epg;
 pub mod library;

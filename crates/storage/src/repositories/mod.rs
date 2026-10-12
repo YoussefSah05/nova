@@ -3,6 +3,7 @@ pub mod caption_style;
 pub mod catalog_search;
 pub mod channel_logos;
 pub mod channels;
+pub mod display_preferences;
 pub mod embeddings;
 pub mod enrich;
 pub mod epg_sources;

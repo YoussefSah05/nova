@@ -74,4 +74,5 @@ default and free while off). It shows the live frame rate and the measured displ
 rate, and records each scroll gesture with the screen it happened on: average FPS, 1% low,
 95th-percentile and worst frame time, and the share of janky frames (longer than 1.5 refresh
 intervals, i.e. at least one dropped frame). **Copy report** puts every recorded scroll on the
-clipboard. Measure release builds (`just build`), not `just dev`, which runs unoptimized React.
+clipboard. The display rate reads ~120 Hz on ProMotion when **Settings → Appearance → High
+refresh rate** is on, and ~60 Hz when it is off (WebKit's default pacing). Measure release builds (`just build`), not `just dev`, which runs unoptimized React.

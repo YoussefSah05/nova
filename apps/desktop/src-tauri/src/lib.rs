@@ -3,6 +3,8 @@ pub mod artwork_protocol;
 pub mod caption_session;
 pub mod commands;
 pub mod desktop_jobs;
+#[cfg(target_os = "macos")]
+pub mod display_refresh;
 pub mod ipc;
 pub mod lifecycle;
 pub mod log_redaction;
@@ -131,6 +133,16 @@ pub fn run() {
                 let airplay = app.state::<state::AppState>().airplay.clone();
                 airplay::install_picker(&window, &airplay, app.handle());
             }
+            // Interface refresh rate (120 Hz on ProMotion unless turned off).
+            let display_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let pool = display_app.state::<state::AppState>().pool.clone();
+                let high = nova_storage::repositories::display_preferences::DisplayPreferencesRepository::new(&pool)
+                    .high_refresh_rate()
+                    .await
+                    .unwrap_or(true);
+                commands::display::apply_to_main_window(&display_app, high);
+            });
             // Sleep pauses native playback; wake reconnects a live channel.
             lifecycle::observe_power(app.handle());
             Ok(())
@@ -243,6 +255,8 @@ pub fn run() {
             commands::models::list_internal_models,
             commands::models::list_model_controls,
             commands::models::set_model_enabled,
+            commands::display::get_high_refresh_rate,
+            commands::display::set_high_refresh_rate,
             commands::models::unload_model,
             commands::models::model_runtime_status,
             commands::models::add_external_model_library,

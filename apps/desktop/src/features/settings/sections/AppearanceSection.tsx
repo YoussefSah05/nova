@@ -2,12 +2,14 @@
 //! whole UI (buttons / focus / active states / glow) by overriding the brand
 //! CSS vars, and persists to the profile.
 
+import { invoke } from "@tauri-apps/api/core";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { ACCENT_THEMES, applyAccentTheme } from "@/lib/useAccentTheme";
 import { useProfileSettings } from "../useProfileSettings";
-import { SettingsCard } from "../SettingsUI";
+import { SettingRow, SettingsCard, SettingsError, Toggle } from "../SettingsUI";
 
 export function AppearanceSection({ profileId }: { profileId: string }) {
   const { settings, setSettings } = useProfileSettings(profileId);
@@ -50,6 +52,52 @@ export function AppearanceSection({ profileId }: { profileId: string }) {
         The accent recolours buttons, highlights, focus rings and the active rail item across the
         app. Saved to this profile.
       </p>
+
+      <DisplayCard />
     </div>
+  );
+}
+
+const REFRESH_KEY = ["settings-display", "highRefreshRate"] as const;
+
+/** App-wide: render the interface at the display's full refresh rate. */
+function DisplayCard() {
+  const client = useQueryClient();
+  const current = useQuery({
+    queryKey: REFRESH_KEY,
+    queryFn: () => invoke<boolean>("get_high_refresh_rate"),
+  });
+  const change = useMutation({
+    mutationFn: (enabled: boolean) => invoke<void>("set_high_refresh_rate", { enabled }),
+    onMutate: (enabled) => client.setQueryData(REFRESH_KEY, enabled),
+    onSettled: () => client.invalidateQueries({ queryKey: REFRESH_KEY }),
+  });
+  return (
+    <SettingsCard title="Display">
+      {current.isError ? (
+        <div className="py-4">
+          <SettingsError
+            message="Couldn’t read the display setting."
+            retry={() => void current.refetch()}
+          />
+        </div>
+      ) : (
+        <SettingRow
+          title="High refresh rate"
+          description="Animate and scroll at your display’s full rate (120 Hz on ProMotion) instead of 60. Smoother, uses a little more battery. Shared by every profile on this Mac."
+        >
+          <Toggle
+            checked={current.data ?? true}
+            onChange={(next) => change.mutate(next)}
+            label="High refresh rate"
+          />
+        </SettingRow>
+      )}
+      {change.isError && (
+        <p role="alert" className="pb-4 text-xs text-red-300">
+          Couldn’t save the display setting. Try again.
+        </p>
+      )}
+    </SettingsCard>
   );
 }

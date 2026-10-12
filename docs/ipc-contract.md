@@ -93,6 +93,8 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `get_enrich_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | enrichment / M2 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
 | `start_caption_session` | `{ sessionId, profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
+| `get_high_refresh_rate` | `{}` | `boolean` (app-wide; default `true`) | Display |
+| `set_high_refresh_rate` | `{ enabled: boolean }` | `void` (persists and re-applies WebKit's 60 fps pacing on the main webview at once) | Display |
 | `download_translation_models` | `{}` | `void` (streams `model:download:progress`; installs every unverified pinned translation model, checksum-verified, then attested) | M18 |
 | `translate_caption_segments` | `{ profileId, sessionId, transcriptId, segmentIds: number[], targetLang: string }` | `CaptionCue[]` (`segmentId,start,end,text`) | M18 |
 | `set_caption_playhead` | `{ sec: number }` | `void` | 6 |
