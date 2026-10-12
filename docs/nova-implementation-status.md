@@ -8,6 +8,14 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Release bundle link repair — 2026-10-12
+
+`just build` (release `tauri build`) failed to link: the bundle's 14.0 deployment target turns
+whisper.cpp Metal `@available` checks into `__isPlatformVersionAtLeast`, which rustc's
+`-nodefaultlibs` link omits. Earlier validations used debug bundles. `nova-transcribe` now links
+clang's `libclang_rt.osx.a` on macOS; `Nova.app` and the aarch64 `.dmg` build. libmpv is still
+linked from Homebrew, so the bundle is for this Mac, not distribution (signing remains M30).
+
 ### AI10 embedding reuse across refreshes — 2026-10-12
 
 Enrichment now reuses catalog vectors by model and exact embedded text (profile migration 0045,
