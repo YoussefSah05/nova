@@ -19,6 +19,7 @@ import {
   type BrowseFilters,
   type BrowseTab,
 } from "./queries";
+import { landscapeRowHeight } from "./gridLayout";
 
 interface BrowseGridProps extends PosterCardHandlers {
   tab: BrowseTab;
@@ -185,7 +186,7 @@ function BrowseGridBody({
       <VirtualRows
         items={rows}
         scrollRef={scrollRef}
-        estimateSize={landscape ? Math.round(width / columns / (16 / 9)) + 50 : live ? 150 : 280}
+        estimateSize={landscape ? landscapeRowHeight(width, columns, gap) : live ? 150 : 280}
         overscan={6}
         className="rounded-none border-0 bg-transparent"
         keyFor={(_, index) => index}

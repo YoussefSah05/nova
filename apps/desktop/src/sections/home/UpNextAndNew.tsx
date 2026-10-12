@@ -68,7 +68,7 @@ const EpisodeCard = memo(function EpisodeCard({ item }: { item: ContinueWatching
           fallback={<PosterFallback title={item.title} />}
         />
         <span className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
-        <span className="absolute bottom-2.5 left-2.5 right-2.5 truncate font-display text-lg font-medium drop-shadow">
+        <span className="absolute bottom-2.5 left-2.5 right-2.5 truncate font-display text-lg font-medium [text-shadow:0_1px_3px_rgba(0,0,0,0.55)]">
           {item.title}
         </span>
       </span>

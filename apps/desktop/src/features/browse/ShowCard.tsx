@@ -64,7 +64,7 @@ export const ShowCard = memo(function ShowCard({
               aria-hidden
               className="absolute inset-0 bg-gradient-to-t from-[#0a0a0c]/[0.78] via-[#0a0a0c]/10 to-transparent"
             />
-            <span className="absolute inset-x-3.5 bottom-3 line-clamp-2 text-left font-display text-[22px] font-medium leading-tight drop-shadow">
+            <span className="absolute inset-x-3.5 bottom-3 line-clamp-2 text-left font-display text-[22px] font-medium leading-tight [text-shadow:0_1px_3px_rgba(0,0,0,0.55)]">
               {item.title}
             </span>
             {status && (

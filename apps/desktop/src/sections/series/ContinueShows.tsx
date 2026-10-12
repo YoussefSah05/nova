@@ -71,7 +71,7 @@ const ContinueCard = memo(function ContinueCard({
   const status = show ? statusLabel(show) : null;
   const meta = show ? [status, showMeta(show)].filter(Boolean).join(" · ") : null;
   const backdrop =
-    art?.backdropUrl ?? tmdbSized(show?.backdropUrl ?? null, "w780") ?? item.posterUrl;
+    tmdbSized(art?.backdropUrl ?? show?.backdropUrl ?? null, "w780") ?? item.posterUrl;
   const pct = item.upNext ? 0 : progressPct(item);
   // Until the show's card loads there is no page to open: the play button
   // still works.
