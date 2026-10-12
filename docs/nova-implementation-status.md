@@ -8,6 +8,19 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Live channel identity and variants (M24/M06) — 2026-10-12
+
+Live channels now carry a reversible, source-scoped identity projection (profile migration
+0044, ruleset 1): a family (every edition of one channel), a channel key and a variant key
+(edition, language, country, quality, codecs). Family membership never makes two streams
+interchangeable. Bundle cards open a detail page listing their channels; the player offers a
+variant picker backed by per-variant success/failure health and a remembered per-channel
+choice; libmpv reports video dimensions. A read-only example
+(`crates/storage/examples/live_library_validation.rs`) validates the projection against a real
+profile inside a throwaway database. Committed after `just lint`, `just typecheck` and
+`just test` passed (755 Rust, 227 frontend; 765 / 228 after merging the intelligence branches).
+Native validation on a real provider and an independent review are still outstanding.
+
 ### Release bundle link repair — 2026-10-12
 
 `just build` (release `tauri build`) failed to link: the bundle's 14.0 deployment target turns

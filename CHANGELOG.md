@@ -2,6 +2,21 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- Group live channels into families with source-scoped variants (edition, language, region,
+  quality, codec), a bundle detail page, a variant picker with per-variant health and a
+  remembered choice (profile migration 0044).
+- Install the four Opus-MT translation directions from Settings with commit-pinned,
+  checksum-verified downloads; all four directions and the French ↔ Arabic pivot measured on
+  real models.
+- Reuse catalog embeddings across playlist refreshes by model and exact text (profile
+  migration 0045): an unchanged ~37k-title refresh goes from ~3 minutes of inference to under
+  a second.
+- Fix release bundles failing to link whisper.cpp's Metal backend.
+- Add verified audio-track selection and caption start choices; translated captions
+  (Translation / Source + translation) in English, French and Arabic; persistent model
+  controls with caption readiness status; a private, checksum-pinned Whisper CLI runtime.
+- Rewrite the README and add an architecture overview, an intelligence guide, a getting-started
+  guide, a contributing guide and a security policy.
 - Add encrypted catalog derivation storage and cache-first reuse with exact context,
   artifact-version and expiry checks; serving-app integration remains pending.
 - Add an unconnected Rust catalog reasoner with bounded local inference, forbidden-link
