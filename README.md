@@ -59,11 +59,20 @@ service on top of that mess, without handing your viewing habits or credentials 
 
 ### On-device intelligence
 
-![Models settings](docs/assets/screenshots/settings-models.png)
+<a href="docs/assets/demo/nova-intelligence-demo.mp4"><img alt="Nova's on-device captions in English, French and Arabic, recorded live" src="docs/assets/demo/nova-intelligence-preview.webp" width="880"></a>
 
-- **Captions for anything.** Whisper large-v3-turbo transcribes the audio of whatever you are
-  watching into word-timed captions, using the Apple Neural Engine (Core ML) with Metal as a
-  fallback. Captions follow seeks and resume from where you are.
+**[Watch the 2½-minute demo](docs/assets/demo/nova-intelligence-demo.mp4)**: a real session in
+the release build, on the open film *Tears of Steel*. Captions are prepared before Play, then
+translated, searched and installed, with nothing mocked up.
+
+- **Captions for anything, timed to the word.** Whisper large-v3-turbo writes what is said; a
+  character-level forced aligner (MMS-300M, optional ~320 MB download) places every word on the
+  audio, and a voice-activity model keeps captions off music and silence. Word starts land 50 ms from reference timing on
+  average (Whisper alone: 398 ms).
+- **No wait for the first caption.** The speech model stays loaded, starts on the GPU while the
+  Neural Engine version compiles, and warms up when you open a title's playback menu, which also
+  transcribes the opening before you press Play. First caption on a cold start: 2.1 s instead
+  of 32 s.
 - **Translated captions.** Captions in English, French and Arabic, translated locally by
   Opus-MT models on ONNX Runtime, with French ↔ Arabic routed through English. Show the
   translation alone or under the original. Arabic renders right-to-left.
@@ -72,6 +81,8 @@ service on top of that mess, without handing your viewing habits or credentials 
   films whose titles never say so.
 - **Model manager.** Download, verify, enable, disable and unload models from Settings, or keep
   them on an external SSD. Every pinned file is checked against a SHA-256 checksum.
+
+![Models settings](docs/assets/screenshots/settings-models.png)
 
 See **[On-device intelligence](docs/features/intelligence.md)** for how each capability works,
 what it costs, and how it fails.
@@ -219,9 +230,15 @@ tracks every milestone against the [long-term architecture](docs/architecture/lo
 Nova stands on [Tauri](https://tauri.app), [mpv](https://mpv.io),
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
 [ONNX Runtime](https://onnxruntime.ai), [Opus-MT](https://github.com/Helsinki-NLP/Opus-MT),
+[MMS forced aligner](https://huggingface.co/MahmoudAshraf/mms-300m-1130-forced-aligner),
+[Silero VAD](https://github.com/snakers4/silero-vad),
 [multilingual-E5](https://huggingface.co/intfloat/multilingual-e5-small),
 [SQLite](https://sqlite.org) and [TMDB](https://www.themoviedb.org). This product uses the TMDB
 API but is not endorsed or certified by TMDB.
+
+The demo shows *Tears of Steel* (2012), © Blender Foundation, [mango.blender.org](https://mango.blender.org),
+licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). Its posters, and those of
+*Sintel* and *Elephants Dream*, come from Wikimedia Commons.
 
 ## License
 

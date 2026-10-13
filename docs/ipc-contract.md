@@ -92,10 +92,14 @@ TypeScript bindings are generated from Rust types via `ts-rs` and placed in `app
 | `model_runtime_status` | `{}` | `ModelRuntimeStatus`: `{ loadedModels, activeLeases, busyModels, transitioningModels, estimatedResidentBytes, unknownResidentModels, activePlaybackSessions, queuedWork, activeWorkClass, residentModels, residentModelBudget, queuedJobs, activeJobs, jobSlots, suspendedWork }`; counts/class only, no paths or grants | M2.5 / M2.6 / P06 |
 | `get_enrich_model_status` | `{}` | `{ installed: boolean, modelId: string, availability: 'missing'\|'unverified'\|'available' }` | enrichment / M2 |
 | `download_whisper_model` | `{}` | `void` (streams `model:download:progress`) | 6 |
-| `start_caption_session` | `{ sessionId, profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void` (streams `transcription:cues`/`:status`) | 6 |
+| `start_caption_session` | `{ sessionId, profileId, mediaKind, mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void` (streams `transcription:cues`/`:status`; adopts a prepared session for the same profile/media/track) | 6 / ADR 0014 |
+| `prepare_captions` | `{ sessionId, profileId, mediaKind: 'vod'\|'episode', mediaId, fromSec, durationSec?, audioTrackIndex?, trackLang? }` | `void`; transcribes the opening (45 s from `fromSec`) at interactive priority until adopted or cancelled; no-op while a player session exists or the model is missing/disabled; never downloads | ADR 0014 |
+| `cancel_caption_prepare` | `{ sessionId }` | `void`; stops that prepared session only if no player adopted it | ADR 0014 |
+| `prewarm_captions` | `{}` | `boolean`: whether the resident speech worker is ready; `false` (not an error) when the model is missing or disabled | ADR 0014 |
 | `get_high_refresh_rate` | `{}` | `boolean` (app-wide; default `true`) | Display |
 | `set_high_refresh_rate` | `{ enabled: boolean }` | `void` (persists and re-applies WebKit's 60 fps pacing on the main webview at once) | Display |
 | `download_translation_models` | `{}` | `void` (streams `model:download:progress`; installs every unverified pinned translation model, checksum-verified, then attested) | M18 |
+| `download_caption_timing_models` | `{}` | `void` (streams `model:download:progress`; installs the pinned forced aligner and VAD the same way) | ADR 0014 |
 | `translate_caption_segments` | `{ profileId, sessionId, transcriptId, segmentIds: number[], targetLang: string }` | `CaptionCue[]` (`segmentId,start,end,text`) | M18 |
 | `set_caption_playhead` | `{ sec: number }` | `void` | 6 |
 | `stop_caption_session` | `{}` | `void` | 6 |
@@ -486,6 +490,11 @@ for each profile/media/audio-track activation. `transcription:cues` and
 `transcription:status` echo that `sessionId`. The player subscribes before starting
 and ignores events from other sessions. Starts and stops are serialized per engine;
 model-download completion cannot restart an inactive session.
+
+A session started by `prepare_captions` carries the title page's `sessionId`. When the player's
+`start_caption_session` names the same profile, media and audio track, the backend switches the
+running session's id to the player's, lifts its 45 s horizon and replays the cues it already
+committed under the new id; events from before the switch keep the page's id and are ignored.
 
 ## App lifecycle (M29)
 

@@ -8,6 +8,33 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Caption word timing and cold start — 2026-10-13
+
+Source captions now decode on the resident ASR worker with a timing stage around Whisper
+([ADR 0014](adr/0014-caption-timing-and-cold-start.md)):
+
+- **Bug found and fixed:** DTW never ran. whisper.cpp 1.8 enables flash attention by default,
+  which disables DTW (`t_dtw = -1`), and the parser read interpolated offsets. `whisper-cli` now
+  gets `--no-flash-attn` and the parser reads `t_dtw`; the worker sets the DTW preset itself.
+- **New `nova-align` crate and two pinned models** (Settings → Models → Caption timing): Silero
+  VAD v5 skips non-speech windows and drops invented lines; MMS-300M CTC forced alignment places
+  every word of a window in one joint Viterbi pass (Arabic transliterated for its a–z
+  vocabulary). They run in the worker process, leased through a non-resident adapter.
+- **Cold start:** VOD captions moved from one `whisper-cli` process per window to the resident
+  worker (Metal first, Core ML in the background); 27 + 3 s windows (Whisper's 30 s context);
+  an 8 + 3 s first window; `prewarm_captions` on intent; `prepare_captions` transcribes a title's
+  opening from its page and the player's session adopts it.
+- **Measured** ([evaluation](evaluations/caption-timing-2026-10-13.md)): word-start error on 779
+  LibriSpeech reference words fell from 398 ms mean (26% within 100 ms) to 50 ms (92.5%); first
+  caption with a never-compiled Core ML encoder fell from 32.1 s to 2.1 s.
+- Real-app validation on Blender open movies found and fixed three caption display bugs (events
+  lost after adoption, cues too short to read, overlapping cues hiding a new line); recorded in
+  the evaluation, along with a [2½-minute demo](assets/demo/nova-intelligence-demo.mp4) of the run.
+- `just lint`, `just typecheck` and `just test` pass (792 Rust tests, 246 frontend tests).
+- Follow-ups: `window.confirm` does nothing in the macOS WebView (Remove source and four other
+  Settings actions); profile deletion has no confirmation; live captions do not use the timing
+  stage yet.
+
 ### Translated captions at the bottom — 2026-10-13
 
 Translation and Source + translation captions were drawn in a glass panel anchored at 55% of the
@@ -254,7 +281,7 @@ the next separate dependencies; existing user work is preserved.
 | M14 PlaybackCoordinator / resolver / selector | PARTIAL | `PlaybackCoordinator` (Rust) owns the native session's resume, progress, completion, end, next episode and recovery; `VariantSelector` (`catalog::variants`) ranks a movie's sources. | Media addressed by row ID; series/live have one source each; web fallback path still React-owned; not verified on device. |
 | M15 Recovery / QoE | PARTIAL | Bounded recovery (same item once, then other sources, ≤ 5 per 10 min per title) and per-source health (`variant_health`, 0039). | No decoder fallback; no QoE metrics (startup latency, rebuffering); buffering stalls aren't failures. |
 | M16 Jobs / bounded queues | PARTIAL | Persisted `JobQueue` for import, EPG, enrichment and scheduled refresh: dedup, cancel, startup recovery. Opt-in per-playlist auto-refresh (migration 0043) runs as background work for the active profile, one import per source (2026-10-05, `implementation/m05-m16-governed-work.md`). | No retry/backoff (slice B2 contracted). |
-| M17 Streaming transcription | PARTIAL | VOD caption sessions: segment-aligned windows, Realtime leases, subprocess kill on cancel. Resident streaming engine (2026-10-07, ADR-0011): whisper.cpp in a worker process of Nova's binary, Metal first then Core ML, LocalAgreement-2 sessions over a bounded `PcmQueue`, runtime-owned lifecycle and `prewarm_speech`. | Not yet wired to captions: no playback audio tap (ADR 0012), VOD still uses `whisper-cli` windows. |
+| M17 Streaming transcription | PARTIAL | VOD caption sessions: segment-aligned windows, Realtime leases, subprocess kill on cancel. Resident streaming engine (2026-10-07, ADR-0011): whisper.cpp in a worker process of Nova's binary, Metal first then Core ML, LocalAgreement-2 sessions over a bounded `PcmQueue`, runtime-owned lifecycle and `prewarm_speech`. VOD captions decode on the worker with VAD + CTC alignment, short first window, prewarm on intent and prepare/adopt from title pages (2026-10-13, ADR 0014). | No playback audio tap (ADR 0012); live captions do not yet use the timing stage. |
 | M18 Timed translation | PARTIAL | Evaluated Opus-MT engine on the single ORT; verified runtime leases and manifest direct/English-pivot routing. VOD/episode captions now consume committed IDs in bounded batches, cache with source/model provenance, and expose Translation/Dual modes with en/fr/ar targets (2026-10-09). | Resident/live audio capture is still unwired. Checksum-verified installer added (2026-10-12); all four directions measured on real models. Native end-to-end qualification remains open. Cache provenance reuses the existing backend key, so no 0044 migration is needed. |
 | M19 Embeddings / dialogue search | PARTIAL | Per-title dialogue search seeks playback (`TranscriptPanel` → `seekTo`). | Entity vectors belong to provider rows, not entities; no cross-library dialogue search. |
 | M20 Command-K typed intents | MISSING | `CommandPalette` is search + navigation. | No intent model or validator. |
@@ -277,7 +304,7 @@ the next separate dependencies; existing user work is preserved.
 | AI03 Registry / discovery | PARTIAL | Discovery and the runtime adapter map are driven by a bundled, validated model manifest (`resources/models.manifest.json`, `nova_core::model_manifest`): capability, backend, files with sha256 and size, languages, pairs, NC licence flag, latency class, fallback. Backend-neutral engine traits and a disabled cloud seam live in `nova_core::intelligence` (2026-10-07). | Only the two shipped models are listed; benchmark winners are added after report review. Pinned installs report `unverified` until a verified-install record exists (slice 3); no `corrupt` state yet. |
 | AI04 Runtime / leases | COMPLETE | = M04 |
 | AI05 Governor integration | COMPLETE for ASR/embeddings | Reasoner would bypass it if wired as-is. |
-| AI06 ASR baseline | COMPLETE | Whisper subprocess, Core ML, DTW timestamps. |
+| AI06 ASR baseline | COMPLETE | Whisper subprocess, Core ML, DTW timestamps (actually computed since 2026-10-13: flash attention had disabled them). Word timing refined by VAD + MMS CTC forced alignment (ADR 0014). |
 | AI07 Streaming transcription | PARTIAL | = M17 |
 | AI08 / AI09 Translation | PARTIAL | = M18 |
 | AI10 Entity embeddings | PARTIAL | Provider-row owners; vectors are reused across refreshes from a model/text cache (0045, 2026-10-12), so a refresh no longer re-runs the model for unchanged titles. Not yet entity-owned. |

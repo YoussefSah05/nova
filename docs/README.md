@@ -15,7 +15,8 @@
 - [Catalog contracts](catalog.md): sources, snapshots, fingerprints and canonical identity
 - [Long-term architecture](architecture/long-term-architecture.md): the target design and milestone process
 - [Architecture decision records](adr/), including
-  [why the interface is web-based](adr/0013-web-ui-on-tauri-with-native-video.md)
+  [why the interface is web-based](adr/0013-web-ui-on-tauri-with-native-video.md) and
+  [how captions get word timing and start without a wait](adr/0014-caption-timing-and-cold-start.md)
 
 ## Contributing to Nova
 
@@ -33,7 +34,8 @@
 - [Roadmap](roadmap.md)
 - [Implementation status](nova-implementation-status.md): verified milestones, the reconciliation matrix and open gates
 - [Implementation contracts](implementation/): per-milestone contracts and validation records
-- [Evaluations](evaluations/): model and benchmark reports
+- [Evaluations](evaluations/): model and benchmark reports, including
+  [caption timing and cold start](evaluations/caption-timing-2026-10-13.md)
 - [Brand](brand.md): the logo, its story, colours and usage
 - [Changelog](../CHANGELOG.md)
 - [Security policy](../SECURITY.md)
