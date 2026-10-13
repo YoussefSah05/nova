@@ -1,10 +1,11 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 
 import { DEFAULT_PROFILE_SETTINGS, type ProfileSettings } from "@/types";
 import { EnrichmentSection } from "./EnrichmentSection";
+import { ConfirmProvider } from "../ConfirmProvider";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
@@ -47,7 +48,9 @@ async function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <EnrichmentSection profileId="p1" />
+      <ConfirmProvider>
+        <EnrichmentSection profileId="p1" />
+      </ConfirmProvider>
     </QueryClientProvider>
   );
   await screen.findByLabelText("TMDB API Read Access Token");
@@ -105,10 +108,12 @@ describe("TMDB credential in settings", () => {
     // The replace field starts empty: the saved token is never pre-filled.
     expect(input.value).toBe("");
 
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("Remove the TMDB token?");
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Remove token" }));
     });
     expect(api.stored()).toBeNull();
     expect(screen.getByLabelText("TMDB API Read Access Token")).toBeTruthy();

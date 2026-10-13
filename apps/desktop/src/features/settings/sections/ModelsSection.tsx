@@ -12,8 +12,10 @@ import {
 import { formatBytes } from "../format";
 import { ModelControls } from "./ModelControls";
 import { ExternalModelLibraries } from "./ExternalModelLibraries";
+import { useConfirm } from "../confirm";
 
 export function ModelsSection() {
+  const confirm = useConfirm();
   const { whisper, embedding, runtime } = useModelStatus();
   const translation = useTranslationModels();
   const timing = useCaptionTimingModels();
@@ -94,12 +96,13 @@ export function ModelsSection() {
                 variant="danger"
                 disabled={!!action.pending}
                 onClick={() => {
-                  if (
-                    window.confirm(
-                      "Remove the Whisper model from this Mac? Captions will need it downloaded again. Cached transcripts stay saved."
-                    )
-                  )
-                    action.run("remove_whisper_model");
+                  void confirm({
+                    title: "Remove the Whisper model?",
+                    description:
+                      "Captions will need it downloaded again. Transcripts you already have stay saved.",
+                    confirmLabel: "Remove model",
+                    destructive: true,
+                  }).then((yes) => yes && action.run("remove_whisper_model"));
                 }}
               >
                 {action.pending === "remove_whisper_model" ? "Removing…" : "Remove model"}

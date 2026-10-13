@@ -5,6 +5,7 @@ import type { CacheStats } from "@/types/generated/CacheStats";
 import type { ArtworkCacheStats } from "@/types/generated/ArtworkCacheStats";
 import { SettingsButton, SettingsCard, SettingsError, SettingRow } from "../SettingsUI";
 import { formatBytes } from "../format";
+import { useConfirm } from "../confirm";
 
 export function StorageSection({ profileId }: { profileId: string }) {
   return (
@@ -15,6 +16,7 @@ export function StorageSection({ profileId }: { profileId: string }) {
   );
 }
 function CacheSection({ profileId }: { profileId?: string }) {
+  const confirm = useConfirm();
   const client = useQueryClient();
   const transcript = profileId !== undefined;
   const queryKey = [
@@ -74,14 +76,23 @@ function CacheSection({ profileId }: { profileId?: string }) {
             variant="danger"
             disabled={clear.isPending || stats.data.count === 0}
             onClick={() => {
-              if (
-                window.confirm(
-                  transcript
-                    ? "Clear this profile’s cached transcripts? They can be generated again when needed."
-                    : "Clear cached artwork for all profiles? Images will be downloaded again when shown."
-                )
-              )
-                clear.mutate();
+              void confirm(
+                transcript
+                  ? {
+                      title: "Clear cached transcripts?",
+                      description:
+                        "This profile’s saved captions are removed. They are generated again when needed.",
+                      confirmLabel: "Clear transcripts",
+                      destructive: true,
+                    }
+                  : {
+                      title: "Clear cached artwork?",
+                      description:
+                        "Artwork is removed for all profiles on this Mac and downloaded again when shown.",
+                      confirmLabel: "Clear artwork",
+                      destructive: true,
+                    }
+              ).then((yes) => yes && clear.mutate());
             }}
           >
             {clear.isPending ? "Clearing…" : transcript ? "Clear transcripts" : "Clear artwork"}

@@ -17,6 +17,7 @@ import {
   Toggle,
 } from "../SettingsUI";
 import { ChannelLogoDirectoryCard } from "./ChannelLogoDirectoryCard";
+import { useConfirm } from "../confirm";
 
 const METADATA_LANGUAGES = [
   { value: "en-US", label: "English" },
@@ -37,6 +38,7 @@ export function EnrichmentSection({
   profileId: string;
   onOpenModels?: () => void;
 }) {
+  const confirm = useConfirm();
   const { settings, saveSettings, loaded } = useProfileSettings(profileId);
   const credential = useQuery({
     queryKey: ["settings-credential", profileId],
@@ -70,8 +72,13 @@ export function EnrichmentSection({
     }
   };
   const removeToken = async () => {
-    if (!window.confirm("Remove the saved TMDB token? TMDB matching stops until a new one is set."))
-      return;
+    const yes = await confirm({
+      title: "Remove the TMDB token?",
+      description: "TMDB matching, artwork and facts stop updating until a new token is set.",
+      confirmLabel: "Remove token",
+      destructive: true,
+    });
+    if (!yes) return;
     setTokenBusy(true);
     setTokenError(null);
     try {

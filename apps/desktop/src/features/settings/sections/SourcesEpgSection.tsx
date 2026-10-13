@@ -15,6 +15,7 @@ import {
   SettingsError,
 } from "../SettingsUI";
 import { GuideStatusRow } from "./GuideStatusRow";
+import { useConfirm } from "../confirm";
 
 const REFRESH_OPTIONS = [
   { value: "0", label: "Manual" },
@@ -33,6 +34,7 @@ export function SourcesEpgSection({
   onSourcesChanged: () => void;
   onAddSource: () => void;
 }) {
+  const confirm = useConfirm();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
@@ -82,7 +84,14 @@ export function SourcesEpgSection({
     }
   };
   const remove = async (s: Source) => {
-    if (!window.confirm(`Remove “${s.name}” and all its imported content?`)) return;
+    const yes = await confirm({
+      title: `Remove “${s.name}”?`,
+      description:
+        "Its films, shows, channels and guide are removed from this profile. Favourites and watch history for them go too.",
+      confirmLabel: "Remove playlist",
+      destructive: true,
+    });
+    if (!yes) return;
     setBusy(s.id);
     try {
       await invoke("delete_source", { profileId, sourceId: s.id });

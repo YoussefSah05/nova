@@ -1,8 +1,9 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ModelsSection } from "./ModelsSection";
+import { ConfirmProvider } from "../ConfirmProvider";
 import type { ModelDownloadEvent } from "@/types/generated/ModelDownloadEvent";
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), off: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
@@ -16,7 +17,9 @@ function client() {
 function mount(qc = client()) {
   return render(
     <QueryClientProvider client={qc}>
-      <ModelsSection />
+      <ConfirmProvider>
+        <ModelsSection />
+      </ConfirmProvider>
     </QueryClientProvider>
   );
 }
@@ -107,10 +110,20 @@ it("reports download errors and confirms removal", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("The model action could not finish");
   first.unmount();
   installed = true;
-  vi.spyOn(window, "confirm").mockReturnValue(false);
   mount();
   await user.click(await screen.findByRole("button", { name: "Remove model" }));
+  // Cancel is focused, so the safe answer is the default.
+  const dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
   expect(mocks.invoke.mock.calls.some(([c]) => c === "remove_whisper_model")).toBe(false);
+  await user.click(screen.getByRole("button", { name: "Remove model" }));
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Remove model" })
+  );
+  await waitFor(() =>
+    expect(mocks.invoke.mock.calls.some(([c]) => c === "remove_whisper_model")).toBe(true)
+  );
 });
 
 it("refreshes Search capability after catalog-model installation", async () => {

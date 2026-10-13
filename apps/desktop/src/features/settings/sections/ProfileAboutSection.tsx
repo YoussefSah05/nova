@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Profile } from "@/types";
 import { SettingRow, SettingsCard, SettingsButton, TextInput, SettingsError } from "../SettingsUI";
 import { formatBytes } from "../format";
+import { useConfirm } from "../confirm";
 
 const AVATAR_COLORS = ["#6366f1", "#ec4899", "#f59e0b", "#10b981", "#3b82f6", "#ef4444"];
 
@@ -26,6 +27,7 @@ export function ProfileAboutSection({
   onProfileUpdated: (p: Profile) => void;
   onSwitchProfile: () => void;
 }) {
+  const confirm = useConfirm();
   const [name, setName] = useState(profile.name);
   const [color, setColor] = useState(profile.avatarColor);
   const [error, setError] = useState<string | null>(null);
@@ -57,8 +59,14 @@ export function ProfileAboutSection({
     }
   };
   const remove = async () => {
-    if (!window.confirm(`Delete profile “${profile.name}”? This removes its library and settings.`))
-      return;
+    const yes = await confirm({
+      title: `Delete “${profile.name}”?`,
+      description:
+        "Its playlists, library, watch history and settings are deleted from this Mac. Shared models and artwork stay.",
+      confirmLabel: "Delete profile",
+      destructive: true,
+    });
+    if (!yes) return;
     setSaving(true);
     setError(null);
     try {

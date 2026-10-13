@@ -2,6 +2,11 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- Fix five Settings actions that silently did nothing on macOS: removing a playlist, deleting a
+  profile, removing the Whisper model, clearing a cache and removing the TMDB token. They asked
+  through `window.confirm`, which the macOS WebView never shows; they now confirm in an in-app
+  dialog with Cancel as the default.
+
 - Word-accurate captions: a new caption timing stage runs around Whisper in the ASR worker.
   Silero voice detection skips windows without speech and drops invented lines; an MMS-300M
   forced aligner places every word on the audio (English, French and Arabic through one model).

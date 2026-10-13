@@ -130,6 +130,7 @@ on the way to the session (it is now applied to the stored cues, after stitching
 overlapping-cue fix above landed after the recording too.
 
 Not caused by this work, noted for follow-up: in Settings, "Remove source" (and four other
-actions) use `window.confirm`, which returns false in the macOS WebView without showing a dialog,
-so those actions do nothing. In the profile picker's manage mode, the delete button removes a
-profile at once, without confirmation.
+actions) used `window.confirm`, which returns false in the macOS WebView without showing a
+dialog, so those actions did nothing (fixed the same day with an in-app confirmation dialog). In
+the profile picker's manage mode, the delete button removes a profile at once, without
+confirmation.

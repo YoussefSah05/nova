@@ -8,6 +8,18 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Settings confirmations — 2026-10-13
+
+Five destructive Settings actions (remove a playlist, delete a profile, remove the Whisper model,
+clear the transcript or artwork cache, remove the TMDB token) were guarded by `window.confirm`.
+The macOS WebView has no dialog for it and returns `false` without showing anything, so each of
+these actions silently did nothing; the tests stubbed `window.confirm` and could not see it.
+They now ask through an in-app dialog (`ConfirmProvider` / `useConfirm()` on Radix Dialog,
+`role="alertdialog"`, Cancel focused, Escape answers no), layered over Settings. `useConfirm()`
+throws outside its provider, so a missing provider fails loudly instead of silently refusing.
+Tests drive the real dialog: the provider itself, playlist removal end to end, model removal
+(cancel and confirm), cache clearing, the TMDB token, and the dialog nested in `SettingsModal`.
+
 ### Caption word timing and cold start — 2026-10-13
 
 Source captions now decode on the resident ASR worker with a timing stage around Whisper
@@ -38,9 +50,8 @@ Source captions now decode on the resident ASR worker with a timing stage around
   could overtake its prepare. Not changed: a worker window that fails three times fails the
   session rather than falling back to `whisper-cli` (no failure observed on Apple Silicon).
 - `just lint`, `just typecheck` and `just test` pass (795 Rust tests, 246 frontend tests).
-- Follow-ups: `window.confirm` does nothing in the macOS WebView (Remove source and four other
-  Settings actions); profile deletion has no confirmation; live captions do not use the timing
-  stage yet.
+- Follow-ups: profile deletion in the profile picker has no confirmation; live captions do not
+  use the timing stage yet. (The `window.confirm` issue is fixed; see below.)
 
 ### Translated captions at the bottom — 2026-10-13
 
