@@ -21,6 +21,7 @@ members = [
     "crates/enrich",
     "crates/artwork",
     "crates/translate",
+    "crates/align",
 ]
 
 [workspace.dependencies]

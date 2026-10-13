@@ -1,0 +1,22 @@
+[package]
+name = "nova-align"
+version = "0.1.0"
+edition = "2021"
+description = "Speech activity detection and CTC forced alignment for caption timing"
+
+[dependencies]
+nova-core = { path = "../core" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+unicode-normalization = { workspace = true }
+# Same pins as fastembed's: one ONNX Runtime in the process, no protobuf.
+ort = { workspace = true, features = ["download-binaries"] }
+ort-sys = { workspace = true }
+ndarray = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+nova-transcribe = { path = "../transcribe" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }
