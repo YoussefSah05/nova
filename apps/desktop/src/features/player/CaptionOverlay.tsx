@@ -2,6 +2,8 @@
 //!
 //! Source and translated committed dialogue, rendered independently of playback.
 
+import type { ReactNode } from "react";
+
 import { cn } from "@/lib/utils";
 import { DEFAULT_CAPTION_STYLE, type CaptionStyle } from "@/types";
 import { captionTextClass, captionTextStyle } from "./captionStyleCss";
@@ -44,46 +46,84 @@ export function CaptionOverlay({
   const matches =
     sourceActive.segmentId != null && translated && translated.segmentId === sourceActive.segmentId;
   if (mode === "source" || !matches) {
-    return <StandardCue text={sourceActive.text} style={captionStyle} />;
+    return (
+      <CaptionStack>
+        <CaptionLine text={sourceActive.text} style={captionStyle} />
+      </CaptionStack>
+    );
   }
-  const rtl = targetLang === "ar";
+  const sourceRtl = sourceLang?.startsWith("ar") ?? false;
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-[55%] z-10 flex justify-center px-6">
-      <div className="nova-glass nova-panel-enter min-w-[30%] max-w-[60%] rounded-xl border border-white/10 px-6 py-4 shadow-lg">
-        {mode === "dual" && (
-          <p
-            dir={sourceLang?.startsWith("ar") ? "rtl" : "auto"}
-            className={cn(
-              "mb-2 border-b border-white/10 pb-2 opacity-65",
-              captionTextClass(captionStyle)
-            )}
-            style={{
-              ...captionTextStyle(captionStyle),
-              fontSize: `${captionStyle.fontScale}rem`,
-              ...(sourceLang?.startsWith("ar") ? { fontFamily: "var(--font-arabic)" } : {}),
-            }}
-          >
-            {sourceActive.text}
-          </p>
-        )}
-        <p
-          lang={targetLang}
-          dir={rtl ? "rtl" : "auto"}
-          className={cn(
-            "whitespace-pre-line leading-relaxed",
-            captionTextClass(captionStyle),
-            rtl && "text-right"
-          )}
-          style={{
-            ...captionTextStyle(captionStyle),
-            fontSize: `${(rtl ? 1.5 : 1.375) * captionStyle.fontScale}rem`,
-            ...(rtl ? { fontFamily: "var(--font-arabic)" } : {}),
-          }}
-        >
-          {translated.text}
-        </p>
-      </div>
+    <CaptionStack>
+      {mode === "dual" && (
+        <CaptionLine
+          text={sourceActive.text}
+          style={captionStyle}
+          rtl={sourceRtl}
+          scale={DUAL_SOURCE_SCALE}
+          className="opacity-80"
+        />
+      )}
+      <CaptionLine
+        text={translated.text}
+        style={captionStyle}
+        lang={targetLang}
+        rtl={targetLang === "ar"}
+      />
+    </CaptionStack>
+  );
+}
+
+/// In dual mode the original line sits above the translation, slightly smaller.
+const DUAL_SOURCE_SCALE = 0.85;
+/// Arabic glyphs read smaller than Latin ones at the same size.
+const ARABIC_SCALE = 1.1;
+
+/// Every caption mode shares one bottom-anchored stack, so translated and dual
+/// captions sit where source captions do and follow the same appearance settings.
+function CaptionStack({ children }: { children: ReactNode }) {
+  return (
+    <div
+      data-caption-stack
+      className="pointer-events-none absolute inset-x-0 bottom-[12%] z-10 flex flex-col items-center gap-1.5 px-6"
+    >
+      {children}
     </div>
+  );
+}
+
+function CaptionLine({
+  text,
+  style,
+  lang,
+  rtl = false,
+  scale = 1,
+  className,
+}: {
+  text: string;
+  style: CaptionStyle;
+  lang?: string;
+  rtl?: boolean;
+  scale?: number;
+  className?: string;
+}) {
+  const css = captionTextStyle({
+    ...style,
+    fontScale: style.fontScale * scale * (rtl ? ARABIC_SCALE : 1),
+  });
+  return (
+    <p
+      lang={lang}
+      dir={rtl ? "rtl" : "auto"}
+      className={cn(
+        "max-w-[70%] whitespace-pre-line text-center font-medium leading-snug",
+        captionTextClass(style),
+        className
+      )}
+      style={rtl ? { ...css, fontFamily: "var(--font-arabic)" } : css}
+    >
+      {text}
+    </p>
   );
 }
 
@@ -94,24 +134,4 @@ function activeCue(cues: Cue[], t: number): Cue | undefined {
     if (t >= c.start && t < c.end) return c;
   }
   return undefined;
-}
-
-function StandardCue({ text, style }: { text: string; style: CaptionStyle }) {
-  return (
-    <div
-      className={cn(
-        "pointer-events-none absolute inset-x-0 bottom-[12%] z-10 flex justify-center px-6"
-      )}
-    >
-      <p
-        className={cn(
-          "max-w-[70%] whitespace-pre-line text-center font-medium leading-snug",
-          captionTextClass(style)
-        )}
-        style={captionTextStyle(style)}
-      >
-        {text}
-      </p>
-    </div>
-  );
 }

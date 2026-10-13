@@ -2,6 +2,9 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- Show translated and Source + translation captions at the bottom of the picture, like source
+  captions, instead of in a panel over the middle of the video; both lines follow the caption
+  appearance settings (size, font, colour, shadow / outline / box).
 - New Nova logo, "the star that brightens": app icon, boot screen, top bar, launch and welcome
   screens, empty library, Settings → About and README, with a brand guide.
 - Run the interface at 120 Hz on ProMotion displays (Settings → Appearance → High refresh

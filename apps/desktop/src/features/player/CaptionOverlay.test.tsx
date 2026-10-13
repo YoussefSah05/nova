@@ -26,13 +26,15 @@ describe("translated caption overlay", () => {
         }}
       />
     );
+    // The translation uses the chosen size exactly; the dual-mode original is 0.85x of it.
     expect(screen.getByText("Bonjour")).toHaveStyle({
       color: "#f5d90a",
-      fontSize: "2.0625rem",
+      fontSize: "1.688rem",
       backgroundColor: "rgba(0,0,0,0.8)",
     });
     expect(screen.getByText("Bonjour").style.fontFamily).toContain("Comic Sans");
-    expect(screen.getByText("Hello")).toHaveStyle({ color: "#f5d90a", fontSize: "1.5rem" });
+    expect(screen.getByText("Hello")).toHaveStyle({ color: "#f5d90a", fontSize: "1.434rem" });
+    expect(screen.getByText("Hello").style.fontFamily).toContain("Comic Sans");
   });
   it("renders both committed lines with Arabic direction and typography", () => {
     render(
@@ -47,6 +49,28 @@ describe("translated caption overlay", () => {
     expect(screen.getByText("Hello")).toBeInTheDocument();
     expect(screen.getByText("مرحبا")).toHaveAttribute("dir", "rtl");
     expect(screen.getByText("مرحبا")).toHaveStyle({ fontFamily: "var(--font-arabic)" });
+  });
+  it("anchors every caption mode to the bottom stack, original above translation", () => {
+    for (const mode of ["source", "translation", "dual"] as const) {
+      const view = render(
+        <CaptionOverlay
+          mode={mode}
+          sourceCues={source}
+          translatedCues={[{ ...translated[0], text: "Bonjour" }]}
+          targetLang="fr"
+          currentTime={1}
+        />
+      );
+      const line = screen.getByText(mode === "source" ? "Hello" : "Bonjour");
+      const stack = line.closest("[data-caption-stack]");
+      expect(stack).toHaveClass("bottom-[12%]");
+      expect(stack?.className).not.toMatch(/top-/);
+      if (mode === "dual") {
+        expect(stack?.firstElementChild).toHaveTextContent("Hello");
+        expect(stack?.lastElementChild).toHaveTextContent("Bonjour");
+      }
+      view.unmount();
+    }
   });
   it("falls back to source while translation is missing or belongs to another segment", () => {
     const view = render(<CaptionOverlay mode="translation" sourceCues={source} currentTime={1} />);

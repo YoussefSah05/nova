@@ -8,6 +8,16 @@
 
 ## Bootstrap reconciliation — 2026-09-28
 
+### Translated captions at the bottom — 2026-10-13
+
+Translation and Source + translation captions were drawn in a glass panel anchored at 55% of the
+picture height, over the action, with fixed font multipliers. `CaptionOverlay` now renders every
+mode in one bottom-anchored stack (the source-caption position): in dual mode the original line
+sits above the translation at 0.85× size, and both lines take the user's caption style (size,
+font, colour, shadow / outline / box). Arabic keeps right-to-left direction, the Arabic font and
+a 1.1× legibility scale. Frontend lint, typecheck and tests (241) pass; checked by eye on a native
+debug build playing *Tears of Steel* (CC BY 3.0, Blender Foundation).
+
 ### Scroll frame pacing at 120 Hz — 2026-10-12
 
 A toggleable frame-rate overlay (⌘⌥F) measured the real library on a ProMotion MacBook Pro.
