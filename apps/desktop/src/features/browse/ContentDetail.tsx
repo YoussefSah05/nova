@@ -154,6 +154,16 @@ export function ContentDetail({
             label={playLabel}
             audioTrack={audioChoice.launchTrack}
             onPlay={(options) => onPlay(selectedVersion, options)}
+            prepare={
+              audioTarget && audioTarget.mediaKind !== "live"
+                ? {
+                    profileId,
+                    mediaKind: audioTarget.mediaKind,
+                    mediaId: audioTarget.mediaId,
+                    fromSec: resume?.positionSec ?? 0,
+                  }
+                : null
+            }
           />
           {versions.length > 1 && (
             <DropdownMenu>

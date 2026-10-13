@@ -20,7 +20,7 @@ pub mod audio;
 pub mod probe;
 pub mod remux;
 
-pub use audio::{extract_audio_16k_mono, extract_audio_window, AudioError};
+pub use audio::{extract_audio_16k_mono, extract_audio_window, read_wav_16k_mono, AudioError};
 pub use probe::{
     probe_stream, url_looks_like_browser_file, url_looks_like_hls_playlist,
     url_looks_like_transport_stream, PlaybackRoute, ProbeError, StreamProbe, StreamProfile,

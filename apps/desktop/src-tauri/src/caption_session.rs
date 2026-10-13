@@ -23,24 +23,38 @@
 //! `--max-len`/`--split-on-word` ([`MAX_LEN_CHARS`]) so cues stay short and the
 //! stitch boundaries are fine-grained.
 //!
+//! **Recognition and timing:** windows are decoded by the resident ASR worker
+//! (ADR-0011), which keeps whisper.cpp loaded and runs the caption timing
+//! stage around it: Silero VAD before Whisper (silent windows are never
+//! decoded) and MMS CTC forced alignment after it (word times tied to the
+//! audio). `whisper-cli` remains the fallback when the worker cannot start.
+//!
+//! **Cold start (ADR-0014):** the first window after a start is short, so the
+//! first caption needs only a few seconds of audio; a title page may
+//! *prepare* a session (transcribe the opening from the resume point before
+//! Play), and the player's session then *adopts* it instead of starting over.
+//!
 //! Cues are emitted via `transcription:cues` and rendered by the React
 //! `CaptionOverlay` (never mpv's native renderer), so Phase 7's translation
 //! card can reuse the same stream.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::model_runtime::{ModelRuntimeManager, RuntimeCancellation, RuntimeError};
+use crate::model_registry::bundled_manifest;
+use crate::model_runtime::{ModelLease, ModelRuntimeManager, RuntimeCancellation, RuntimeError};
 use crate::resource_policy::WorkClass;
-use nova_core::TranscriptSegment;
-use nova_media::extract_audio_window;
+use nova_core::model_manifest::Capability;
+use nova_core::{RawTranscript, TranscriptSegment};
+use nova_media::{extract_audio_window, read_wav_16k_mono};
 use nova_storage::{PlaybackRepository, TranscriptRepository};
+use nova_transcribe::streaming::{segments_of, DecodeRequest, TimingModels};
 use nova_transcribe::whisper::normalize_whisper_lang;
 use nova_transcribe::{
     default_model, ensure_model, segments_to_vtt, shift_transcript, transcribe_wav_cancellable,
-    ModelDownloadProgress, TranscribeOptions,
+    ModelDownloadProgress, TranscribeOptions, WhisperModel,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -48,8 +62,18 @@ use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
-/// Max audio handed to whisper per window. 30s is whisper's native context length.
-const WINDOW_SEC: f64 = 30.0;
+/// New audio per window. With the lead-in below, a window is exactly
+/// whisper's native 30 s context: a longer one makes whisper.cpp decode a
+/// second, few-second chunk, which is slow and prone to invented text.
+const WINDOW_SEC: f64 = 27.0;
+/// New audio in the first window after a start: the first caption waits for
+/// this much audio to download and decode, not a full window.
+const FIRST_WINDOW_SEC: f64 = 8.0;
+/// How far past its start position a prepared session transcribes before
+/// the player adopts it.
+const PREPARE_AHEAD_SEC: f64 = 45.0;
+/// `horizon_cs` of a session with no horizon.
+const NO_HORIZON: u64 = u64::MAX;
 /// Audio pulled before each window's start so the model has lexical context and
 /// boundary words are heard twice (2–3s is the long-form best practice). The
 /// overlap is trimmed off on append so nothing is duplicated.
@@ -79,15 +103,97 @@ pub struct CaptionSessionManager {
     active: Mutex<Option<Arc<SessionHandle>>>,
 }
 
+/// The session id caption events carry. Adoption switches it, so a prepared
+/// session's later windows reach the player that took it over.
+#[derive(Clone, Default)]
+pub struct SessionIdent(Arc<std::sync::RwLock<String>>);
+
+impl SessionIdent {
+    fn get(&self) -> String {
+        self.0.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    fn set(&self, id: &str) {
+        *self.0.write().unwrap_or_else(|p| p.into_inner()) = id.to_string();
+    }
+}
+
 struct SessionHandle {
-    session_id: String,
+    ident: SessionIdent,
     profile_id: String,
+    media_kind: String,
+    media_id: i64,
+    track_slot: i64,
     transcript_id: Arc<AtomicI64>,
     translation_slot: Arc<Semaphore>,
     cancel: Arc<AtomicBool>,
     model_cancel: RuntimeCancellation,
     /// Live playhead in centiseconds (so it fits an atomic).
     playhead_cs: Arc<AtomicU64>,
+    /// Started by a title page and not yet adopted by a player.
+    preparing: AtomicBool,
+    /// Transcribe no further than this (centiseconds); [`NO_HORIZON`] once
+    /// a player owns the session.
+    horizon_cs: AtomicU64,
+    /// The confirmed speech language, for replaying cues on adoption.
+    language: std::sync::Mutex<String>,
+}
+
+impl SessionHandle {
+    fn new(ctx: &StartCtx, preparing: bool) -> Self {
+        let from_cs = (ctx.from_sec.max(0.0) * 100.0) as u64;
+        Self {
+            ident: ctx.ident.clone(),
+            profile_id: ctx.profile_id.clone(),
+            media_kind: ctx.media_kind.clone(),
+            media_id: ctx.media_id,
+            track_slot: ctx.audio_track.unwrap_or(0) as i64,
+            transcript_id: Arc::new(AtomicI64::new(0)),
+            translation_slot: Arc::new(Semaphore::new(1)),
+            cancel: Arc::new(AtomicBool::new(false)),
+            model_cancel: RuntimeCancellation::default(),
+            playhead_cs: Arc::new(AtomicU64::new(from_cs)),
+            preparing: AtomicBool::new(preparing),
+            horizon_cs: AtomicU64::new(if preparing {
+                from_cs + (PREPARE_AHEAD_SEC * 100.0) as u64
+            } else {
+                NO_HORIZON
+            }),
+            language: std::sync::Mutex::new(String::new()),
+        }
+    }
+
+    fn same_media(&self, ctx: &StartCtx) -> bool {
+        self.profile_id == ctx.profile_id
+            && self.media_kind == ctx.media_kind
+            && self.media_id == ctx.media_id
+            && self.track_slot == ctx.audio_track.unwrap_or(0) as i64
+    }
+
+    /// Hand the session to the player session `session_id`, which plays
+    /// from `from_sec`: its events, priority and range become the player's.
+    fn adopt_by(&self, session_id: &str, from_sec: f64) {
+        self.ident.set(session_id);
+        self.playhead_cs
+            .store((from_sec.max(0.0) * 100.0) as u64, Ordering::SeqCst);
+        self.horizon_cs.store(NO_HORIZON, Ordering::SeqCst);
+        self.preparing.store(false, Ordering::SeqCst);
+    }
+
+    fn halt(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        self.model_cancel.cancel();
+    }
+
+    /// Work class of the next window: a prepared session must not delay
+    /// anything the user is waiting on.
+    fn class(&self) -> WorkClass {
+        if self.preparing.load(Ordering::SeqCst) {
+            WorkClass::Interactive
+        } else {
+            WorkClass::Realtime
+        }
+    }
 }
 
 /// Everything a session needs to run, assembled by the command layer.
@@ -110,6 +216,8 @@ pub struct StartCtx {
     pub model_root: PathBuf,
     pub runtime: Arc<ModelRuntimeManager>,
     pub transcripts_dir: PathBuf,
+    /// Set by the manager; events read the session id through it.
+    pub ident: SessionIdent,
 }
 
 impl CaptionSessionManager {
@@ -117,38 +225,65 @@ impl CaptionSessionManager {
         Self::default()
     }
 
-    /// Start a session, cancelling any previous one.
+    /// Start a session, cancelling any previous one, or adopt the session a
+    /// title page prepared for the same media and audio track.
     pub async fn start(&self, ctx: StartCtx) {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let model_cancel = RuntimeCancellation::default();
-        let playhead_cs = Arc::new(AtomicU64::new((ctx.from_sec.max(0.0) * 100.0) as u64));
-        let transcript_id = Arc::new(AtomicI64::new(0));
-        let handle = Arc::new(SessionHandle {
-            session_id: ctx.session_id.clone(),
-            profile_id: ctx.profile_id.clone(),
-            transcript_id: Arc::clone(&transcript_id),
-            translation_slot: Arc::new(Semaphore::new(1)),
-            cancel: Arc::clone(&cancel),
-            model_cancel: model_cancel.clone(),
-            playhead_cs: Arc::clone(&playhead_cs),
-        });
-
-        {
+        ctx.ident.set(&ctx.session_id);
+        let handle = {
             let mut guard = self.active.lock().await;
-            if let Some(prev) = guard.take() {
-                prev.cancel.store(true, Ordering::SeqCst);
-                prev.model_cancel.cancel();
+            if let Some(prev) = guard.as_ref().filter(|h| {
+                h.preparing.load(Ordering::SeqCst)
+                    && !h.cancel.load(Ordering::SeqCst)
+                    && h.same_media(&ctx)
+            }) {
+                let prev = Arc::clone(prev);
+                drop(guard);
+                adopt(&prev, &ctx).await;
+                return;
             }
+            if let Some(prev) = guard.take() {
+                prev.halt();
+            }
+            let handle = Arc::new(SessionHandle::new(&ctx, false));
             *guard = Some(Arc::clone(&handle));
-        }
+            handle
+        };
+        tokio::spawn(run_session(ctx, handle));
+    }
 
-        tokio::spawn(run_session(
-            ctx,
-            cancel,
-            model_cancel,
-            playhead_cs,
-            transcript_id,
-        ));
+    /// Transcribe the opening of a title before it plays (ADR-0014). Runs
+    /// only while no player session exists; a later [`Self::start`] for the
+    /// same media adopts it. Never downloads a model.
+    pub async fn prepare(&self, ctx: StartCtx) {
+        ctx.ident.set(&ctx.session_id);
+        let handle = {
+            let mut guard = self.active.lock().await;
+            match guard.as_ref() {
+                Some(h) if !h.preparing.load(Ordering::SeqCst) => return,
+                Some(h) if h.same_media(&ctx) && !h.cancel.load(Ordering::SeqCst) => return,
+                _ => {}
+            }
+            if let Some(prev) = guard.take() {
+                prev.halt();
+            }
+            let handle = Arc::new(SessionHandle::new(&ctx, true));
+            *guard = Some(Arc::clone(&handle));
+            handle
+        };
+        tokio::spawn(run_session(ctx, handle));
+    }
+
+    /// Stop a prepared session that no player adopted (the title page closed).
+    pub async fn cancel_prepare(&self, session_id: &str) {
+        let mut guard = self.active.lock().await;
+        if guard
+            .as_ref()
+            .is_some_and(|h| h.preparing.load(Ordering::SeqCst) && h.ident.get() == session_id)
+        {
+            if let Some(h) = guard.take() {
+                h.halt();
+            }
+        }
     }
 
     /// Update the live playhead so the session prioritises/throttles correctly.
@@ -162,8 +297,7 @@ impl CaptionSessionManager {
     /// Cancel the active session (player closed / captions turned off).
     pub async fn stop(&self) {
         if let Some(h) = self.active.lock().await.take() {
-            h.cancel.store(true, Ordering::SeqCst);
-            h.model_cancel.cancel();
+            h.halt();
         }
     }
 
@@ -180,7 +314,7 @@ impl CaptionSessionManager {
             .await
             .as_ref()
             .filter(|h| {
-                h.session_id == session_id
+                h.ident.get() == session_id
                     && h.profile_id == profile_id
                     && transcript_id > 0
                     && h.transcript_id.load(Ordering::SeqCst) == transcript_id
@@ -250,46 +384,62 @@ struct ModelDownloadEvent {
 
 // ── The session loop ──────────────────────────────────────────────────────────
 
-async fn run_session(
-    ctx: StartCtx,
-    cancel: Arc<AtomicBool>,
-    model_cancel: RuntimeCancellation,
-    playhead_cs: Arc<AtomicU64>,
-    active_transcript: Arc<AtomicI64>,
-) {
-    if let Err(e) = run_session_inner(
-        &ctx,
-        &cancel,
-        &model_cancel,
-        &playhead_cs,
-        &active_transcript,
-    )
-    .await
-    {
-        if !cancel.load(Ordering::SeqCst) {
+async fn run_session(ctx: StartCtx, handle: Arc<SessionHandle>) {
+    if let Err(e) = run_session_inner(&ctx, &handle).await {
+        if !handle.cancel.load(Ordering::SeqCst) {
+            tracing::warn!(error = %e, "caption session failed");
             emit_status(&ctx, "failed", None, Some(e));
         }
     }
 }
 
-async fn run_session_inner(
-    ctx: &StartCtx,
-    cancel: &AtomicBool,
-    model_cancel: &RuntimeCancellation,
-    playhead_cs: &AtomicU64,
-    active_transcript: &AtomicI64,
-) -> Result<(), String> {
+/// Hand a prepared session to the player that asked for the same media: it
+/// keeps its coverage and in-flight window, and its cues so far are replayed
+/// under the player's session id.
+async fn adopt(handle: &SessionHandle, ctx: &StartCtx) {
+    handle.adopt_by(&ctx.session_id, ctx.from_sec);
+    let id = handle.transcript_id.load(Ordering::SeqCst);
+    if id > 0 {
+        let language = handle
+            .language
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Ok(stored) = TranscriptRepository::new(&ctx.pool)
+            .segments_with_ids(id)
+            .await
+        {
+            tracing::debug!(
+                transcript_id = id,
+                cues = stored.len(),
+                "adopted prepared captions"
+            );
+            emit_cues(ctx, id, &language, &stored);
+        }
+    } else {
+        tracing::debug!("adopted prepared captions before their first speech");
+    }
+    emit_phase(ctx, "streaming", "Captions prepared before playback", None);
+}
+
+async fn run_session_inner(ctx: &StartCtx, handle: &SessionHandle) -> Result<(), String> {
+    let cancel = handle.cancel.as_ref();
+    let model_cancel = &handle.model_cancel;
+    let playhead_cs = handle.playhead_cs.as_ref();
+    let active_transcript = handle.transcript_id.as_ref();
     emit_phase(ctx, "preparing", "Preparing model", None);
 
     // Prefer a registered available location; retain the previous internal
-    // download behavior when no local copy exists.
+    // download behavior when no local copy exists. A prepared session never
+    // downloads: it only uses a model that is already there.
     let model = default_model();
     match ctx
         .runtime
-        .acquire_at(&ctx.model_root, model.id, WorkClass::Realtime, model_cancel)
+        .acquire_at(&ctx.model_root, model.id, handle.class(), model_cancel)
         .await
     {
         Ok(_lease) => {}
+        Err(_) if handle.preparing.load(Ordering::SeqCst) => return Ok(()),
         Err(RuntimeError::Unavailable) => {
             let app_for_model = ctx.app.clone();
             let models_dir = ctx.models_dir.clone();
@@ -376,6 +526,7 @@ async fn run_session_inner(
         );
         if !segments.is_empty() {
             language_confirmed = true;
+            set_language(handle, &language);
             prompt_tail = tail_prompt(&segments);
             let stored = repo
                 .segments_with_ids(existing.id)
@@ -389,13 +540,19 @@ async fn run_session_inner(
 
     let mut failures = WindowFailures::default();
     let mut candidate_eof: Option<f64> = None;
+    let mut use_worker = true;
+    let mut first_window = true;
     loop {
         if cancel.load(Ordering::SeqCst) {
             return Ok(());
         }
         let playhead = playhead_cs.load(Ordering::SeqCst) as f64 / 100.0;
+        let horizon = match handle.horizon_cs.load(Ordering::SeqCst) {
+            NO_HORIZON => f64::INFINITY,
+            cs => cs as f64 / 100.0,
+        };
 
-        let limit = (playhead + PREFETCH_AHEAD_SEC).min(duration);
+        let limit = (playhead + PREFETCH_AHEAD_SEC).min(duration).min(horizon);
         let Some(gap_start) = next_gap(&covered, playhead, limit) else {
             // Buffered far enough ahead, or everything in range is covered.
             if covers_to(&covered, duration) {
@@ -405,6 +562,8 @@ async fn run_session_inner(
                 emit_status(ctx, "complete", Some(covered_total(&covered)), None);
                 return Ok(());
             }
+            // A prepared session idles at its horizon until a player adopts
+            // it or its title page closes.
             tokio::time::sleep(Duration::from_millis(400)).await;
             continue;
         };
@@ -415,7 +574,14 @@ async fn run_session_inner(
             .tempdir()
             .map_err(|e| e.to_string())?;
         let wav = work.path().join("win.wav");
-        let (audio_start, window_end, audio_dur) = window_bounds(gap_start, duration);
+        // The first window after a (re)start is short, so the first caption
+        // only waits for a few seconds of audio.
+        let span = if first_window && !point_covered(&covered, gap_start) {
+            FIRST_WINDOW_SEC
+        } else {
+            WINDOW_SEC
+        };
+        let (audio_start, window_end, audio_dur) = window_bounds(gap_start, duration, span);
 
         emit_phase(
             ctx,
@@ -525,7 +691,6 @@ async fn run_session_inner(
         candidate_eof = None;
         let window_end = window_end.min(decoded_end);
 
-        let out_base = work.path().join("win");
         let opts = TranscribeOptions {
             language: normalize_whisper_lang(&language).or_else(|| lang_hint.clone()),
             model_id: model.id.to_string(),
@@ -539,36 +704,35 @@ async fn run_session_inner(
             "Waiting for model",
             Some(covered_total(&covered)),
         );
+        let class = handle.class();
         let lease = ctx
             .runtime
-            .acquire_at(&ctx.model_root, model.id, WorkClass::Realtime, model_cancel)
+            .acquire_at(&ctx.model_root, model.id, class, model_cancel)
             .await
             .map_err(|e| e.to_string())?;
-        let child_cancel = model_cancel.clone();
         emit_phase(
             ctx,
             "streaming",
             "Recognizing and aligning speech",
             Some(covered_total(&covered)),
         );
-        let result = lease
-            .run_async_at(WorkClass::Realtime, model_cancel, move |lease| async move {
-                let _work = work;
-                let model_path = lease.whisper_path().ok_or("wrong model backend")?;
-                transcribe_wav_cancellable(
-                    &wav,
-                    model_path,
-                    &out_base,
-                    &opts,
-                    |_pct| {},
-                    child_cancel.cancelled(),
-                )
-                .await
-                .map_err(|e| e.to_string())
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut raw = match result {
+        let window = Window {
+            work,
+            wav,
+            audio_start,
+        };
+        let result = recognize(
+            ctx,
+            &model,
+            lease,
+            class,
+            window,
+            opts,
+            &mut use_worker,
+            model_cancel,
+        )
+        .await;
+        let raw = match result {
             Ok(t) => t,
             Err(e) => {
                 emit_phase(
@@ -590,12 +754,13 @@ async fn run_session_inner(
                 return Ok(());
             }
         };
+        let mut raw = raw;
+        first_window = false;
         failures = WindowFailures::default();
         if cancel.load(Ordering::SeqCst) {
             return Ok(());
         }
 
-        shift_transcript(&mut raw, audio_start);
         // Overlap stitch (LocalAgreement-style confirmed prefix). Keep any
         // segment that reaches past the confirmed frontier `gap_start` — even
         // one that *starts* inside the lead-in overlap and *extends* into new
@@ -650,6 +815,7 @@ async fn run_session_inner(
                     .map_err(|e| e.to_string())?;
             }
             language_confirmed = true;
+            set_language(handle, &language);
         }
 
         if !keep.is_empty() {
@@ -701,10 +867,175 @@ fn cached_speech_language(stored: &str, has_speech: bool, hint: Option<&str>) ->
     }
 }
 
-fn window_bounds(gap_start: f64, duration: f64) -> (f64, f64, f64) {
+fn window_bounds(gap_start: f64, duration: f64, span: f64) -> (f64, f64, f64) {
     let audio_start = (gap_start - OVERLAP_SEC).max(0.0);
-    let window_end = (gap_start + WINDOW_SEC).min(duration);
+    let window_end = (gap_start + span).min(duration);
     (audio_start, window_end, window_end - audio_start)
+}
+
+fn set_language(handle: &SessionHandle, language: &str) {
+    *handle.language.lock().unwrap_or_else(|p| p.into_inner()) = language.to_string();
+}
+
+/// One extracted audio window. `work` owns the temporary directory.
+struct Window {
+    work: tempfile::TempDir,
+    wav: PathBuf,
+    /// Media time of the window's first sample.
+    audio_start: f64,
+}
+
+/// The caption timing models available right now, leased for one decode so
+/// they cannot be removed underneath it. Missing or disabled ones are left
+/// out: timing then falls back to Whisper's own (DTW) word times.
+async fn timing_models(
+    ctx: &StartCtx,
+    class: WorkClass,
+    cancel: &RuntimeCancellation,
+) -> (Vec<ModelLease>, Option<TimingModels>) {
+    let Ok(manifest) = bundled_manifest() else {
+        return (Vec::new(), None);
+    };
+    let mut leases = Vec::new();
+    let mut models = TimingModels::default();
+    for capability in [Capability::Alignment, Capability::VoiceActivity] {
+        let Some(entry) = manifest.models.iter().find(|e| e.capability == capability) else {
+            continue;
+        };
+        let Ok(lease) = ctx
+            .runtime
+            .acquire_at(&ctx.model_root, &entry.id, class, cancel)
+            .await
+        else {
+            continue;
+        };
+        let Some(dir) = lease.companion_dir().map(Path::to_path_buf) else {
+            continue;
+        };
+        match capability {
+            Capability::Alignment => models.aligner = Some(dir),
+            _ => models.vad = Some(dir),
+        }
+        leases.push(lease);
+    }
+    let any = models.aligner.is_some() || models.vad.is_some();
+    (leases, any.then_some(models))
+}
+
+/// Recognize one window, in absolute media time. The resident worker is
+/// preferred (no model load per window, caption timing stage); when it
+/// cannot start, this and later windows use `whisper-cli`.
+#[allow(clippy::too_many_arguments)]
+async fn recognize(
+    ctx: &StartCtx,
+    model: &WhisperModel,
+    lease: ModelLease,
+    class: WorkClass,
+    window: Window,
+    opts: TranscribeOptions,
+    use_worker: &mut bool,
+    cancel: &RuntimeCancellation,
+) -> Result<RawTranscript, String> {
+    if *use_worker {
+        let pcm = read_wav_16k_mono(&window.wav)
+            .await
+            .map_err(|e| format!("reading audio: {e}"))?;
+        let language = opts.language.as_deref().and_then(normalize_whisper_lang);
+        let (timing_leases, timing) = timing_models(ctx, class, cancel).await;
+        let request = DecodeRequest {
+            samples: pcm.len(),
+            offset_sec: window.audio_start,
+            // Arabic decodes without prompt history (see whisper.rs).
+            prompt: opts
+                .initial_prompt
+                .clone()
+                .filter(|_| language.as_deref() != Some("ar"))
+                .unwrap_or_default(),
+            language: language.clone(),
+            max_len: MAX_LEN_CHARS,
+            timing,
+        };
+        let decoded = lease
+            .run_blocking_at(class, cancel, move |lease| {
+                let _timing_leases = timing_leases;
+                lease
+                    .speech_engine()
+                    .map(|engine| engine.decode(&request, &pcm))
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        match decoded {
+            Ok(Ok(decoded)) => {
+                if let Some(report) = &decoded.timing {
+                    tracing::debug!(
+                        aligned = report.aligned_words,
+                        interpolated = report.interpolated_words,
+                        dropped = report.dropped_segments,
+                        skipped_silence = report.skipped_silence,
+                        timing_ms = report.timing_ms,
+                        decode_ms = decoded.decode_ms,
+                        error = report.error.as_deref().unwrap_or(""),
+                        "caption window timed"
+                    );
+                }
+                return Ok(RawTranscript {
+                    language: decoded
+                        .language
+                        .clone()
+                        .or(language)
+                        .unwrap_or_else(|| "und".into()),
+                    model: model.id.to_string(),
+                    segments: segments_of(&decoded.words),
+                    duration_processed_sec: None,
+                });
+            }
+            // The worker started but this decode failed: the next attempt
+            // gets a fresh worker.
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(e) => {
+                tracing::warn!(error = %e, "ASR worker unavailable; using whisper-cli");
+                *use_worker = false;
+            }
+        }
+        let lease = ctx
+            .runtime
+            .acquire_at(&ctx.model_root, model.id, class, cancel)
+            .await
+            .map_err(|e| e.to_string())?;
+        return recognize_cli(lease, class, window, opts, cancel).await;
+    }
+    recognize_cli(lease, class, window, opts, cancel).await
+}
+
+async fn recognize_cli(
+    lease: ModelLease,
+    class: WorkClass,
+    window: Window,
+    opts: TranscribeOptions,
+    cancel: &RuntimeCancellation,
+) -> Result<RawTranscript, String> {
+    let child_cancel = cancel.clone();
+    let audio_start = window.audio_start;
+    let mut raw = lease
+        .run_async_at(class, cancel, move |lease| async move {
+            let Window { work, wav, .. } = window;
+            let out_base = work.path().join("win");
+            let model_path = lease.whisper_path().ok_or("wrong model backend")?;
+            transcribe_wav_cancellable(
+                &wav,
+                model_path,
+                &out_base,
+                &opts,
+                |_pct| {},
+                child_cancel.cancelled(),
+            )
+            .await
+            .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    shift_transcript(&mut raw, audio_start);
+    Ok(raw)
 }
 
 fn short_window_needs_retry(
@@ -988,7 +1319,7 @@ fn emit_cues(
     let _ = ctx.app.emit(
         "transcription:cues",
         CuesEvent {
-            session_id: ctx.session_id.clone(),
+            session_id: ctx.ident.get(),
             media_kind: ctx.media_kind.clone(),
             media_id: ctx.media_id,
             transcript_id,
@@ -1002,7 +1333,7 @@ fn emit_status(ctx: &StartCtx, state: &str, covered_sec: Option<f64>, error: Opt
     let _ = ctx.app.emit(
         "transcription:status",
         CaptionStatusEvent {
-            session_id: ctx.session_id.clone(),
+            session_id: ctx.ident.get(),
             media_kind: ctx.media_kind.clone(),
             media_id: ctx.media_id,
             state: state.to_string(),
@@ -1017,7 +1348,7 @@ fn emit_phase(ctx: &StartCtx, state: &str, phase: &str, covered_sec: Option<f64>
     let _ = ctx.app.emit(
         "transcription:status",
         CaptionStatusEvent {
-            session_id: ctx.session_id.clone(),
+            session_id: ctx.ident.get(),
             media_kind: ctx.media_kind.clone(),
             media_id: ctx.media_id,
             state: state.into(),
@@ -1052,19 +1383,75 @@ mod tests {
         assert_eq!(speech_language("en", Some("ar_EG")), "ar");
     }
 
-    #[tokio::test]
-    async fn translation_is_scoped_bounded_and_cancelled_with_the_caption_session() {
-        let manager = CaptionSessionManager::new();
-        let cancel = RuntimeCancellation::default();
-        *manager.active.lock().await = Some(Arc::new(SessionHandle {
-            session_id: "session".into(),
+    fn handle(session: &str, media_id: i64, preparing: bool) -> SessionHandle {
+        let ident = SessionIdent::default();
+        ident.set(session);
+        SessionHandle {
+            ident,
             profile_id: "profile".into(),
+            media_kind: "vod".into(),
+            media_id,
+            track_slot: 0,
             transcript_id: Arc::new(AtomicI64::new(7)),
             translation_slot: Arc::new(Semaphore::new(1)),
             cancel: Arc::new(AtomicBool::new(false)),
-            model_cancel: cancel.clone(),
-            playhead_cs: Arc::new(AtomicU64::new(0)),
-        }));
+            model_cancel: RuntimeCancellation::default(),
+            playhead_cs: Arc::new(AtomicU64::new(6_000)),
+            preparing: AtomicBool::new(preparing),
+            horizon_cs: AtomicU64::new(if preparing { 10_500 } else { NO_HORIZON }),
+            language: std::sync::Mutex::new(String::new()),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_adopted_session_belongs_to_the_player() {
+        let manager = CaptionSessionManager::new();
+        let prepared = Arc::new(handle("page", 7, true));
+        assert_eq!(prepared.class(), WorkClass::Interactive);
+        *manager.active.lock().await = Some(Arc::clone(&prepared));
+
+        prepared.adopt_by("player", 61.5);
+        assert_eq!(prepared.ident.get(), "player");
+        assert_eq!(prepared.class(), WorkClass::Realtime);
+        assert_eq!(prepared.horizon_cs.load(Ordering::SeqCst), NO_HORIZON);
+        assert_eq!(prepared.playhead_cs.load(Ordering::SeqCst), 6_150);
+        // Translation follows the player's id, and the page can no longer
+        // cancel what the player now owns.
+        assert!(manager
+            .translation_context("player", "profile", 7)
+            .await
+            .is_some());
+        manager.cancel_prepare("page").await;
+        manager.cancel_prepare("player").await;
+        assert!(!prepared.cancel.load(Ordering::SeqCst));
+        assert!(manager.active.lock().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn only_the_page_that_prepared_a_session_cancels_it() {
+        let manager = CaptionSessionManager::new();
+        let prepared = Arc::new(handle("page", 7, true));
+        *manager.active.lock().await = Some(Arc::clone(&prepared));
+        manager.cancel_prepare("another page").await;
+        assert!(!prepared.cancel.load(Ordering::SeqCst));
+        manager.cancel_prepare("page").await;
+        assert!(prepared.cancel.load(Ordering::SeqCst));
+        assert!(prepared.model_cancel.is_cancelled());
+        assert!(manager.active.lock().await.is_none());
+
+        let playing = Arc::new(handle("player", 7, false));
+        *manager.active.lock().await = Some(Arc::clone(&playing));
+        manager.cancel_prepare("player").await;
+        assert!(
+            !playing.cancel.load(Ordering::SeqCst),
+            "a playing session is not a prepare"
+        );
+    }
+
+    #[tokio::test]
+    async fn translation_is_scoped_bounded_and_cancelled_with_the_caption_session() {
+        let manager = CaptionSessionManager::new();
+        *manager.active.lock().await = Some(Arc::new(handle("session", 7, false)));
         assert!(manager
             .translation_context("old", "profile", 7)
             .await
@@ -1135,12 +1522,20 @@ mod tests {
 
     #[test]
     fn final_and_late_windows_are_bounded_by_the_actual_media_duration() {
-        assert_eq!(window_bounds(7_185.0, 7_200.0), (7_182.0, 7_200.0, 18.0));
         assert_eq!(
-            window_bounds(7_185.0, f64::INFINITY),
-            (7_182.0, 7_215.0, 33.0)
+            window_bounds(7_185.0, 7_200.0, WINDOW_SEC),
+            (7_182.0, 7_200.0, 18.0)
         );
-        assert_eq!(window_bounds(0.0, 11.0), (0.0, 11.0, 11.0));
+        assert_eq!(
+            window_bounds(7_185.0, f64::INFINITY, WINDOW_SEC),
+            (7_182.0, 7_212.0, 30.0),
+            "lead-in plus window is whisper's 30 s context"
+        );
+        assert_eq!(window_bounds(0.0, 11.0, WINDOW_SEC), (0.0, 11.0, 11.0));
+        assert_eq!(
+            window_bounds(600.0, f64::INFINITY, FIRST_WINDOW_SEC),
+            (597.0, 608.0, 11.0)
+        );
     }
 
     #[test]
@@ -1173,13 +1568,15 @@ mod tests {
     #[test]
     fn silent_windows_remain_decoded_coverage_without_implying_eof() {
         let mut covered = Vec::new();
-        for start in [0.0, 30.0, 60.0, 90.0] {
+        for k in 0..4 {
+            let start = k as f64 * WINDOW_SEC;
             let (_, end) = split_complete(&[], start, start + WINDOW_SEC, false);
             merge_interval(&mut covered, start, end);
         }
-        assert_eq!(covered, vec![(0.0, 120.0)]);
+        let end = 4.0 * WINDOW_SEC;
+        assert_eq!(covered, vec![(0.0, end)]);
         assert!(!covers_to(&covered, f64::INFINITY));
-        assert_eq!(next_gap(&covered, 120.0, 210.0), Some(120.0));
+        assert_eq!(next_gap(&covered, end, 210.0), Some(end));
         let (_, end) = split_complete(
             &[seg(120.0, 125.0, "dialogue after music")],
             120.0,

@@ -339,6 +339,8 @@ mod tests {
             offset_sec: 0.0,
             prompt: String::new(),
             language: None,
+            max_len: 0,
+            timing: None,
         }
     }
 

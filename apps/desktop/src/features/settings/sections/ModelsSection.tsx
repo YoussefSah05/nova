@@ -3,7 +3,12 @@ import { listen } from "@tauri-apps/api/event";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ModelDownloadEvent } from "@/types/generated/ModelDownloadEvent";
 import { SettingsButton, SettingsCard, SettingsError, SettingRow } from "../SettingsUI";
-import { useModelAction, useModelStatus, useTranslationModels } from "../modelData";
+import {
+  useCaptionTimingModels,
+  useModelAction,
+  useModelStatus,
+  useTranslationModels,
+} from "../modelData";
 import { formatBytes } from "../format";
 import { ModelControls } from "./ModelControls";
 import { ExternalModelLibraries } from "./ExternalModelLibraries";
@@ -11,13 +16,15 @@ import { ExternalModelLibraries } from "./ExternalModelLibraries";
 export function ModelsSection() {
   const { whisper, embedding, runtime } = useModelStatus();
   const translation = useTranslationModels();
+  const timing = useCaptionTimingModels();
   const action = useModelAction();
   const [progress, setProgress] = useState<ModelDownloadEvent | null>(null);
   useEffect(() => {
     setProgress(null);
     if (
       action.pending !== "download_whisper_model" &&
-      action.pending !== "download_translation_models"
+      action.pending !== "download_translation_models" &&
+      action.pending !== "download_caption_timing_models"
     )
       return;
     let cancelled = false;
@@ -111,6 +118,45 @@ export function ModelsSection() {
           </SettingRow>
         )}
         {action.pending === "download_whisper_model" && downloadProgress("Caption model download")}
+      </SettingsCard>
+      <SettingsCard title="Caption timing">
+        {timing.query.isError ? (
+          <div className="py-4">
+            <SettingsError
+              message="Couldn’t check the caption timing models."
+              retry={() => void timing.query.refetch()}
+            />
+          </div>
+        ) : timing.query.isPending ? (
+          <Skeleton className="my-4 h-20" />
+        ) : (
+          <SettingRow
+            title="Word-accurate captions"
+            description={`MMS forced aligner + Silero voice detection · ${timing.installed} of ${timing.total} installed · Captions start and end with the words, and nothing is captioned over music or silence. Aligner licence: CC BY-NC 4.0.`}
+          >
+            {timing.total > 0 && timing.installed >= timing.total ? (
+              <span className="rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">
+                Installed
+              </span>
+            ) : (
+              <SettingsButton
+                variant="primary"
+                disabled={!!action.pending}
+                onClick={() => action.run("download_caption_timing_models")}
+              >
+                {action.pending === "download_caption_timing_models"
+                  ? "Downloading…"
+                  : timing.unverified > 0
+                    ? "Verify or repair"
+                    : timing.installed > 0
+                      ? "Download the rest"
+                      : "Download timing models (~320 MB)"}
+              </SettingsButton>
+            )}
+          </SettingRow>
+        )}
+        {action.pending === "download_caption_timing_models" &&
+          downloadProgress("Caption timing model download")}
       </SettingsCard>
       <SettingsCard title="Translated captions">
         {translation.query.isError ? (

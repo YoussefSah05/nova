@@ -6,6 +6,7 @@ description = "whisper-cli subprocess driver + model management for on-device AS
 
 [dependencies]
 nova-core = { path = "../core" }
+nova-align = { path = "../align" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -24,4 +25,3 @@ whisper-rs = { workspace = true, features = ["metal", "coreml"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 whisper-rs = { workspace = true }
-

@@ -105,6 +105,8 @@ impl StreamingSession {
             offset_sec: self.buffer_start,
             prompt: self.policy.prompt(self.buffer_start, PROMPT_WORDS),
             language: self.language.clone(),
+            max_len: 0,
+            timing: None,
         };
         let decoded = self.decoder.decode(&request, &self.buffer)?;
         self.decoded_until = self.received_until();
@@ -252,11 +254,13 @@ mod tests {
                         text: text.into(),
                         start,
                         end: start + 0.3,
+                        segment: 0,
                     })
                     .collect(),
                 language: self.detected.map(str::to_string),
                 accel: Accel::Metal,
                 decode_ms: 1,
+                timing: None,
             })
         }
     }

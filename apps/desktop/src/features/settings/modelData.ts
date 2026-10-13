@@ -16,6 +16,7 @@ export type ModelAction =
   | "download_whisper_model"
   | "download_enrich_models"
   | "download_translation_models"
+  | "download_caption_timing_models"
   | "remove_whisper_model";
 export function useModelStatus() {
   const whisper = useQuery({
@@ -71,17 +72,30 @@ const controlsQuery = {
   refetchInterval: 5000,
 };
 
-/** Translation models as the runtime sees them (internal or external library). */
-export function useTranslationModels() {
+/** Models of some capabilities as the runtime sees them (internal or external library). */
+function useCapabilityModels(capabilities: readonly string[]) {
   const models = useQuery(controlsQuery);
-  const translation = models.data?.filter((m) => m.capability === "translation") ?? [];
+  const matching = models.data?.filter((m) => capabilities.includes(m.capability)) ?? [];
   return {
     query: models,
-    total: translation.length,
-    installed: translation.filter((m) => m.availability === "available").length,
+    total: matching.length,
+    installed: matching.filter((m) => m.availability === "available").length,
     /** Files present but not yet checked (or incomplete): download repairs or verifies them. */
-    unverified: translation.filter((m) => m.availability === "unverified").length,
+    unverified: matching.filter((m) => m.availability === "unverified").length,
   };
+}
+
+const TRANSLATION = ["translation"] as const;
+const CAPTION_TIMING = ["alignment", "voice-activity"] as const;
+
+/** Translation models as the runtime sees them (internal or external library). */
+export function useTranslationModels() {
+  return useCapabilityModels(TRANSLATION);
+}
+
+/** The forced aligner and voice activity detector that time captions. */
+export function useCaptionTimingModels() {
+  return useCapabilityModels(CAPTION_TIMING);
 }
 
 export function useModelControls() {

@@ -256,8 +256,11 @@ fn whisper_command(
 
     // DTW-aligned token timestamps. Without this, token offsets are whisper's
     // coarse heuristic times and word/cue timing drifts.
+    // whisper.cpp 1.8 turns flash attention on by default, and flash
+    // attention silently disables DTW (every `t_dtw` comes back -1).
     if !opts.dtw_preset.is_empty() {
         cmd.args(["--dtw", &opts.dtw_preset]);
+        cmd.arg("--no-flash-attn");
     }
 
     let normalized = opts.language.as_deref().and_then(normalize_whisper_lang);
@@ -441,6 +444,27 @@ struct RawSeg {
 struct RawToken {
     text: String,
     offsets: Offsets,
+    /// DTW time of the token in centiseconds, -1 when DTW did not run.
+    #[serde(default = "no_dtw")]
+    t_dtw: i64,
+}
+
+fn no_dtw() -> i64 {
+    -1
+}
+
+impl RawToken {
+    /// (start, end) in seconds: the DTW instant starts the token when DTW
+    /// ran (see the worker's `token_times`), else whisper's interpolation.
+    fn times(&self) -> (f64, f64) {
+        let (from, to) = (ms_to_sec(self.offsets.from), ms_to_sec(self.offsets.to));
+        if self.t_dtw >= 0 {
+            let at = self.t_dtw as f64 / 100.0;
+            (at, to.max(at))
+        } else {
+            (from, to)
+        }
+    }
 }
 
 /// Millisecond offsets within the media.
@@ -530,15 +554,16 @@ fn tokens_to_words(tokens: &[RawToken]) -> Vec<TranscriptWord> {
             continue;
         }
         let starts_word = tok.text.starts_with(' ') || words.is_empty();
+        let (start, end) = tok.times();
         if starts_word {
             words.push(TranscriptWord {
-                start_sec: ms_to_sec(tok.offsets.from),
-                end_sec: ms_to_sec(tok.offsets.to),
+                start_sec: start,
+                end_sec: end,
                 word: trimmed.to_string(),
             });
         } else if let Some(last) = words.last_mut() {
             last.word.push_str(trimmed);
-            last.end_sec = ms_to_sec(tok.offsets.to);
+            last.end_sec = end.max(last.start_sec);
         }
     }
     words
@@ -573,6 +598,10 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == ["--dtw", "large.v3.turbo"]));
+        assert!(
+            args.contains(&"--no-flash-attn".into()),
+            "flash attention silently disables DTW"
+        );
         assert!(args.contains(&"--output-json-full".into()));
         assert!(!args
             .iter()
@@ -923,6 +952,28 @@ mod tests {
         assert_eq!(normalize_whisper_lang("und"), None);
         assert_eq!(normalize_whisper_lang(""), None);
         assert_eq!(normalize_whisper_lang("qqq"), None);
+    }
+
+    #[test]
+    fn dtw_token_times_replace_interpolated_offsets() {
+        // Real whisper-cli 1.8.3 output shape (FLEURS fr_fr, DTW on): the
+        // interpolated offsets put " terrain" at 2.50 s, DTW at 3.90 s.
+        let json = r#"{"result":{"language":"fr"},"transcription":[{
+            "offsets":{"from":0,"to":5640},"text":" en terrain",
+            "tokens":[
+              {"text":"[_BEG_]","offsets":{"from":0,"to":0},"t_dtw":-1},
+              {"text":" en","offsets":{"from":2180,"to":2380},"t_dtw":362},
+              {"text":" terrain","offsets":{"from":2500,"to":3290},"t_dtw":390}
+            ]}]}"#;
+        let t = parse_whisper_json(json, "m", None).unwrap();
+        let words = t.segments[0].words.as_ref().unwrap();
+        assert_eq!(words[1].word, "terrain");
+        assert!((words[1].start_sec - 3.90).abs() < 1e-9);
+        assert!(words[1].end_sec >= words[1].start_sec);
+        // Without DTW the interpolated offsets stay.
+        let plain = json.replace("\"t_dtw\":390", "\"t_dtw\":-1");
+        let t = parse_whisper_json(&plain, "m", None).unwrap();
+        assert!((t.segments[0].words.as_ref().unwrap()[1].start_sec - 2.5).abs() < 1e-9);
     }
 
     #[test]

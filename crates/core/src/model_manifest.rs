@@ -40,6 +40,8 @@ pub enum Capability {
     Embedding,
     Generation,
     VoiceActivity,
+    /// Word timing: forced alignment of a transcript to its audio.
+    Alignment,
 }
 
 impl Capability {
@@ -50,6 +52,7 @@ impl Capability {
             Self::Embedding => "embedding",
             Self::Generation => "generation",
             Self::VoiceActivity => "voice-activity",
+            Self::Alignment => "alignment",
         }
     }
 }
@@ -65,6 +68,13 @@ pub enum BackendKind {
     /// Encoder-decoder translation (Marian, NLLB) on the app's single ONNX Runtime.
     #[serde(rename = "onnx-seq2seq")]
     OnnxSeq2Seq,
+    /// A wav2vec2 CTC model that aligns caption words to audio. It runs in
+    /// the ASR worker process, next to whisper.cpp.
+    #[serde(rename = "onnx-ctc")]
+    OnnxCtc,
+    /// Silero voice activity detection, also run in the ASR worker.
+    #[serde(rename = "onnx-vad")]
+    OnnxVad,
     /// A GGUF model served by a llama.cpp `llama-server` subprocess.
     #[serde(rename = "llama-server")]
     LlamaServer,
@@ -79,6 +89,8 @@ impl BackendKind {
             Self::WhisperCpp => "whisper.cpp",
             Self::FastEmbed => "fastembed",
             Self::OnnxSeq2Seq => "onnx-seq2seq",
+            Self::OnnxCtc => "onnx-ctc",
+            Self::OnnxVad => "onnx-vad",
             Self::LlamaServer => "llama-server",
             Self::Apple => "apple",
         }

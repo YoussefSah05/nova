@@ -152,6 +152,19 @@ export function SeriesDetail({
             disabled={!action}
             label={action?.label ?? "Play"}
             audioTrack={audioChoice.launchTrack}
+            prepare={
+              action
+                ? {
+                    profileId,
+                    mediaKind: "episode",
+                    mediaId: action.episodeId,
+                    fromSec:
+                      resume && !resume.upNext && resume.mediaId === action.episodeId
+                        ? resume.positionSec
+                        : 0,
+                  }
+                : null
+            }
           />
           <AudioTrackPicker choice={audioChoice} resolving={all.isPending} />
           <TrailerButton url={facts?.trailerUrl} />

@@ -37,6 +37,7 @@ import { useSession } from "@/app/session";
 import { AudioTrackPicker, PlayWithCaptions } from "@/features/browse/detail/PlaybackChoices";
 import { useMovieAudioTarget } from "@/features/browse/detail/useAudioLanguages";
 import type { PlaybackLaunchOptions } from "@/features/player/playbackLaunch";
+import type { CaptionPrepareTarget } from "@/features/player/useCaptionPrepare";
 import { VersionsPanel } from "./movie/VersionsPanel";
 
 /// `1:34:10` / `34:10`.
@@ -106,6 +107,16 @@ export function MoviePage({ item }: { item: BrowseItem }) {
           />
         }
         launchAudioTrack={audioChoice.launchTrack}
+        captionTarget={
+          source.data && source.data.mediaKind !== "live"
+            ? {
+                profileId: profile.id,
+                mediaKind: source.data.mediaKind,
+                mediaId: source.data.mediaId,
+                fromSec: detail?.resume && !detail.resume.completed ? detail.resume.positionSec : 0,
+              }
+            : null
+        }
         audioBanner={
           <AudioLanguageBanner
             profileId={profile.id}
@@ -185,6 +196,7 @@ function MovieHero({
   audioPicker,
   audioBanner,
   launchAudioTrack,
+  captionTarget,
   onPlay,
   onToggleFavorite,
   onToggleWatchlist,
@@ -198,6 +210,7 @@ function MovieHero({
   backdropUrl: string | null | undefined;
   audioPicker: React.ReactNode;
   launchAudioTrack: PlaybackLaunchOptions["audioTrack"];
+  captionTarget: CaptionPrepareTarget | null;
   audioBanner: React.ReactNode;
   onPlay: (options: PlaybackLaunchOptions) => void;
   onToggleFavorite: (next: boolean) => void;
@@ -318,6 +331,7 @@ function MovieHero({
               size="lg"
               onPlay={onPlay}
               audioTrack={launchAudioTrack}
+              prepare={captionTarget}
               label={resume ? `Resume · ${clock(resume.positionSec)}` : "Play"}
             />
             <WatchlistButton

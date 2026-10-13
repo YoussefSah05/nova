@@ -92,6 +92,9 @@ enum Backend {
     Embedding(Box<dyn Embedder>),
     Whisper(WhisperBackend),
     Translation(Arc<dyn Translator>),
+    /// A verified model directory that the ASR worker process loads (the
+    /// caption aligner and VAD). Nothing is resident in this process.
+    Companion(PathBuf),
 }
 
 /// One whisper.cpp model: the GGML path for batch `whisper-cli` runs, and the
@@ -159,6 +162,32 @@ impl BackendAdapter for TranslationAdapter {
     }
     fn estimated_resident_bytes(&self) -> Option<u64> {
         self.entry.est_resident_bytes
+    }
+    fn verifies_content(&self) -> bool {
+        true
+    }
+}
+
+/// Caption timing models (CTC aligner, VAD). They run inside the ASR worker
+/// beside whisper.cpp, so the app only verifies the pinned files and hands
+/// the worker their directory; a lease keeps them from being removed or
+/// replaced while a decode uses them.
+struct CompanionAdapter {
+    entry: ManifestEntry,
+}
+impl BackendAdapter for CompanionAdapter {
+    fn load(&self, path: &Path) -> Result<Backend, RuntimeError> {
+        if !is_attested(path, &self.entry) {
+            attest(path, &self.entry).map_err(|error| {
+                tracing::warn!(%error, model = %self.entry.id, "model files failed verification");
+                RuntimeError::Unavailable
+            })?;
+        }
+        Ok(Backend::Companion(path.to_path_buf()))
+    }
+    /// Their memory lives in the worker, accounted with the whisper model.
+    fn resident(&self) -> bool {
+        false
     }
     fn verifies_content(&self) -> bool {
         true
@@ -485,6 +514,14 @@ impl ModelLease {
         }
     }
 
+    /// The verified directory of a caption timing model's lease.
+    pub fn companion_dir(&self) -> Option<&Path> {
+        match &self.loaded.backend {
+            Backend::Companion(dir) => Some(dir),
+            _ => None,
+        }
+    }
+
     pub fn whisper_path(&self) -> Option<&Path> {
         match &self.loaded.backend {
             Backend::Whisper(whisper) => Some(&whisper.ggml),
@@ -578,6 +615,9 @@ impl ModelRuntimeManager {
                 }),
                 BackendKind::FastEmbed => Arc::new(EmbeddingAdapter),
                 BackendKind::OnnxSeq2Seq => Arc::new(TranslationAdapter {
+                    entry: entry.clone(),
+                }),
+                BackendKind::OnnxCtc | BackendKind::OnnxVad => Arc::new(CompanionAdapter {
                     entry: entry.clone(),
                 }),
                 BackendKind::LlamaServer | BackendKind::Apple => continue,

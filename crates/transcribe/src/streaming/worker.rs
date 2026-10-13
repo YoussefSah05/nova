@@ -10,6 +10,12 @@
 //! the worker always starts on Metal and reports ready at once, then loads
 //! the Core ML encoder on a background thread and switches to it between two
 //! decodes. Captions never wait for the compile.
+//!
+//! Caption timing. When a request names them, the worker also runs the
+//! Silero VAD before Whisper (a buffer with no speech is never decoded, so
+//! Whisper cannot invent dialogue over music) and the MMS CTC aligner after
+//! it (word times tied to the audio, see `nova_align`). Both stay loaded
+//! beside Whisper; a failure in either keeps Whisper's own times.
 
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
@@ -18,12 +24,16 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use whisper_rs::{
-    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+    DtwMode, DtwModelPreset, DtwParameters, FullParams, SamplingStrategy, WhisperContext,
+    WhisperContextParameters, WhisperState,
 };
+
+use nova_align::{refine, Aligner, SpeechDetector};
+use nova_core::{TranscriptSegment, TranscriptWord};
 
 use super::protocol::{
     read_line, read_samples, write_line, Accel, DecodeRequest, Decoded, Ready, Request, Response,
-    WireWord,
+    TimingModels, TimingReport, WireWord,
 };
 
 /// The argument that selects worker mode in the app binary.
@@ -38,8 +48,35 @@ struct Loaded {
     accel: Accel,
 }
 
-fn load(path: &Path, accel: Accel) -> Result<Loaded, String> {
-    let ctx = WhisperContext::new_with_params(path, WhisperContextParameters::default())
+/// The DTW alignment-head preset of a model file, from its whisper.cpp name.
+/// DTW over these cross-attention heads gives token times tied to the audio;
+/// without it whisper.cpp only interpolates times between timestamp tokens.
+/// It needs flash attention off, which is whisper-rs's default.
+pub fn dtw_preset(model: &Path) -> Option<DtwModelPreset> {
+    let name = model.file_name()?.to_str()?;
+    let stem = name.strip_prefix("ggml-")?.trim_end_matches(".bin");
+    let family = stem.split("-q").next().unwrap_or(stem);
+    Some(match family {
+        "large-v3-turbo" => DtwModelPreset::LargeV3Turbo,
+        "large-v3" => DtwModelPreset::LargeV3,
+        "large-v2" => DtwModelPreset::LargeV2,
+        "medium" => DtwModelPreset::Medium,
+        "small" => DtwModelPreset::Small,
+        "base" => DtwModelPreset::Base,
+        "tiny" => DtwModelPreset::Tiny,
+        _ => return None,
+    })
+}
+
+fn load(path: &Path, accel: Accel, dtw: Option<DtwModelPreset>) -> Result<Loaded, String> {
+    let mut params = WhisperContextParameters::default();
+    if let Some(model_preset) = dtw {
+        params.flash_attn(false).dtw_parameters(DtwParameters {
+            mode: DtwMode::ModelPreset { model_preset },
+            ..DtwParameters::default()
+        });
+    }
+    let ctx = WhisperContext::new_with_params(path, params)
         .map_err(|e| format!("loading whisper model: {e}"))?;
     let state = ctx
         .create_state()
@@ -70,7 +107,7 @@ pub fn coreml_encoder_path(model: &Path) -> PathBuf {
 /// a link whose name has no encoder beside it, whisper.cpp finds no Core ML
 /// model and (built with WHISPER_COREML_ALLOW_FALLBACK) keeps the GPU path.
 /// The weights are read during the load, so the link is removed right after.
-fn load_metal_first(model: &Path) -> Result<Loaded, String> {
+fn load_metal_first(model: &Path, dtw: Option<DtwModelPreset>) -> Result<Loaded, String> {
     // A private, unpredictable directory (mkdtemp): nobody else can plant
     // a link there.
     let dir = tempfile::Builder::new()
@@ -80,7 +117,7 @@ fn load_metal_first(model: &Path) -> Result<Loaded, String> {
     let link = dir.path().join("metal-only.bin");
     #[cfg(unix)]
     std::os::unix::fs::symlink(model, &link).map_err(|e| format!("linking model: {e}"))?;
-    load(&link, Accel::Metal)
+    load(&link, Accel::Metal, dtw)
     // `dir` is removed here; the weights were read during the load.
 }
 
@@ -103,6 +140,10 @@ fn decode(engine: &mut Loaded, request: &DecodeRequest, pcm: &[f32]) -> Result<D
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
+    if request.max_len > 0 {
+        params.set_max_len(request.max_len as i32);
+        params.set_split_on_word(true);
+    }
     engine
         .state
         .full(params, pcm)
@@ -114,8 +155,9 @@ fn decode(engine: &mut Loaded, request: &DecodeRequest, pcm: &[f32]) -> Result<D
     // word. Bytes are joined before decoding, since a multibyte character
     // (Arabic) can be split across tokens.
     let mut words = Vec::new();
-    let mut current: Option<(Vec<u8>, f64, f64)> = None;
-    for segment in engine.state.as_iter() {
+    let mut current: Option<(Vec<u8>, f64, f64, u32)> = None;
+    for (index, segment) in engine.state.as_iter().enumerate() {
+        let index = index as u32;
         for i in 0..segment.n_tokens() {
             let Some(token) = segment.get_token(i) else {
                 continue;
@@ -124,42 +166,219 @@ fn decode(engine: &mut Loaded, request: &DecodeRequest, pcm: &[f32]) -> Result<D
                 continue;
             }
             let data = token.token_data();
-            let t0 = request.offset_sec + data.t0 as f64 / 100.0;
-            let t1 = request.offset_sec + data.t1 as f64 / 100.0;
+            let (t0, t1) = token_times(data.t0, data.t1, data.t_dtw);
+            let t0 = request.offset_sec + t0;
+            let t1 = request.offset_sec + t1;
             let bytes = token.to_bytes().unwrap_or_default();
-            let starts_word = bytes.first() == Some(&b' ');
+            // A new segment always starts a new word.
+            let starts_word =
+                bytes.first() == Some(&b' ') || current.as_ref().is_some_and(|c| c.3 != index);
             match &mut current {
-                Some((buf, _, end)) if !starts_word => {
+                Some((buf, _, end, _)) if !starts_word => {
                     buf.extend_from_slice(bytes);
                     *end = t1;
                 }
                 _ => {
-                    if let Some((buf, s, e)) = current.take() {
-                        push_word(&mut words, &buf, s, e);
+                    if let Some((buf, s, e, seg)) = current.take() {
+                        push_word(&mut words, &buf, s, e, seg);
                     }
-                    current = Some((bytes.to_vec(), t0, t1));
+                    current = Some((bytes.to_vec(), t0, t1, index));
                 }
             }
         }
     }
-    if let Some((buf, s, e)) = current.take() {
-        push_word(&mut words, &buf, s, e);
+    if let Some((buf, s, e, seg)) = current.take() {
+        push_word(&mut words, &buf, s, e, seg);
     }
     Ok(Decoded {
         words,
         language,
         accel: engine.accel,
         decode_ms: started.elapsed().as_millis() as u64,
+        timing: None,
     })
 }
 
-fn push_word(words: &mut Vec<WireWord>, bytes: &[u8], start: f64, end: f64) {
+/// The caption timing models this worker has loaded, keyed by directory.
+#[derive(Default)]
+struct TimingEngine {
+    aligner: Option<(PathBuf, Aligner)>,
+    vad: Option<(PathBuf, SpeechDetector)>,
+}
+
+impl TimingEngine {
+    /// Load what `models` names and is not loaded yet. Errors are reported,
+    /// and the stage then runs without that model.
+    fn prepare(&mut self, models: &TimingModels) -> Option<String> {
+        let mut error = None;
+        if let Some(dir) = &models.vad {
+            if self.vad.as_ref().is_none_or(|(d, _)| d != dir) {
+                match SpeechDetector::load(dir) {
+                    Ok(vad) => self.vad = Some((dir.clone(), vad)),
+                    Err(e) => error = Some(e.to_string()),
+                }
+            }
+        }
+        if let Some(dir) = &models.aligner {
+            if self.aligner.as_ref().is_none_or(|(d, _)| d != dir) {
+                match Aligner::load(dir) {
+                    Ok(aligner) => self.aligner = Some((dir.clone(), aligner)),
+                    Err(e) => error = Some(e.to_string()),
+                }
+            }
+        }
+        error
+    }
+
+    fn vad(&self, models: &TimingModels) -> Option<&SpeechDetector> {
+        self.vad
+            .as_ref()
+            .filter(|(d, _)| models.vad.as_ref() == Some(d))
+            .map(|(_, v)| v)
+    }
+
+    fn aligner(&self, models: &TimingModels) -> Option<&Aligner> {
+        self.aligner
+            .as_ref()
+            .filter(|(d, _)| models.aligner.as_ref() == Some(d))
+            .map(|(_, a)| a)
+    }
+}
+
+/// Decode with the caption timing stage around Whisper.
+fn decode_timed(
+    engine: &mut Loaded,
+    timing: &mut TimingEngine,
+    models: &TimingModels,
+    request: &DecodeRequest,
+    pcm: &[f32],
+) -> Result<Decoded, String> {
+    let started = Instant::now();
+    let mut report = TimingReport {
+        error: timing.prepare(models),
+        ..TimingReport::default()
+    };
+    let speech = match timing.vad(models).map(|v| v.regions(pcm)) {
+        Some(Ok(regions)) => Some(regions),
+        Some(Err(e)) => {
+            report.error = Some(e.to_string());
+            None
+        }
+        None => None,
+    };
+    if let Some(regions) = &speech {
+        let total: f64 = regions.iter().map(|(s, e)| e - s).sum();
+        report.speech_sec = Some(total);
+        if regions.is_empty() {
+            report.skipped_silence = true;
+            report.timing_ms = started.elapsed().as_millis() as u64;
+            return Ok(Decoded {
+                words: Vec::new(),
+                language: None,
+                accel: engine.accel,
+                decode_ms: 0,
+                timing: Some(report),
+            });
+        }
+    }
+    let mut decoded = decode(engine, request, pcm)?;
+    let timing_started = Instant::now();
+    let emissions = match timing.aligner(models).map(|a| a.emissions(pcm)) {
+        Some(Ok(emissions)) => Some(emissions),
+        Some(Err(e)) => {
+            report.error = Some(e.to_string());
+            None
+        }
+        None => None,
+    };
+    let mut segments = segments_of(&decoded.words);
+    let refined = refine(
+        &mut segments,
+        request.offset_sec,
+        speech.as_deref(),
+        emissions.as_ref(),
+    );
+    report.aligned_words = refined.aligned;
+    report.interpolated_words = refined.interpolated;
+    report.dropped_segments = refined.dropped_segments;
+    report.timing_ms = timing_started.elapsed().as_millis() as u64;
+    decoded.words = from_segments(segments);
+    decoded.timing = Some(report);
+    Ok(decoded)
+}
+
+/// Group decoded words into caption segments by their whisper segment.
+pub fn segments_of(words: &[WireWord]) -> Vec<TranscriptSegment> {
+    let mut segments: Vec<TranscriptSegment> = Vec::new();
+    let mut current: Option<u32> = None;
+    for w in words {
+        if current != Some(w.segment) || segments.is_empty() {
+            current = Some(w.segment);
+            segments.push(TranscriptSegment {
+                seq: segments.len() as i64,
+                start_sec: w.start,
+                end_sec: w.end,
+                text: String::new(),
+                words: Some(Vec::new()),
+            });
+        }
+        let segment = segments.last_mut().expect("pushed");
+        if !segment.text.is_empty() {
+            segment.text.push(' ');
+        }
+        segment.text.push_str(&w.text);
+        segment.end_sec = w.end;
+        segment
+            .words
+            .get_or_insert_with(Vec::new)
+            .push(TranscriptWord {
+                start_sec: w.start,
+                end_sec: w.end,
+                word: w.text.clone(),
+            });
+    }
+    segments
+}
+
+fn from_segments(segments: Vec<TranscriptSegment>) -> Vec<WireWord> {
+    segments
+        .into_iter()
+        .enumerate()
+        .flat_map(|(i, s)| {
+            s.words
+                .unwrap_or_default()
+                .into_iter()
+                .map(move |w| WireWord {
+                    text: w.word,
+                    start: w.start_sec,
+                    end: w.end_sec,
+                    segment: i as u32,
+                })
+        })
+        .collect()
+}
+
+/// A token's (start, end) in seconds. DTW gives one instant per token, the
+/// moment it is spoken, which is more faithful than the interpolated
+/// `t0`/`t1`; the token then lasts until the next one starts, so only the
+/// start is taken from DTW and the end keeps `t1` when it is later.
+fn token_times(t0: i64, t1: i64, t_dtw: i64) -> (f64, f64) {
+    if t_dtw >= 0 {
+        let at = t_dtw as f64 / 100.0;
+        (at, (t1 as f64 / 100.0).max(at))
+    } else {
+        (t0 as f64 / 100.0, t1 as f64 / 100.0)
+    }
+}
+
+fn push_word(words: &mut Vec<WireWord>, bytes: &[u8], start: f64, end: f64, segment: u32) {
     let text = String::from_utf8_lossy(bytes).trim().to_string();
     if !text.is_empty() {
         words.push(WireWord {
             text,
             start,
             end: end.max(start),
+            segment,
         });
     }
 }
@@ -207,15 +426,16 @@ fn serve(model: &Path) -> io::Result<()> {
 
     let started = Instant::now();
     let coreml = cfg!(target_os = "macos") && coreml_encoder_path(model).is_dir();
+    let dtw = dtw_preset(model);
     let first = if coreml {
-        load_metal_first(model)
+        load_metal_first(model, dtw.clone())
     } else {
         let accel = if cfg!(target_os = "macos") {
             Accel::Metal
         } else {
             Accel::Cpu
         };
-        load(model, accel)
+        load(model, accel, dtw.clone())
     };
     let mut engine = match first {
         Ok(engine) => engine,
@@ -240,7 +460,7 @@ fn serve(model: &Path) -> io::Result<()> {
             // (WHISPER_COREML_ALLOW_FALLBACK), so `coreml` means "Core ML
             // load attempted after its compile"; its log on stderr says
             // whether the encoder actually loaded.
-            match load(&model, Accel::Coreml) {
+            match load(&model, Accel::Coreml, dtw) {
                 Ok(loaded) => {
                     let _ = upgrade_tx.send(loaded);
                 }
@@ -250,13 +470,18 @@ fn serve(model: &Path) -> io::Result<()> {
         });
     }
 
+    let mut timing = TimingEngine::default();
     while let Some(Request::Decode(request)) = read_line::<Request>(&mut input)? {
         let pcm = read_samples(&mut input, request.samples)?;
         if let Ok(upgraded) = upgrade.try_recv() {
             // The Metal engine drops here, releasing its memory.
             engine = upgraded;
         }
-        let response = match decode(&mut engine, &request, &pcm) {
+        let result = match &request.timing {
+            Some(models) => decode_timed(&mut engine, &mut timing, models, &request, &pcm),
+            None => decode(&mut engine, &request, &pcm),
+        };
+        let response = match result {
             Ok(decoded) => Response::Decoded(decoded),
             Err(e) => Response::Failed(e),
         };
@@ -268,6 +493,55 @@ fn serve(model: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn words_round_trip_through_segments() {
+        let w = |text: &str, start: f64, segment: u32| WireWord {
+            text: text.into(),
+            start,
+            end: start + 0.2,
+            segment,
+        };
+        let words = vec![
+            w("Bonsoir", 1.0, 0),
+            w("et", 1.3, 0),
+            w("bienvenue.", 2.0, 3),
+        ];
+        let segments = segments_of(&words);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].text, "Bonsoir et");
+        assert!((segments[0].end_sec - 1.5).abs() < 1e-9);
+        let back = from_segments(segments);
+        assert_eq!(
+            back.iter().map(|w| w.segment).collect::<Vec<_>>(),
+            [0, 0, 1]
+        );
+        assert_eq!(back[2].text, "bienvenue.");
+    }
+
+    #[test]
+    fn dtw_presets_follow_the_model_family() {
+        assert!(matches!(
+            dtw_preset(Path::new("/m/ggml-large-v3-turbo-q5_0.bin")),
+            Some(DtwModelPreset::LargeV3Turbo)
+        ));
+        assert!(matches!(
+            dtw_preset(Path::new("/m/ggml-large-v3.bin")),
+            Some(DtwModelPreset::LargeV3)
+        ));
+        assert!(matches!(
+            dtw_preset(Path::new("/m/ggml-small-q8_0.bin")),
+            Some(DtwModelPreset::Small)
+        ));
+        assert!(dtw_preset(Path::new("/m/custom.bin")).is_none());
+    }
+
+    #[test]
+    fn dtw_times_win_when_present() {
+        assert_eq!(token_times(120, 160, 226), (2.26, 2.26));
+        assert_eq!(token_times(120, 300, 226), (2.26, 3.0));
+        assert_eq!(token_times(120, 160, -1), (1.2, 1.6));
+    }
 
     #[test]
     fn coreml_encoder_path_matches_whisper_cpp() {

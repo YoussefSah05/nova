@@ -186,6 +186,50 @@
       "licence": "CC-BY-4.0",
       "latency_class": "streaming",
       "est_resident_bytes": 700000000
+    },
+    {
+      "id": "mms-300m-forced-aligner",
+      "revision": "onnx-community/mms-300m-1130-forced-aligner-ONNX@2100fb247d8e43962eef24491597fbeb8b469531",
+      "capability": "alignment",
+      "backend": "onnx-ctc",
+      "relative_path": "align/mms-300m-forced-aligner",
+      "source": "https://huggingface.co/onnx-community/mms-300m-1130-forced-aligner-ONNX/resolve/2100fb247d8e43962eef24491597fbeb8b469531",
+      "probe": "files",
+      "files": [
+        {
+          "path": "vocab.json",
+          "sha256": "0ff83fc9d044537f7c72d92db15b04917f1e50cada799957963bca61e4305971",
+          "bytes": 351
+        },
+        {
+          "path": "onnx/model_uint8.onnx",
+          "sha256": "dc79e3bd48bffa9b4fb850d6195710d4eeb13e2fdf1f521eccbca512ab530254",
+          "bytes": 317341762
+        }
+      ],
+      "licence": "CC-BY-NC-4.0",
+      "non_commercial": true,
+      "latency_class": "streaming",
+      "est_resident_bytes": 450000000
+    },
+    {
+      "id": "silero-vad-v5",
+      "revision": "onnx-community/silero-vad@e71cae966052b992a7eca6b17738916ce0eca4ec",
+      "capability": "voice-activity",
+      "backend": "onnx-vad",
+      "relative_path": "vad/silero-vad-v5",
+      "source": "https://huggingface.co/onnx-community/silero-vad/resolve/e71cae966052b992a7eca6b17738916ce0eca4ec",
+      "probe": "files",
+      "files": [
+        {
+          "path": "onnx/model.onnx",
+          "sha256": "a4a068cd6cf1ea8355b84327595838ca748ec29a25bc91fc82e6c299ccdc5808",
+          "bytes": 2243022
+        }
+      ],
+      "licence": "MIT",
+      "latency_class": "streaming",
+      "est_resident_bytes": 20000000
     }
   ]
 }

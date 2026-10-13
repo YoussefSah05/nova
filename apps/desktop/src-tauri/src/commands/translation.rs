@@ -214,12 +214,37 @@ pub async fn download_translation_models(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), ApiError> {
+    install_capabilities(&app, &state, &[Capability::Translation], "Translation").await
+}
+
+/// Install the caption timing models: the CTC forced aligner and the voice
+/// activity detector the ASR worker runs around Whisper (ADR-0014).
+#[tauri::command]
+pub async fn download_caption_timing_models(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), ApiError> {
+    install_capabilities(
+        &app,
+        &state,
+        &[Capability::Alignment, Capability::VoiceActivity],
+        "Caption timing",
+    )
+    .await
+}
+
+async fn install_capabilities(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    capabilities: &[Capability],
+    label: &str,
+) -> Result<(), ApiError> {
     let manifest = bundled_manifest()
-        .map_err(|_| ApiError::Internal("Translation configuration unavailable".into()))?;
+        .map_err(|_| ApiError::Internal(format!("{label} configuration unavailable")))?;
     let root = internal_library()
         .map_err(|_| ApiError::Internal("Model library unavailable".into()))?
         .relative_root
-        .resolve(&super::transcription::app_data_dir(&app)?);
+        .resolve(&super::transcription::app_data_dir(app)?);
     // Only models that need work take the runtime lock: a verified model may
     // be leased by live captions, and one usable from an external library
     // needs no internal copy.
@@ -230,7 +255,7 @@ pub async fn download_translation_models(
     let entries: Vec<ManifestEntry> = manifest
         .models
         .iter()
-        .filter(|e| e.capability == Capability::Translation && e.source.is_some())
+        .filter(|e| capabilities.contains(&e.capability) && e.source.is_some())
         .filter(|e| !is_attested(&root.join(&e.relative_path), e))
         .filter(|e| {
             !external.iter().any(|m| {
@@ -286,7 +311,7 @@ pub async fn download_translation_models(
             })
             .await
             .map_err(super::models::runtime_api_error)?
-            .map_err(|e| ApiError::Internal(format!("Translation download stopped: {e}")))?;
+            .map_err(|e| ApiError::Internal(format!("{label} download stopped: {e}")))?;
     }
     Ok(())
 }

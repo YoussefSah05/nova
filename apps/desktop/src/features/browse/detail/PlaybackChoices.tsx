@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Headphones, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -11,6 +13,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { AudioTrackInfo } from "@/types";
 import type { PlaybackLaunchOptions } from "@/features/player/playbackLaunch";
+import { useCaptionPrepare, type CaptionPrepareTarget } from "@/features/player/useCaptionPrepare";
+import { useProfileSettings } from "@/features/settings/useProfileSettings";
 import type { useAudioTrackChoice } from "./useAudioTrackChoice";
 
 function trackLabel(track: AudioTrackInfo, tracks: AudioTrackInfo[]) {
@@ -79,19 +83,43 @@ export function AudioTrackPicker({
   );
 }
 
+/** Prepares captions for the title's Play target (see `useCaptionPrepare`). */
+function CaptionPrepare({
+  target,
+  audioTrack,
+  menuOpened,
+}: {
+  target: CaptionPrepareTarget;
+  audioTrack?: PlaybackLaunchOptions["audioTrack"];
+  menuOpened: boolean;
+}) {
+  const profile = useProfileSettings(target.profileId);
+  const captionsByDefault = profile.loaded && profile.settings.defaultCaptionMode !== "off";
+  const track =
+    audioTrack && audioTrack.mediaKind === target.mediaKind && audioTrack.mediaId === target.mediaId
+      ? { index: audioTrack.index, language: audioTrack.language }
+      : undefined;
+  useCaptionPrepare(target, track, menuOpened || captionsByDefault);
+  return null;
+}
+
 export function PlayWithCaptions({
   label = "Play",
   onPlay,
   audioTrack,
   disabled = false,
   size = "default",
+  prepare,
 }: {
   label?: string;
   onPlay: (options: PlaybackLaunchOptions) => void;
   audioTrack?: PlaybackLaunchOptions["audioTrack"];
   disabled?: boolean;
   size?: "default" | "lg" | "sm";
+  /** The media Play will open: lets captions start before playback does. */
+  prepare?: CaptionPrepareTarget | null;
 }) {
+  const [menuOpened, setMenuOpened] = useState(false);
   const start = (
     captionMode: "off" | "source" | "translation",
     translationTarget?: "en" | "fr" | "ar"
@@ -103,6 +131,9 @@ export function PlayWithCaptions({
     });
   return (
     <div className="inline-flex items-center">
+      {prepare && (
+        <CaptionPrepare target={prepare} audioTrack={audioTrack} menuOpened={menuOpened} />
+      )}
       <Button
         size={size}
         disabled={disabled}
@@ -111,7 +142,16 @@ export function PlayWithCaptions({
       >
         <Play className="h-4 w-4 fill-current" strokeWidth={1.5} aria-hidden /> {label}
       </Button>
-      <DropdownMenu>
+      <DropdownMenu
+        onOpenChange={(open) => {
+          if (!open) return;
+          setMenuOpened(true);
+          // Start the speech model while the user picks a caption option.
+          void Promise.resolve()
+            .then(() => invoke("prewarm_captions"))
+            .catch(() => undefined);
+        }}
+      >
         <DropdownMenuTrigger asChild>
           <Button
             size={size}

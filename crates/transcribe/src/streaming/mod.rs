@@ -24,8 +24,9 @@ use nova_core::intelligence::{
 };
 
 pub use client::{BufferDecoder, WhisperWorker, WorkerError, WorkerSpec};
-pub use protocol::Accel;
+pub use protocol::{Accel, DecodeRequest, Decoded, TimingModels, TimingReport};
 pub use session::StreamingSession;
+pub use worker::segments_of;
 
 /// The local whisper.cpp speech engine: one resident worker, any number of
 /// sessions (decodes are serialized per model).
@@ -44,6 +45,16 @@ impl WhisperStreamingEngine {
     /// The encoder the latest decode ran on (Metal until Core ML is ready).
     pub fn accel(&self) -> Option<Accel> {
         self.worker.accel()
+    }
+
+    /// One decode on the resident worker (blocking). A worker that dies or
+    /// hangs is replaced on the next call; this call fails.
+    pub fn decode(
+        &self,
+        request: &protocol::DecodeRequest,
+        pcm: &[f32],
+    ) -> Result<protocol::Decoded, EngineError> {
+        self.worker.decode(request, pcm)
     }
 
     /// Stop the worker process for good (model unloaded or evicted).

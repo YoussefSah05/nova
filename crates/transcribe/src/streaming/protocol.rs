@@ -12,8 +12,13 @@
 //! worker → app   {"decoded":{"words":[…],"language":"fr","accel":"coreml","decode_ms":310}}
 //!            or  {"failed":"…"}
 //! ```
+//!
+//! A request may name caption timing models (`timing`); the worker then runs
+//! voice activity detection before Whisper and forced alignment after it,
+//! and reports what they did in `decoded.timing`.
 
 use std::io::{self, BufRead, Read, Write};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +44,41 @@ pub struct DecodeRequest {
     pub prompt: String,
     /// ISO 639-1 code, or None to detect.
     pub language: Option<String>,
+    /// Caption-sized segments: at most this many characters, split at word
+    /// boundaries. 0 keeps whisper's own segmentation (live captions).
+    #[serde(default)]
+    pub max_len: u32,
+    /// Caption timing models to apply to this decode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<TimingModels>,
+}
+
+/// Model directories of the caption timing stage. The worker loads each on
+/// first use and keeps it for later requests naming the same directory.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimingModels {
+    /// The CTC forced aligner (`nova_align::Aligner`).
+    #[serde(default)]
+    pub aligner: Option<PathBuf>,
+    /// The voice activity detector (`nova_align::SpeechDetector`).
+    #[serde(default)]
+    pub vad: Option<PathBuf>,
+}
+
+/// What the timing stage did for one decode.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TimingReport {
+    /// Seconds of detected speech in the buffer (None without a VAD).
+    pub speech_sec: Option<f64>,
+    /// Whisper was skipped: the VAD heard no speech at all.
+    pub skipped_silence: bool,
+    pub aligned_words: usize,
+    pub interpolated_words: usize,
+    pub dropped_segments: usize,
+    pub timing_ms: u64,
+    /// A timing model that failed to load or run; the decode kept Whisper's
+    /// own times.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,6 +86,9 @@ pub struct WireWord {
     pub text: String,
     pub start: f64,
     pub end: f64,
+    /// Index of the whisper segment the word belongs to, within its decode.
+    #[serde(default)]
+    pub segment: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -55,6 +98,8 @@ pub struct Decoded {
     pub language: Option<String>,
     pub accel: Accel,
     pub decode_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<TimingReport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,6 +182,11 @@ mod tests {
             offset_sec: 1.5,
             prompt: "مرحبا".into(),
             language: Some("ar".into()),
+            max_len: 60,
+            timing: Some(TimingModels {
+                aligner: Some("/models/align".into()),
+                vad: None,
+            }),
         };
         let mut wire = Vec::new();
         write_decode(&mut wire, &request, &[0.25, -1.0, 0.5]).unwrap();
@@ -159,6 +209,8 @@ mod tests {
             offset_sec: 0.0,
             prompt: String::new(),
             language: None,
+            max_len: 0,
+            timing: None,
         };
         assert!(write_decode(&mut Vec::new(), &request, &[0.0]).is_err());
         assert!(read_samples(&mut io::Cursor::new(Vec::new()), MAX_REQUEST_SAMPLES + 1).is_err());

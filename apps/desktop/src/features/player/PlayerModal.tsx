@@ -435,10 +435,16 @@ export function PlayerModal({
   useEffect(() => {
     if (!profileSettings.loaded || defaultCaptionApplied.current) return;
     defaultCaptionApplied.current = true;
-    if (media.kind !== "live")
-      setCaptionMode(
-        initialCaptionMode(launchOptions, profileSettings.settings.defaultCaptionMode)
-      );
+    if (media.kind !== "live") {
+      const mode = initialCaptionMode(launchOptions, profileSettings.settings.defaultCaptionMode);
+      setCaptionMode(mode);
+      // Captions start only after the audio track and resume seek are
+      // confirmed; start the speech model meanwhile.
+      if (mode !== "off")
+        void Promise.resolve()
+          .then(() => invoke("prewarm_captions"))
+          .catch(() => undefined);
+    }
   }, [
     profileSettings.loaded,
     profileSettings.settings.defaultCaptionMode,

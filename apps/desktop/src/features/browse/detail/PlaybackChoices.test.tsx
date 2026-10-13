@@ -48,7 +48,13 @@ it("lists only recorded EN audio while FR and AR remain translation targets", as
     translationTarget: "ar",
     audioTrack: { mediaKind: "vod", mediaId: 1, index: 0, language: "en" },
   });
-  expect(invoke.mock.calls.every(([command]) => command === "get_audio_languages")).toBe(true);
+  // Opening the menu only warms the speech model; nothing is written.
+  expect(invoke).toHaveBeenCalledWith("prewarm_captions");
+  expect(
+    invoke.mock.calls.every(([command]) =>
+      ["get_audio_languages", "prewarm_captions"].includes(command)
+    )
+  ).toBe(true);
 });
 
 it("distinguishes duplicate languages and untagged tracks", async () => {

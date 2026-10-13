@@ -258,8 +258,10 @@ fn effective_model<'a>(
     use nova_core::models::ModelAvailability;
     let usable = |model: &RegisteredModel| {
         model.availability == ModelAvailability::Available
-            || (model.descriptor.capability == "translation"
-                && model.availability == ModelAvailability::Unverified)
+            || (matches!(
+                model.descriptor.capability.as_str(),
+                "translation" | "alignment" | "voice-activity"
+            ) && model.availability == ModelAvailability::Unverified)
     };
     if usable(internal) {
         return internal;

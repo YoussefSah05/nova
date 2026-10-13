@@ -113,6 +113,44 @@ pub async fn decoded_wav_duration(path: &Path) -> Result<f64, AudioError> {
     Err(AudioError::InvalidAudio)
 }
 
+/// The samples of a 16 kHz mono 16-bit WAV written by [`extract_audio_window`],
+/// as f32 in [-1, 1): the input format of the resident ASR worker.
+pub async fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>, AudioError> {
+    let bytes = tokio::fs::read(path).await?;
+    pcm_samples(&bytes).ok_or(AudioError::InvalidAudio)
+}
+
+fn pcm_samples(bytes: &[u8]) -> Option<Vec<f32>> {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut at = 12usize;
+    let mut valid_format = false;
+    while at + 8 <= bytes.len() {
+        let id = &bytes[at..at + 4];
+        let size = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().ok()?) as usize;
+        let body = bytes.get(at + 8..at + 8 + size)?;
+        if id == b"fmt " {
+            valid_format = body.len() >= 16
+                && u16::from_le_bytes([body[0], body[1]]) == 1
+                && u16::from_le_bytes([body[2], body[3]]) == 1
+                && u32::from_le_bytes([body[4], body[5], body[6], body[7]]) == 16_000
+                && u16::from_le_bytes([body[14], body[15]]) == 16;
+        } else if id == b"data" {
+            if !valid_format || !size.is_multiple_of(2) {
+                return None;
+            }
+            return Some(
+                body.chunks_exact(2)
+                    .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32_768.0)
+                    .collect(),
+            );
+        }
+        at += 8 + size + size % 2;
+    }
+    None
+}
+
 /// Build the ffmpeg arguments (after the common base flags) for a windowed
 /// extraction. Pure so the `-ss`/`-t`/`-map` wiring is unit-testable without
 /// spawning ffmpeg.
@@ -221,6 +259,18 @@ mod tests {
             wav.extend_from_slice(&sample.to_le_bytes());
         }
         wav
+    }
+
+    #[tokio::test]
+    async fn pcm_is_read_back_as_normalized_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("w.wav");
+        tokio::fs::write(&path, wav_bytes(&[0, 16_384, -32_768]))
+            .await
+            .unwrap();
+        assert_eq!(read_wav_16k_mono(&path).await.unwrap(), [0.0, 0.5, -1.0]);
+        tokio::fs::write(&path, b"RIFF\0\0\0\0WAVE").await.unwrap();
+        assert!(read_wav_16k_mono(&path).await.is_err());
     }
 
     #[tokio::test]
