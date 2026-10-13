@@ -7,6 +7,26 @@ afterEach(cleanup);
 const source = [{ segmentId: 1, start: 0, end: 2, text: "Hello" }];
 const translated = [{ segmentId: 1, start: 0, end: 2, text: "مرحبا" }];
 
+describe("source caption overlay", () => {
+  it("shows the newest line when a padded line is still on screen", () => {
+    render(
+      <CaptionOverlay
+        mode="source"
+        sourceCues={[
+          { segmentId: 1, start: 131.4, end: 132.8, text: "I heard you guys talking last night." },
+          { segmentId: 2, start: 132.6, end: 137.6, text: "Not my fault, you know?" },
+        ]}
+        translatedCues={[]}
+        targetLang="fr"
+        currentTime={132.7}
+        captionStyle={DEFAULT_CAPTION_STYLE}
+      />
+    );
+    expect(screen.getByText("Not my fault, you know?")).toBeInTheDocument();
+    expect(screen.queryByText("I heard you guys talking last night.")).not.toBeInTheDocument();
+  });
+});
+
 describe("translated caption overlay", () => {
   it("keeps accessibility appearance choices in translated and dual captions", () => {
     render(

@@ -130,8 +130,11 @@ function CaptionLine({
 function activeCue(cues: Cue[], t: number): Cue | undefined {
   // Linear scan is fine - caption arrays are bounded by the 30s rolling
   // window for live, and full transcript reads are batched by Phase 6.
+  // Cues are padded for reading time, so the previous line may still be up
+  // when the next one starts: the line that started last wins.
+  let active: Cue | undefined;
   for (const c of cues) {
-    if (t >= c.start && t < c.end) return c;
+    if (t >= c.start && t < c.end && (!active || c.start >= active.start)) active = c;
   }
-  return undefined;
+  return active;
 }
