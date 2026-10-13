@@ -72,7 +72,8 @@ The first run of the speech model used to block on macOS compiling it for the Ne
 3. **Captions are prepared before you press Play.** If your profile starts with captions on (or
    you open the playback menu), Nova transcribes the first 45 seconds from your resume point while
    you read the title page. The player then takes over that work instead of starting again.
-4. **The first window is short** (11 s of audio instead of 30 s).
+4. **The first window is short** (8 s of new audio, plus 3 s of context after a seek, instead
+   of 30 s).
 
 Measured on a never-compiled model: first caption at **2.1 s** instead of 32.1 s.
 

@@ -101,7 +101,13 @@ const PROMPT_TAIL_WORDS: usize = 12;
 #[derive(Default)]
 pub struct CaptionSessionManager {
     active: Mutex<Option<Arc<SessionHandle>>>,
+    /// Prepares cancelled before they arrived (the two calls can cross), so a
+    /// late `prepare` for a closed page does not start.
+    cancelled_prepares: std::sync::Mutex<std::collections::VecDeque<String>>,
 }
+
+/// How many crossed cancellations are remembered.
+const CANCELLED_PREPARES_KEPT: usize = 16;
 
 /// The session id caption events carry. Adoption switches it, so a prepared
 /// session's later windows reach the player that took it over.
@@ -137,6 +143,12 @@ struct SessionHandle {
     horizon_cs: AtomicU64,
     /// The confirmed speech language, for replaying cues on adoption.
     language: std::sync::Mutex<String>,
+    /// The session loop has exited (complete, failed, or nothing to do):
+    /// nothing may adopt it.
+    finished: AtomicBool,
+    /// Media duration in centiseconds once known ([`NO_HORIZON`] until then):
+    /// a title page may not know it, the player that adopts the session does.
+    duration_cs: AtomicU64,
 }
 
 impl SessionHandle {
@@ -160,7 +172,29 @@ impl SessionHandle {
                 NO_HORIZON
             }),
             language: std::sync::Mutex::new(String::new()),
+            finished: AtomicBool::new(false),
+            duration_cs: AtomicU64::new(duration_cs(ctx.duration_sec)),
         }
+    }
+
+    /// The media duration, when a caller has supplied one.
+    fn duration(&self) -> Option<f64> {
+        match self.duration_cs.load(Ordering::SeqCst) {
+            NO_HORIZON => None,
+            cs => Some(cs as f64 / 100.0),
+        }
+    }
+
+    /// Whether a new caller may take this prepared session over.
+    fn adoptable_by(&self, ctx: &StartCtx) -> bool {
+        self.live_prepare() && self.same_media(ctx)
+    }
+
+    /// A prepared session that is still running and unclaimed.
+    fn live_prepare(&self) -> bool {
+        self.preparing.load(Ordering::SeqCst)
+            && !self.cancel.load(Ordering::SeqCst)
+            && !self.finished.load(Ordering::SeqCst)
     }
 
     fn same_media(&self, ctx: &StartCtx) -> bool {
@@ -171,9 +205,14 @@ impl SessionHandle {
     }
 
     /// Hand the session to the player session `session_id`, which plays
-    /// from `from_sec`: its events, priority and range become the player's.
-    fn adopt_by(&self, session_id: &str, from_sec: f64) {
+    /// from `from_sec`: its events, priority, range and the duration it knows
+    /// become the session's.
+    fn adopt_by(&self, session_id: &str, from_sec: f64, duration_sec: Option<f64>) {
         self.ident.set(session_id);
+        if duration_cs(duration_sec) != NO_HORIZON {
+            self.duration_cs
+                .store(duration_cs(duration_sec), Ordering::SeqCst);
+        }
         self.playhead_cs
             .store((from_sec.max(0.0) * 100.0) as u64, Ordering::SeqCst);
         self.horizon_cs.store(NO_HORIZON, Ordering::SeqCst);
@@ -231,11 +270,7 @@ impl CaptionSessionManager {
         ctx.ident.set(&ctx.session_id);
         let handle = {
             let mut guard = self.active.lock().await;
-            if let Some(prev) = guard.as_ref().filter(|h| {
-                h.preparing.load(Ordering::SeqCst)
-                    && !h.cancel.load(Ordering::SeqCst)
-                    && h.same_media(&ctx)
-            }) {
+            if let Some(prev) = guard.as_ref().filter(|h| h.adoptable_by(&ctx)) {
                 let prev = Arc::clone(prev);
                 drop(guard);
                 adopt(&prev, &ctx).await;
@@ -258,9 +293,12 @@ impl CaptionSessionManager {
         ctx.ident.set(&ctx.session_id);
         let handle = {
             let mut guard = self.active.lock().await;
+            if self.take_cancelled(&ctx.session_id) {
+                return;
+            }
             match guard.as_ref() {
                 Some(h) if !h.preparing.load(Ordering::SeqCst) => return,
-                Some(h) if h.same_media(&ctx) && !h.cancel.load(Ordering::SeqCst) => return,
+                Some(h) if h.adoptable_by(&ctx) => return,
                 _ => {}
             }
             if let Some(prev) = guard.take() {
@@ -283,6 +321,31 @@ impl CaptionSessionManager {
             if let Some(h) = guard.take() {
                 h.halt();
             }
+        } else if guard.as_ref().is_none_or(|h| h.ident.get() != session_id) {
+            // Not started yet (or already replaced): remember it, so the
+            // prepare that is still on its way does not start.
+            let mut cancelled = self
+                .cancelled_prepares
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if cancelled.len() == CANCELLED_PREPARES_KEPT {
+                cancelled.pop_front();
+            }
+            cancelled.push_back(session_id.to_string());
+        }
+    }
+
+    fn take_cancelled(&self, session_id: &str) -> bool {
+        let mut cancelled = self
+            .cancelled_prepares
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        match cancelled.iter().position(|id| id == session_id) {
+            Some(i) => {
+                cancelled.remove(i);
+                true
+            }
+            None => false,
         }
     }
 
@@ -385,7 +448,9 @@ struct ModelDownloadEvent {
 // ── The session loop ──────────────────────────────────────────────────────────
 
 async fn run_session(ctx: StartCtx, handle: Arc<SessionHandle>) {
-    if let Err(e) = run_session_inner(&ctx, &handle).await {
+    let result = run_session_inner(&ctx, &handle).await;
+    handle.finished.store(true, Ordering::SeqCst);
+    if let Err(e) = result {
         if !handle.cancel.load(Ordering::SeqCst) {
             tracing::warn!(error = %e, "caption session failed");
             emit_status(&ctx, "failed", None, Some(e));
@@ -393,11 +458,17 @@ async fn run_session(ctx: StartCtx, handle: Arc<SessionHandle>) {
     }
 }
 
+fn duration_cs(duration_sec: Option<f64>) -> u64 {
+    duration_sec
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .map_or(NO_HORIZON, |d| (d * 100.0) as u64)
+}
+
 /// Hand a prepared session to the player that asked for the same media: it
 /// keeps its coverage and in-flight window, and its cues so far are replayed
 /// under the player's session id.
 async fn adopt(handle: &SessionHandle, ctx: &StartCtx) {
-    handle.adopt_by(&ctx.session_id, ctx.from_sec);
+    handle.adopt_by(&ctx.session_id, ctx.from_sec, ctx.duration_sec);
     let id = handle.transcript_id.load(Ordering::SeqCst);
     if id > 0 {
         let language = handle
@@ -547,6 +618,13 @@ async fn run_session_inner(ctx: &StartCtx, handle: &SessionHandle) -> Result<(),
             return Ok(());
         }
         let playhead = playhead_cs.load(Ordering::SeqCst) as f64 / 100.0;
+        // A player that adopted a prepared session may know the duration
+        // the title page did not.
+        if !duration.is_finite() {
+            if let Some(known) = handle.duration() {
+                duration = known;
+            }
+        }
         let horizon = match handle.horizon_cs.load(Ordering::SeqCst) {
             NO_HORIZON => f64::INFINITY,
             cs => cs as f64 / 100.0,
@@ -819,6 +897,10 @@ async fn run_session_inner(ctx: &StartCtx, handle: &SessionHandle) -> Result<(),
         }
 
         if !keep.is_empty() {
+            // Coverage and stitching above work on where speech ends; the
+            // stored cues also get time to be read.
+            let mut keep = keep;
+            nova_align::pad_for_reading(&mut keep);
             let id = transcript_id.expect("confirmed speech has a transcript");
             let ids = repo
                 .append_segments(id, &keep)
@@ -1400,6 +1482,8 @@ mod tests {
             preparing: AtomicBool::new(preparing),
             horizon_cs: AtomicU64::new(if preparing { 10_500 } else { NO_HORIZON }),
             language: std::sync::Mutex::new(String::new()),
+            finished: AtomicBool::new(false),
+            duration_cs: AtomicU64::new(NO_HORIZON),
         }
     }
 
@@ -1410,7 +1494,9 @@ mod tests {
         assert_eq!(prepared.class(), WorkClass::Interactive);
         *manager.active.lock().await = Some(Arc::clone(&prepared));
 
-        prepared.adopt_by("player", 61.5);
+        assert_eq!(prepared.duration(), None);
+        prepared.adopt_by("player", 61.5, Some(734.08));
+        assert_eq!(prepared.duration(), Some(734.08));
         assert_eq!(prepared.ident.get(), "player");
         assert_eq!(prepared.class(), WorkClass::Realtime);
         assert_eq!(prepared.horizon_cs.load(Ordering::SeqCst), NO_HORIZON);
@@ -1425,6 +1511,38 @@ mod tests {
         manager.cancel_prepare("player").await;
         assert!(!prepared.cancel.load(Ordering::SeqCst));
         assert!(manager.active.lock().await.is_some());
+    }
+
+    #[test]
+    fn a_prepared_session_that_already_exited_cannot_be_adopted() {
+        let prepared = handle("page", 7, true);
+        assert!(prepared.live_prepare());
+        // e.g. the Whisper model was missing: the loop returned at once.
+        prepared.finished.store(true, Ordering::SeqCst);
+        assert!(!prepared.live_prepare());
+        let halted = handle("page", 7, true);
+        halted.halt();
+        assert!(!halted.live_prepare());
+    }
+
+    #[tokio::test]
+    async fn a_cancel_that_overtakes_its_prepare_is_remembered() {
+        let manager = CaptionSessionManager::new();
+        manager.cancel_prepare("page").await;
+        assert!(
+            manager.take_cancelled("page"),
+            "the late prepare is refused"
+        );
+        assert!(!manager.take_cancelled("page"), "once");
+        // A player session that adopted the id is not a pending prepare.
+        *manager.active.lock().await = Some(Arc::new(handle("player", 7, false)));
+        manager.cancel_prepare("player").await;
+        assert!(!manager.take_cancelled("player"));
+        for i in 0..40 {
+            manager.cancel_prepare(&format!("p{i}")).await;
+        }
+        assert!(!manager.take_cancelled("p0"), "bounded memory");
+        assert!(manager.take_cancelled("p39"));
     }
 
     #[tokio::test]

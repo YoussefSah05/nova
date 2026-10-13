@@ -78,7 +78,14 @@ fn arabic(c: char) -> Option<&'static str> {
 /// Latin-letter romanization of `word`, lowercase, accents removed.
 pub fn romanize(word: &str) -> String {
     let mut out = String::with_capacity(word.len());
-    for c in word.nfkd() {
+    // Arabic letters are looked up whole: decomposition would split the
+    // hamza off أ, إ, ؤ and ئ and lose their romanization.
+    for c in word.chars().flat_map(|c| {
+        let whole = arabic(c).map(|_| c);
+        whole
+            .into_iter()
+            .chain(whole.is_none().then(|| c.nfkd()).into_iter().flatten())
+    }) {
         if let Some(latin) = arabic(c) {
             out.push_str(latin);
             continue;
@@ -132,6 +139,11 @@ mod tests {
         // Vocalized text keeps its short vowels; shadda and tatweel vanish.
         assert_eq!(romanize("مُسماة"), "musmat");
         assert_eq!(romanize("ـمـ"), "m");
+        // Hamza-bearing letters keep their own romanization.
+        assert_eq!(romanize("إلى"), "ila");
+        assert_eq!(romanize("أنا"), "ana");
+        assert_eq!(romanize("سؤال"), "s'al");
+        assert_eq!(romanize("قائمة"), "qa'mt");
     }
 
     #[test]

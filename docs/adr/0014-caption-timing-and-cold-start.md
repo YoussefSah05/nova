@@ -81,7 +81,7 @@ Two problems with source captions on movies and episodes:
 - **Windows are 27 s of new audio + 3 s of lead-in = 30 s**, Whisper's native context. The old
   33 s windows made whisper.cpp decode a second 3 s chunk, which is slow and prone to invented
   text.
-- **The first window after a start is 8 s of new audio** (11 s with the lead-in), so the first
+- **The first window after a start is 8 s of new audio** (11 s with the lead-in after a seek), so the first
   caption waits for less audio to download and decode.
 - **Warm-up on intent** (`prewarm_captions`): opening a title's playback menu, or the player
   opening with captions on. The player's caption session itself waits for the audio-track and

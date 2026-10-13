@@ -3082,6 +3082,7 @@ dependencies = [
  "block2",
  "dirs 5.0.1",
  "flate2",
+ "nova-align",
  "nova-artwork",
  "nova-core",
  "nova-enrich",

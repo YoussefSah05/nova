@@ -115,7 +115,7 @@ Release build, a separate *Demo* profile whose only playlist is three Blender op
   window's first cue started, and the overlay showed the first active cue, hiding the new line's
   start. It now shows the cue that started last.
 
-After these fixes, a second run on *Tears of Steel* (release build) showed captions on every
+After the first fix, a second run on *Tears of Steel* (release build) showed captions on every
 sampled dialogue frame, prepared before Play (first window done 3 s after the menu opened,
 adopted with its cues), then French "Source + translation" ("I heard you guys talking last
 night." / "Je vous ai entendu parler hier soir."), dialogue search with a jump to the matching
@@ -123,6 +123,11 @@ line, and Arabic right-to-left captions. That run is the
 [recorded demo](../assets/demo/nova-intelligence-demo.mp4). It also shows a translation limit:
 for "Are you ready? Of course you're ready. You're a rockstar." Opus-MT returned only
 "Vous êtes prêt ?".
+
+That run predates two later corrections, so the recording shows cues without reading-time
+padding: an independent review then found that the padding was computed in the worker but lost
+on the way to the session (it is now applied to the stored cues, after stitching), and the
+overlapping-cue fix above landed after the recording too.
 
 Not caused by this work, noted for follow-up: in Settings, "Remove source" (and four other
 actions) use `window.confirm`, which returns false in the macOS WebView without showing a dialog,

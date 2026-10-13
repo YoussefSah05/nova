@@ -171,7 +171,9 @@ pub fn refine(
     // word proves nothing; the VAD is the independent witness.)
     if let Some(speech) = speech {
         let before = segments.len();
-        let aligned = emissions.is_some();
+        // Only an alignment that placed something moved segment bounds onto
+        // the audio; otherwise they are still Whisper's and get slack.
+        let aligned = confident.iter().flatten().any(|&c| c);
         let mut confident = confident.into_iter();
         segments.retain(|s| {
             let confident = confident.next().unwrap_or_default();
@@ -197,14 +199,17 @@ pub fn refine(
             prev.end_sec = next_start.max(prev.start_sec);
         }
     }
-    pad_for_reading(segments);
     report
 }
 
 /// Give each cue time to be read. Word times stay exact; only a segment's
 /// display end grows, to at least [`MIN_CUE_SEC`] after its start and
 /// [`CUE_LINGER_SEC`] after its last word, never into the next cue.
-fn pad_for_reading(segments: &mut [TranscriptSegment]) {
+///
+/// Apply it to the cues that are kept for display, after any decision that
+/// depends on where speech ends (window coverage, stitching): padded ends are
+/// not speech.
+pub fn pad_for_reading(segments: &mut [TranscriptSegment]) {
     for i in 0..segments.len() {
         let limit = segments
             .get(i + 1)
@@ -434,8 +439,8 @@ mod tests {
         assert!((segs[0].start_sec - 11.0).abs() < 1e-6);
         assert!((w[1].end_sec - 11.46).abs() < 1e-6);
         assert!(
-            (segs[0].end_sec - 12.0).abs() < 1e-6,
-            "shown for at least a second"
+            (segs[0].end_sec - 11.46).abs() < 1e-6,
+            "refine keeps speech bounds"
         );
     }
 
@@ -496,7 +501,7 @@ mod tests {
             segment(26.43, 28.64, vec![word(26.43, 28.64, "Emo?")]),
             segment(28.70, 30.92, vec![word(28.70, 30.92, "Watch out!")]),
         ];
-        refine(&mut segs, 0.0, None, None);
+        pad_for_reading(&mut segs);
         assert!((segs[0].end_sec - 26.13).abs() < 1e-9, "one second minimum");
         assert!(
             (segs[1].end_sec - 28.64).abs() < 1e-9,
@@ -507,6 +512,17 @@ mod tests {
             "lingers after the last word"
         );
         assert!((segs[0].words.as_ref().unwrap()[0].end_sec - 25.31).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_line_the_aligner_cannot_read_keeps_the_slack() {
+        // Cyrillic has no tokens in the aligner's vocabulary, so nothing is
+        // placed and Whisper's (late) bounds are judged with slack.
+        let e = emissions(100, &[]);
+        let speech = [(1.25, 1.6)];
+        let mut segs = vec![segment(1.0, 1.2, vec![word(1.0, 1.2, "привет")])];
+        let report = refine(&mut segs, 0.0, Some(&speech), Some(&e));
+        assert_eq!(report.dropped_segments, 0);
     }
 
     #[test]

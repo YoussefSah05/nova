@@ -30,7 +30,14 @@ Source captions now decode on the resident ASR worker with a timing stage around
 - Real-app validation on Blender open movies found and fixed three caption display bugs (events
   lost after adoption, cues too short to read, overlapping cues hiding a new line); recorded in
   the evaluation, along with a [2½-minute demo](assets/demo/nova-intelligence-demo.mp4) of the run.
-- `just lint`, `just typecheck` and `just test` pass (792 Rust tests, 246 frontend tests).
+- An independent review found six defects, all fixed with regression tests: reading-time padding
+  was lost between the worker and the session (now applied to stored cues after stitching); a
+  player could adopt a prepared session that had already exited; an adopted session never learnt
+  the media duration; the speech-detection drop rule lost its slack when nothing aligned (all
+  non-Latin, non-Arabic scripts); hamza letters were romanized after decomposition; a cancel
+  could overtake its prepare. Not changed: a worker window that fails three times fails the
+  session rather than falling back to `whisper-cli` (no failure observed on Apple Silicon).
+- `just lint`, `just typecheck` and `just test` pass (795 Rust tests, 246 frontend tests).
 - Follow-ups: `window.confirm` does nothing in the macOS WebView (Remove source and four other
   Settings actions); profile deletion has no confirmation; live captions do not use the timing
   stage yet.

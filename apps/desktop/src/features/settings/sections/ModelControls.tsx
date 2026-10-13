@@ -97,7 +97,7 @@ export function ModelControls() {
         <p className="pb-3 text-xs leading-relaxed text-muted-foreground">
           Whisper stays loaded in a separate speech process, starting on the GPU while the Neural
           Engine version compiles in the background, so the first caption no longer waits for that
-          compile. The first audio window is short (about 11 seconds) and later ones are 30 seconds.
+          compile. The first audio window is short (8 to 11 seconds) and later ones are 30 seconds.
           Opening a title whose profile starts with captions on, or opening its playback menu,
           prepares the opening before you press Play. The CC menu shows the current stage. Saved
           captions appear immediately.

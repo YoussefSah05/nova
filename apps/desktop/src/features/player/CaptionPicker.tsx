@@ -112,9 +112,9 @@ export function CaptionPicker({
               </p>
             )}
             <p className="mb-3 text-xs leading-relaxed text-white/55">
-              The first caption needs about 11 seconds of audio; later windows are 30 seconds and
-              run ahead of playback. Translations follow. Model status and enable/disable controls
-              are in Settings → Models.
+              The first caption needs 8 to 11 seconds of audio; later windows are 30 seconds and run
+              ahead of playback. Translations follow. Model status and enable/disable controls are
+              in Settings → Models.
             </p>
             <p className="text-xs text-primary">Translate to · on this Mac</p>
             <div role="group" aria-label="Translation target" className="mt-2 flex gap-1">
