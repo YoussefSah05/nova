@@ -5,8 +5,9 @@ on the shell `PATH`, so GUI launches find Homebrew installs.
 
 ## Audio for speech recognition
 
-Whisper needs 16 kHz mono signed 16-bit PCM. Nova drives `whisper-cli`, which reads a file, so
-audio is extracted to a temporary WAV:
+Whisper needs 16 kHz mono signed 16-bit PCM. Audio is extracted to a temporary WAV, which the
+caption session reads back as samples for the resident ASR worker (or hands to the
+`whisper-cli` fallback as a file):
 
 ```bash
 ffmpeg -hide_banner -loglevel error \
@@ -15,7 +16,8 @@ ffmpeg -hide_banner -loglevel error \
   -vn -ac 1 -ar 16000 -c:a pcm_s16le -f wav -y <out.wav>
 ```
 
-- Windows of 30 seconds (with overlap) are extracted around the playhead.
+- Windows are 27 seconds of new audio plus a 3-second lead-in (30 s, Whisper's context) around
+  the playhead; the first window after a start is 8 seconds of new audio.
 - The reconnect options are rejected for local files, so they are added only for network inputs.
 - `-y` is safe because the caller owns the temporary path, and deletes it afterwards.
 - FFmpeg's stderr can contain authenticated URLs, so it is never surfaced; errors are generic.

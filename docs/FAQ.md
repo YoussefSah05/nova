@@ -34,10 +34,20 @@ Yes, on ProMotion displays, with **Settings → Appearance → High refresh rate
 WebKit apps are capped at 60 fps unless they opt out; Nova does. Video always plays at its own
 frame rate.
 
-### Why are captions slow to start?
+### How quickly do captions start?
 
-The first window of a session prepares the speech model for your Mac, which can take tens of
-seconds the first time. After that, each 30-second window is recognised in a couple of seconds.
+Usually within a few seconds, often before the film itself. The speech model stays loaded in a
+background process and decodes on the GPU while macOS prepares its Neural Engine version, so
+even the very first run does not wait for that (measured: 2.1 s instead of 32 s). Opening a
+title's playback menu, or opening a title when your profile starts captions on, transcribes the
+opening before you press Play. Later 30-second windows are recognised ahead of playback.
+
+### How accurate is caption timing?
+
+With the optional **Caption timing** models (Settings → Models), every word is aligned to the
+audio by a character-level model: on a reference benchmark, word starts landed 50 ms from the
+true timing on average, against 398 ms for Whisper's own timestamps. A speech detector also
+keeps captions off music and silence. Without these models, captions use Whisper's timing.
 
 ### Which caption languages are supported?
 

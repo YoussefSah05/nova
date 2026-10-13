@@ -11,13 +11,16 @@ what is verified are in the [implementation status](nova-implementation-status.m
 - Live channel families and variants, programme guide, variant health and memory
 - Native playback (libmpv) with resume, autoplay, recovery, AirPlay and picture-in-picture
 - On-device captions (Whisper) and translated captions (Opus-MT, EN · FR · AR)
+- Word-accurate caption timing (Silero VAD + MMS forced alignment) and captions prepared
+  before Play, with no cold-start wait
 - Hybrid exact + semantic search; dialogue search within a title
 - Model manager with verified downloads and external model folders
 - 120 Hz interface on ProMotion displays
 
 ## Next
 
-- **Live captions:** capture audio from the live player into the resident speech engine
+- **Live captions:** capture audio from the live player into the resident speech engine,
+  with the same timing stage as films
 - **Ask Nova (⌘K assistant):** typed, validated intents ("French films from the 90s",
   "resume my show")
 - **About this title:** short summaries from a local LLM

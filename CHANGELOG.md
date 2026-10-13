@@ -2,6 +2,23 @@
 
 ## 0.2.0-alpha.0 — in development
 
+- Word-accurate captions: a new caption timing stage runs around Whisper in the ASR worker.
+  Silero voice detection skips windows without speech and drops invented lines; an MMS-300M
+  forced aligner places every word on the audio (English, French and Arabic through one model).
+  Mean word-start error falls from 398 ms to 50 ms on 779 reference words. Install it from
+  Settings → Models → Caption timing (~320 MB, pinned and checksum-verified).
+- Captions without the cold-start wait: films and episodes now decode on the resident speech
+  worker instead of starting `whisper-cli` for every window. The worker starts on the GPU while
+  the Neural Engine model compiles, warms up when the playback menu opens, and the first window
+  is short. Opening a title's playback menu, or a title when captions are on by default,
+  transcribes its opening before Play, and the player takes that work over. First caption on a
+  cold start: 32.1 s → 2.1 s.
+- Fix word timing never using DTW: whisper.cpp 1.8's default flash attention disabled it.
+- Keep captions on screen long enough to read (at least 1 s, and 0.4 s after the last word),
+  and show the newest line when two overlap.
+- Add ADR 0014, a caption timing evaluation with reproducible harnesses, and a recorded demo
+  of the intelligence features on *Tears of Steel* (CC BY 3.0, Blender Foundation).
+
 - Show translated and Source + translation captions at the bottom of the picture, like source
   captions, instead of in a panel over the middle of the video; both lines follow the caption
   appearance settings (size, font, colour, shadow / outline / box).

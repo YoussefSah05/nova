@@ -28,8 +28,8 @@ flowchart TB
         MPV["libmpv<br/>CAOpenGLLayer render"]
         ORT["ONNX Runtime<br/>Opus-MT · E5"]
     end
-    ASR["ASR worker<br/>(Nova binary, whisper.cpp)"]
-    CLI["whisper-cli<br/>(caption windows)"]
+    ASR["ASR worker<br/>(Nova binary)<br/>Silero VAD · whisper.cpp · MMS aligner"]
+    CLI["whisper-cli<br/>(fallback)"]
     FF["ffmpeg / ffprobe<br/>(audio extraction, probing)"]
     WV <-->|"invoke / emit"| Tauri
     Tauri --> MPV
@@ -43,9 +43,15 @@ flowchart TB
 - The **main process** hosts the webview, every IPC command, the stream proxy and libmpv.
   Translation and embedding models run in-process on a single shared ONNX Runtime.
 - **Speech recognition** runs out of process. A resident worker (the Nova binary in worker mode)
-  serves streaming ASR, so a crash in native inference cannot take the player down
-  ([ADR 0011](../adr/0011-resident-asr-worker-process.md)). VOD captions currently use bounded
-  `whisper-cli` windows over audio extracted by FFmpeg.
+  keeps whisper.cpp loaded, so a crash in native inference cannot take the player down
+  ([ADR 0011](../adr/0011-resident-asr-worker-process.md)). Caption windows extracted by FFmpeg
+  are decoded there, with a timing stage around Whisper: voice activity detection before it and
+  CTC forced alignment of every word after it
+  ([ADR 0014](../adr/0014-caption-timing-and-cold-start.md)). `whisper-cli` is the fallback
+  when the worker cannot start.
+- **Captions start before playback.** Opening a title's playback menu warms the worker and
+  transcribes the opening from the resume point; the player's caption session adopts that
+  work instead of starting over.
 
 ## Crate map
 
@@ -56,7 +62,7 @@ flowchart LR
     storage["storage<br/>SQLite · migrations · repositories"]
     m3u & xtream & epg
     mpv["mpv-player"]
-    transcribe & translate & enrich & search
+    transcribe & align & translate & enrich & search
     artwork & media & proxy["hls-proxy"] & jobs
     desktop --> core & storage & m3u & xtream & epg & mpv & transcribe & translate & enrich & search & artwork & media & proxy & jobs
     storage --> core
@@ -64,7 +70,8 @@ flowchart LR
     xtream --> core
     epg --> core
     enrich --> core
-    transcribe --> core
+    transcribe --> core & align
+    align --> core
     translate --> core
 ```
 
@@ -74,7 +81,8 @@ flowchart LR
 | `storage` | `app.db` (models, profiles, settings) plus one SQLite database per profile (catalog, user state, transcripts, vectors). WAL mode, FTS5, compile-time checked queries. |
 | `m3u`, `xtream`, `epg` | Streaming provider parsers and clients: M3U/M3U8, the Xtream Codes JSON API, XMLTV guides. |
 | `mpv-player` | libmpv engine: open, seek, tracks, state snapshots, and macOS embedding. |
-| `transcribe` | Whisper: the CLI driver for caption windows, the resident streaming worker, model layout. |
+| `transcribe` | Whisper: the resident worker (caption windows and live streaming), the CLI fallback, model layout. |
+| `align` | Caption timing: Silero voice activity detection, MMS CTC forced alignment and the refine pass that combines them with Whisper's words. Runs inside the ASR worker. |
 | `translate` | Marian (Opus-MT) encoder-decoder translation on ONNX Runtime. |
 | `enrich` | E5 embeddings, duplicate clustering, genre classification and TMDB matching. |
 | `search` | FTS5 query construction for catalog and transcript search. |

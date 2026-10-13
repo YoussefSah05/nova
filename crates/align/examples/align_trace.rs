@@ -36,7 +36,7 @@ async fn main() {
     let t = transcribe_wav(&wav, &ggml, &out.path().join("t"), &opts, |_| {})
         .await
         .unwrap();
-    let pcm = nova_media_free_read(&wav);
+    let pcm = read_pcm16(&wav);
     let regions = SpeechDetector::load(vad.as_ref())
         .unwrap()
         .regions(&pcm)
@@ -70,7 +70,7 @@ async fn main() {
     }
 }
 
-fn nova_media_free_read(path: &std::path::Path) -> Vec<f32> {
+fn read_pcm16(path: &std::path::Path) -> Vec<f32> {
     let bytes = std::fs::read(path).unwrap();
     let data = bytes.windows(4).position(|w| w == b"data").unwrap() + 8;
     bytes[data..]

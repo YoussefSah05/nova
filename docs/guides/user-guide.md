@@ -118,8 +118,19 @@ Captions are made on your Mac from the audio of what you are watching. Install t
 
 Press `C` to cycle the modes, or use the **CC** menu to choose the target language and caption
 style. The CC menu also shows what Nova is doing (extracting audio, waiting for the model,
-recognising speech). The first window of a session takes longer while the speech model prepares;
-later windows take a couple of seconds. If translation fails, the source captions stay on screen.
+recognising and aligning speech). If translation fails, the source captions stay on screen.
+
+Captions start quickly:
+
+- Opening a title's **Play** menu (the arrow next to Play) starts the speech model and transcribes
+  the opening from where you will resume, so the first captions are usually ready with the film.
+  If your profile's default caption mode is on, simply opening the title does the same.
+- The first window is short (8 to 11 seconds of audio); later 30-second windows run ahead of
+  playback. Captions you have already watched are saved and appear instantly.
+
+For word-accurate timing, also install **Caption timing** in Settings → Models. Each caption then
+appears as its first word is spoken and leaves after its last, stays up long enough to read, and
+nothing is captioned over music or silence.
 
 In the player, the transcript panel lets you search what was said and jump to that moment.
 

@@ -67,6 +67,22 @@ Next gates: bounded array framing/provenance and signed-app Keychain/reference-a
 then real macOS app E2E using an isolated test profile. Playable media, segmented
 fault injection, sleep/wake, caption quality and AirPlay still need distinct coverage.
 
+## Measuring caption timing and cold start
+
+Two reproducible harnesses back the numbers in
+[the caption timing evaluation](evaluations/caption-timing-2026-10-13.md):
+
+- **Word timing.** `tools/caption-timing-eval/prepare.py` builds ~30 s windows with reference
+  word boundaries from LibriSpeech test-clean; the `timing_eval` example of `nova-align` scores
+  Whisper's timestamps, Whisper DTW, and DTW refined by the VAD and the aligner against them
+  (mean, median, p90, share within 100/200 ms).
+- **Time to first caption.** The `caption_cold_start` example of `nova-transcribe` runs the
+  windows a caption session would, with one `whisper-cli` per window or the resident worker. Point
+  it at a fresh copy of the Core ML encoder to measure a first-run compile.
+
+`align_trace` prints Whisper's and the aligned time of each word for one recording, which is the
+quickest way to check a new language. All three need the installed models; none run in CI.
+
 ## Measuring scroll smoothness
 
 Press **⌘⌥F** in the app to toggle the frame-rate overlay (remembered on this Mac; off by

@@ -62,6 +62,7 @@ Open **Settings → Models**:
 | Card | Enables | Size |
 |---|---|---|
 | Source-language captions | Captions on any film or episode | ~500 MB |
+| Caption timing | Word-accurate caption timing; no captions over music or silence | ~320 MB |
 | Translated captions | English · French · Arabic translation of captions | ~450 MB |
 | Catalog intelligence | Semantic search, genres, duplicate grouping | ~120 MB |
 
@@ -71,9 +72,9 @@ downloading.
 
 ## 6. Watch with captions
 
-Open a film, press **Play**, then use the **CC** menu (or press `C`) to choose source captions,
-a translation, or both. The first caption window takes longer while Core ML prepares Whisper for
-your Mac; later windows take a couple of seconds.
+Open a film and choose **Play with transcription** or a translated-captions option from the
+arrow next to **Play**, or press **Play** and use the **CC** menu (`C`) later. Opening that menu
+already starts preparing captions, so the first lines are usually ready when the film starts.
 
 ## Troubleshooting
 
